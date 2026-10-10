@@ -1,0 +1,9 @@
+.venv/
+
+# big or re-creatable data (see download_connectome.sh, prepare_data.py)
+data/*.bin
+data/connectome/*.feather
+# NOT ignored on purpose: data/connectome/wiring.npz and alpn_kc_edges.csv (the mapping)
+
+__pycache__/
+.pytest_cache/
