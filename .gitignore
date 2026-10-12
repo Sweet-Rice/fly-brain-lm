@@ -7,3 +7,5 @@ data/connectome/*.feather
 
 __pycache__/
 .pytest_cache/
+checkpoints/
+checkpoints/
