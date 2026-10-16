@@ -8,8 +8,14 @@ The model is UNTRAINED, so replies are gibberish. That is the joke (project app 
 Limits: no tool calls (replies are plain text), one request at a time, prompt cut to the last
 --ctx tokens (a harness's long system prompt mostly falls off the front).
 
-Usage:  python serve.py                                  # loads checkpoints/init.pt, CPU
-        python serve.py --device cuda --port 8001        # ROCm also uses the name "cuda"
+Every request also streams to the visualization harness (Fly Brain Visualization Stream Spec v1) at
+ws://127.0.0.1:8765/stream: a harness that connects gets the mapping first, then one `fire` per token
+of every request. --no-viz turns that off (e.g. when ask.py already holds the port).
+
+Usage (from the repo root):
+        python -m model.serve.serve                           # loads model/checkpoints/init.pt, CPU
+        python -m model.serve.serve --device cuda --port 8001 # ROCm also uses the name "cuda"
+        python -m model.serve.serve --record api.ndjson       # also save the visualization stream
 """
 import argparse
 import json
@@ -198,9 +204,10 @@ def make_server(engine, host="127.0.0.1", port=8000, api_key=None):
 
 
 def main():
-    from model import load_checkpoint
+    from harness.viz_stream import stream_model
+    from model.model import load_checkpoint
     p = argparse.ArgumentParser()
-    p.add_argument("--ckpt", default="checkpoints/init.pt")
+    p.add_argument("--ckpt", default="model/checkpoints/init.pt")
     p.add_argument("--device", default="cpu")
     p.add_argument("--host", default="127.0.0.1")           # localhost only; use 0.0.0.0 to expose
     p.add_argument("--port", type=int, default=8000)
@@ -209,17 +216,26 @@ def main():
     p.add_argument("--max-tokens", type=int, default=128, help="cap on tokens per reply")
     p.add_argument("--api-key", default=None, help="require this key; default accepts any")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--viz-port", type=int, default=8765, help="visualization stream port (loopback only)")
+    p.add_argument("--block", type=int, default=0, help="which of the 12 blocks to visualize")
+    p.add_argument("--record", default=None, help="also write the visualization stream to this .ndjson file")
+    p.add_argument("--no-viz", action="store_true", help="don't stream to the visualization harness")
     a = p.parse_args()
 
     model, wiring, ck = load_checkpoint(a.ckpt, a.device)
     engine = Engine(model, a.model_id, a.ctx, a.max_tokens, a.seed)
     srv = make_server(engine, a.host, a.port, a.api_key)
+    stream = None if a.no_viz else stream_model(model, wiring, a.block, port=a.viz_port, record=a.record)[0]
     print(f"{ck.get('note', '')}\nmodel {a.model_id}: {wiring.mask.shape[0]} KCs x {wiring.mask.shape[1]} glomeruli, "
-          f"device {a.device}\nOpenAI-compatible API at http://{a.host}:{a.port}/v1  (Ctrl-C to stop)")
+          f"device {a.device}\nOpenAI-compatible API at http://{a.host}:{a.port}/v1  (Ctrl-C to stop)"
+          + (f"\nvisualization stream: {stream.url}  (block {a.block})" if stream else ""))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        if stream:
+            stream.close()
 
 
 if __name__ == "__main__":

@@ -2,8 +2,9 @@
 
 Proves the model can be created and initialized. Not the final architecture (see model.py).
 
-Usage:  python init_model.py                 # -> checkpoints/init.pt
-        python init_model.py --seed 1 --out checkpoints/init_s1.pt
+Usage (from the repo root):
+        python -m model.init_model                 # -> model/checkpoints/init.pt
+        python -m model.init_model --seed 1 --out model/checkpoints/init_s1.pt
 """
 import argparse
 import math
@@ -11,13 +12,13 @@ import os
 
 import torch
 
-from build_wiring import load_wiring
-from model import Config, FlyLM, save_checkpoint
+from data.build_wiring import load_wiring
+from model.model import Config, FlyLM, save_checkpoint
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--out", default="checkpoints/init.pt")
+    p.add_argument("--out", default="model/checkpoints/init.pt")
     p.add_argument("--seed", type=int, default=0)
     a = p.parse_args()
 

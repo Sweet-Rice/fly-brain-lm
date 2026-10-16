@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Re-download the two MaleCNS v1.0 tables that build_wiring.py reads (public bucket, no token).
+# Run from the repo root: bash data/download_connectome.sh
 set -euo pipefail
 mkdir -p data/connectome
 BASE=https://storage.googleapis.com/flyem-male-cns/v1.0/connectome-data/flat-connectome

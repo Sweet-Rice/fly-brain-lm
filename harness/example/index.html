@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Fly brain stream: example harness</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d10; color: #d7dde5; font: 13px/1.4 monospace; }
+  body { display: flex; flex-direction: column; }
+  #status { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 10px; border-bottom: 1px solid #222a33; }
+  #status span { white-space: nowrap; }
+  .ok { color: #6fd47a; font-weight: bold; }
+  .off { color: #9aa5b1; font-weight: bold; }
+  .bad { color: #ff5d5d; font-weight: bold; }
+  #banner { display: none; background: #5a1111; color: #ff8080; padding: 6px 10px; font-weight: bold; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #stage { flex: 1; position: relative; min-width: 0; overflow: hidden; }
+  canvas { position: absolute; left: 0; top: 0; }
+  #side { width: 280px; border-left: 1px solid #222a33; padding: 10px; overflow: auto; }
+  #side h3 { margin: 4px 0 6px; font-size: 13px; color: #9aa5b1; }
+  .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; white-space: normal; overflow-wrap: anywhere; }
+  .sw { flex: none; width: 12px; height: 12px; display: inline-block; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="status"></div>
+<div id="banner"></div>
+<div id="main">
+  <div id="stage"><canvas id="view"></canvas></div>
+  <aside id="side">
+    <h3>Groups</h3>
+    <div id="legend"></div>
+    <h3>Last fire</h3>
+    <div id="fire"></div>
+  </aside>
+</div>
+<script>
+"use strict";
+
+// Example harness for the visualization stream (harness/API.md). Throwaway-quality, vanilla JS + Canvas 2D.
+const WS_URL = new URLSearchParams(location.search).get("ws") || "ws://127.0.0.1:8765/stream";
+const PALETTE = [[230, 97, 80], [80, 170, 240], [120, 200, 120], [240, 190, 70], [190, 120, 230], [90, 200, 200]];
+const EDGE_ALPHA = 0.03;   // resting edges
+const DECAY = 0.85;        // fired-edge intensity multiplier per animation frame
+const FLOOR = 0.05;        // fired edges below this are dropped
+const MARGIN_X = 70;       // canvas padding: left/right of the outermost group columns
+const MARGIN_Y = 48;       // canvas padding: top (below group labels) and bottom of node columns
+const RETRY_MS = 1000;
+
+// Counters reset with each accepted v1 mapping; a rejected mapping retains diagnostics.
+const S = window.harnessState = {
+  status: "disconnected", url: WS_URL, version: null, groups: [], nodes: 0, edges: 0,
+  lastT: null, fires: 0, gaps: 0, invalidPairs: 0, ignored: 0, badFrames: 0, banner: "",
+};
+
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+const stage = document.getElementById("stage");
+const view = { w: 1, h: 1, dpr: 1 };
+let M = null;   // the usable v1 mapping, or null (no mapping yet, or an unsupported/invalid one)
+
+function colorOf(groupId) { return PALETTE[((groupId % 6) + 6) % 6]; }
+function rgba(c, a) { return `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
+function makeCanvas(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
+
+// Builds the drawable model from a v1 mapping. Throws on anything the page cannot draw.
+function buildMapping(m) {
+  if (!Array.isArray(m.groups) || !Array.isArray(m.nodes) || !Array.isArray(m.edges))
+    throw new Error("groups, nodes and edges must be arrays");
+  const groupName = new Map();
+  for (const g of m.groups) {
+    if (!g || !Number.isInteger(g.id) || groupName.has(g.id)) throw new Error(`bad or duplicate group ${JSON.stringify(g)}`);
+    groupName.set(g.id, String(g.name));
+  }
+  const groupIds = [...groupName.keys()].sort((a, b) => a - b);
+  const nodeList = m.nodes.map((n) => {
+    if (!n || !Number.isInteger(n.id) || !Number.isInteger(n.group) || !groupName.has(n.group))
+      throw new Error(`bad node ${JSON.stringify(n)}`);
+    return { id: n.id, group: n.group };
+  }).sort((a, b) => a.id - b.id);
+  const N = nodeList.length;
+  const nodeIdx = new Map();
+  const nodeGroup = new Int32Array(N);
+  const members = new Map(groupIds.map((g) => [g, []]));   // group id -> node indices, in node-id order
+  nodeList.forEach((n, i) => {
+    if (nodeIdx.has(n.id)) throw new Error(`duplicate node id ${n.id}`);
+    nodeIdx.set(n.id, i);
+    nodeGroup[i] = n.group;
+    members.get(n.group).push(i);
+  });
+  const E = m.edges.length;
+  const edgeSrc = new Int32Array(E), edgeDst = new Int32Array(E);
+  const edgeIndex = new Map();                              // "src,dst" -> edge index
+  const edgesByGroup = new Map(groupIds.map((g) => [g, []]));  // source group -> edge indices
+  m.edges.forEach((e, k) => {
+    if (!Array.isArray(e) || !nodeIdx.has(e[0]) || !nodeIdx.has(e[1])) throw new Error(`bad edge ${JSON.stringify(e)}`);
+    const key = e[0] + "," + e[1];
+    if (edgeIndex.has(key)) throw new Error(`duplicate edge ${key}`);
+    edgeIndex.set(key, k);
+    edgeSrc[k] = nodeIdx.get(e[0]);
+    edgeDst[k] = nodeIdx.get(e[1]);
+    edgesByGroup.get(nodeGroup[edgeSrc[k]]).push(k);
+  });
+  return {
+    N, E, groupName, groupIds, members, nodeGroup, edgeSrc, edgeDst, edgeIndex, edgesByGroup,
+    nx: new Float64Array(N), ny: new Float64Array(N), colX: [],
+    fired: new Map(),   // edge index -> intensity (1.0 when fired, decays each frame)
+    lit: new Set(),     // node indices that are src/dst of the latest fire
+    last: null,         // {t, pairs, types: Map "src -> dst" -> count} for the latest fire
+    base: null,         // offscreen canvas: resting edges + column labels
+  };
+}
+
+// Sizes the canvas to its stage, positions nodes, and re-renders the offscreen base layer.
+function layout() {
+  const r = stage.getBoundingClientRect();
+  view.w = Math.max(1, Math.floor(r.width));
+  view.h = Math.max(1, Math.floor(r.height));
+  view.dpr = window.devicePixelRatio || 1;
+  canvas.style.width = view.w + "px";
+  canvas.style.height = view.h + "px";
+  canvas.width = Math.round(view.w * view.dpr);
+  canvas.height = Math.round(view.h * view.dpr);
+  if (!M) return;
+
+  const cols = M.groupIds.length;
+  M.groupIds.forEach((gid, ci) => {
+    const x = cols === 1 ? view.w / 2 : MARGIN_X + ci * (view.w - 2 * MARGIN_X) / (cols - 1);
+    M.colX[ci] = x;
+    const mem = M.members.get(gid);
+    mem.forEach((ni, j) => {
+      M.nx[ni] = x;
+      M.ny[ni] = mem.length === 1 ? view.h / 2 : MARGIN_Y + j * (view.h - 2 * MARGIN_Y) / (mem.length - 1);
+    });
+  });
+
+  M.base = makeCanvas(canvas.width, canvas.height);
+  const b = M.base.getContext("2d");
+  b.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  b.lineWidth = 1;
+  for (const gid of M.groupIds) {
+    const p = new Path2D();
+    for (const e of M.edgesByGroup.get(gid)) {
+      const s = M.edgeSrc[e], d = M.edgeDst[e];
+      p.moveTo(M.nx[s], M.ny[s]);
+      p.lineTo(M.nx[d], M.ny[d]);
+    }
+    b.strokeStyle = rgba(colorOf(gid), EDGE_ALPHA);
+    b.stroke(p);
+  }
+  b.fillStyle = "#9aa5b1";
+  b.font = "12px monospace";
+  b.textAlign = "center";
+  M.groupIds.forEach((gid, ci) => b.fillText(M.groupName.get(gid), M.colX[ci], 18));
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!M) return;
+  ctx.drawImage(M.base, 0, 0);
+  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  ctx.lineWidth = 1;
+  for (const [e, a] of M.fired) {
+    const s = M.edgeSrc[e], d = M.edgeDst[e];
+    ctx.strokeStyle = rgba(colorOf(M.nodeGroup[s]), a);
+    ctx.beginPath();
+    ctx.moveTo(M.nx[s], M.ny[s]);
+    ctx.lineTo(M.nx[d], M.ny[d]);
+    ctx.stroke();
+  }
+  for (let i = 0; i < M.N; i++) {
+    ctx.fillStyle = rgba(colorOf(M.nodeGroup[i]), 1);
+    ctx.fillRect(M.nx[i] - 1, M.ny[i] - 1, 2, 2);
+  }
+  ctx.fillStyle = "#ffffff";
+  for (const i of M.lit) ctx.fillRect(M.nx[i] - 2, M.ny[i] - 2, 4, 4);
+}
+
+function frame() {
+  if (M) {
+    for (const [e, a] of M.fired) {
+      const next = a * DECAY;
+      if (next < FLOOR) M.fired.delete(e);
+      else M.fired.set(e, next);
+    }
+    draw();
+  }
+  requestAnimationFrame(frame);
+}
+
+// Narrow reading: only an accepted v1 mapping resets the session counters. A rejected mapping (unsupported
+// version, or a v1 mapping that fails buildMapping) clears the usable graph but keeps the cumulative counters
+// and fire totals visible, and fires are ignored until a v1 mapping is accepted.
+function resetCounters() {
+  S.fires = 0; S.invalidPairs = 0; S.ignored = 0; S.badFrames = 0; S.lastT = null; S.gaps = 0;
+}
+
+function onMapping(m) {
+  M = null;
+  S.nodes = 0;
+  S.edges = 0;
+  S.groups = [];
+  S.version = m.version;
+  S.banner = "";
+  if (m.version !== 1) {
+    S.banner = `unsupported mapping version ${m.version}`;
+  } else {
+    let built = null;
+    try { built = buildMapping(m); } catch (err) { S.badFrames++; console.error(err); }
+    if (built) {
+      M = built;
+      resetCounters();
+      S.nodes = M.N;
+      S.edges = M.E;
+      S.groups = M.groupIds.map((gid) => ({ id: gid, name: M.groupName.get(gid), count: M.members.get(gid).length }));
+    }
+  }
+  layout();
+  renderLegend();
+}
+
+function onFire(m) {
+  if (!M) return;   // no usable v1 mapping: fires are dropped without counting
+  if (!Number.isInteger(m.t) || m.t < 0 || !Array.isArray(m.pairs)) { S.badFrames++; return; }
+  S.fires++;
+  if (S.lastT !== null && m.t > S.lastT + 1) S.gaps++;
+  S.lastT = m.t;
+  M.lit = new Set();
+  const types = new Map();
+  for (const p of m.pairs) {
+    const e = Array.isArray(p) && Number.isInteger(p[0]) && Number.isInteger(p[1]) ? M.edgeIndex.get(p[0] + "," + p[1]) : undefined;
+    if (e === undefined) { S.invalidPairs++; continue; }
+    M.fired.set(e, 1.0);
+    const s = M.edgeSrc[e], d = M.edgeDst[e];
+    M.lit.add(s);
+    M.lit.add(d);
+    const key = M.groupName.get(M.nodeGroup[s]) + " -> " + M.groupName.get(M.nodeGroup[d]);
+    types.set(key, (types.get(key) || 0) + 1);
+  }
+  M.last = { t: m.t, pairs: m.pairs.length, types };
+}
+
+function onFrame(data) {
+  let m;
+  try { m = JSON.parse(data); } catch (err) { S.badFrames++; return; }
+  if (!m || typeof m !== "object" || Array.isArray(m)) { S.badFrames++; return; }
+  if (m.type === "mapping") onMapping(m);
+  else if (m.type === "fire") onFire(m);
+  else S.ignored++;   // unknown message type: forward-compatible, ignored by design
+}
+
+function renderStatus() {
+  const kv = (label, value, cls) => {
+    const s = document.createElement("span");
+    s.textContent = `${label}: ${value}`;
+    if (cls) s.className = cls;
+    return s;
+  };
+  document.getElementById("status").replaceChildren(
+    kv("status", S.status, S.status === "connected" ? "ok" : "off"),
+    kv("url", S.url),
+    kv("mapping version", S.version ?? "-"),
+    kv("nodes", S.nodes),
+    kv("edges", S.edges),
+    kv("last t", S.lastT ?? "-"),
+    kv("fires received", S.fires),
+    kv("gaps", S.gaps),
+    kv("invalid pairs", S.invalidPairs, S.invalidPairs ? "bad" : ""),
+    kv("ignored messages", S.ignored),
+    kv("bad frames", S.badFrames, S.badFrames ? "bad" : ""),
+  );
+  const b = document.getElementById("banner");
+  b.textContent = S.banner;
+  b.style.display = S.banner ? "block" : "none";
+}
+
+function renderLegend() {
+  document.getElementById("legend").replaceChildren(...S.groups.map((g) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const sw = document.createElement("span");
+    sw.className = "sw";
+    sw.style.background = rgba(colorOf(g.id), 1);
+    const label = document.createElement("span");
+    label.textContent = `${g.name}  ${g.count}`;
+    row.append(sw, label);
+    return row;
+  }));
+}
+
+function renderFire() {
+  const el = document.getElementById("fire");
+  if (!M) { el.textContent = "no usable mapping"; return; }
+  if (!M.last) { el.textContent = "waiting for first fire"; return; }
+  const rows = [`t: ${M.last.t}`, `pairs: ${M.last.pairs}`];
+  for (const k of [...M.last.types.keys()].sort()) rows.push(`${k}: ${M.last.types.get(k)}`);
+  el.replaceChildren(...rows.map((text) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.textContent = text;
+    return row;
+  }));
+}
+
+function renderAll() {
+  renderStatus();
+  renderFire();
+}
+
+let retryTimer = null;
+function scheduleRetry() {
+  if (retryTimer === null) retryTimer = setTimeout(connect, RETRY_MS);
+}
+
+function connect() {
+  retryTimer = null;
+  let sock;
+  try {
+    sock = new WebSocket(WS_URL);
+  } catch (err) {
+    S.status = "disconnected";
+    renderAll();
+    scheduleRetry();
+    return;
+  }
+  sock.onopen = () => { S.status = "connected"; renderAll(); };
+  sock.onmessage = (ev) => {
+    try { onFrame(ev.data); } catch (err) { S.badFrames++; console.error(err); }
+    renderAll();
+  };
+  sock.onerror = () => { S.status = "disconnected"; renderAll(); };
+  sock.onclose = () => { S.status = "disconnected"; renderAll(); scheduleRetry(); };
+}
+
+window.addEventListener("resize", layout);
+layout();
+renderAll();
+connect();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

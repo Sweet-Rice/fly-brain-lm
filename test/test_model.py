@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn.functional as F
-from model import Config, Wiring, FlyAddress, FlyMemory, FlyLM
+from model.model import Config, Wiring, FlyAddress, FlyMemory, FlyLM
 
 torch.manual_seed(0)
 WIRING = Wiring.random()
@@ -99,7 +99,7 @@ def test_greedy_generation_is_deterministic():
 
 
 def test_checkpoint_roundtrip(tmp_path):
-    from model import save_checkpoint, load_checkpoint
+    from model.model import save_checkpoint, load_checkpoint
     model = FlyLM(TINY, WIRING).eval()
     p = tmp_path / "ck.pt"
     save_checkpoint(p, model, WIRING)

@@ -1,6 +1,7 @@
+"""TinyStories -> GPT-2 BPE -> data/train.bin, data/val.bin. Run from the repo root: python -m data.prepare_data"""
 import os
 from datasets import load_dataset
-from data import write_bin
+from data.data import write_bin
 
 
 os.makedirs("data", exist_ok=True)

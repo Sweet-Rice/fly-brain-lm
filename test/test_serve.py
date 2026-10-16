@@ -6,8 +6,8 @@ import urllib.request
 import pytest
 import torch
 
-from model import Config, FlyLM, Wiring
-from serve import Engine, make_server
+from model.model import Config, FlyLM, Wiring
+from model.serve.serve import Engine, make_server
 
 
 @pytest.fixture(scope="module")

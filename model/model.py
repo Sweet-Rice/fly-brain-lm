@@ -248,10 +248,10 @@ class FlyLM(nn.Module):
         state, logits = self.init_state(1, dev), None
         for t in prompt_ids:                                  # read the prompt into memory
             logits, state = self.step(torch.tensor([t], device=dev), state)
-        for _ in range(max_new_tokens):
+        for i in range(max_new_tokens):
             nxt = sample(logits[0], temperature, top_k, gen)
             yield nxt
-            if nxt in stop_ids:
+            if nxt in stop_ids or i == max_new_tokens - 1:   # don't run the model on a token nobody will use
                 return
             logits, state = self.step(torch.tensor([nxt], device=dev), state)
 

@@ -9,8 +9,8 @@ Default rules (project notes): right-side olfactory PNs that map to ONE glomerul
 connection if that single PN makes >= 3 synapses onto the KC; sum per glomerulus; right-side KCs only;
 drop KCs left with nothing. search_wiring_rules.py tests alternatives to these rules.
 
-Usage:  python build_wiring.py
-Later:  from build_wiring import load_wiring; w = load_wiring()   # a model.Wiring
+Usage:  python -m data.build_wiring            # from the repo root
+Later:  from data.build_wiring import load_wiring; w = load_wiring()   # a model.model.Wiring
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,7 +187,7 @@ def main():
 
 def load_wiring(path=OUT):
     import torch
-    from model import Wiring
+    from model.model import Wiring
     z = np.load(path)
     return Wiring(mask=torch.from_numpy(z["mask"]), theta=torch.from_numpy(z["theta"]).float(),
                   kc_class=torch.from_numpy(z["kc_class"]).long(),

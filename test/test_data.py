@@ -1,5 +1,5 @@
 import numpy as np, torch
-from data import encode_stories, write_bin, load_bin, sample_batch, EOT
+from data.data import encode_stories, write_bin, load_bin, sample_batch, EOT
 
 STORY = [7454, 2402, 257, 640]
 

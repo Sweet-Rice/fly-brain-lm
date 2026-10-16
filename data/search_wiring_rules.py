@@ -1,7 +1,8 @@
 """Try every combination of plausible extraction rules and score each against the project notes'
 numbers (1889 KCs, 55 glomeruli, 9592 connections, 663 / 874 / 352 per class).
 
-Reads only the small cache (run build_wiring.py once first). Takes about a minute.
+Reads only the small cache (run python -m data.build_wiring once first). Takes about a minute.
+Usage:  python -m data.search_wiring_rules     # from the repo root
 
 How to read the result: 5 independent numbers matching EXACTLY at once is strong evidence for a rule.
 A near miss is weak evidence: with ~380 combinations, something always lands close by chance.
@@ -11,7 +12,7 @@ from collections import defaultdict
 
 import pandas as pd
 
-from build_wiring import RULES, TARGET, Rules, build, get_edges, load_ann, stats
+from data.build_wiring import RULES, TARGET, Rules, build, get_edges, load_ann, stats
 
 GRID = dict(
     pn_set=["alpn_R", "alpn_any", "pnname_R", "pnname_any"],
