@@ -218,3 +218,70 @@ timeout 10 .venv/bin/python -m harness.watch_stream ws://127.0.0.1:8767/stream -
 ```
 
 - Verification commands: §8.4.
+
+### Fixed-prompt replay for harness development
+
+`harness.replay_prompt` serves a bundled recording of the real model processing
+**`Once upon a time`**. It needs Python and `websockets`, but does not import the
+model, load a checkpoint, or require PyTorch. The capture is
+`harness/example/once_upon_a_time.ndjson`: one v1 mapping and 11 fires, `t=0..10`,
+with the current 1958-node, 19037-edge graph. This is real captured activity,
+not randomly generated or mocked pairs.
+
+Run the replay server:
+
+```bash
+.venv/bin/python -m harness.replay_prompt
+```
+
+If the browser page is not already being served, start it in another terminal:
+
+```bash
+.venv/bin/python -m http.server 8770 --bind 127.0.0.1 --directory harness/example
+```
+
+Open http://127.0.0.1:8770/?ws=ws://127.0.0.1:8768/stream. Keep the replay command
+running; no interactive prompts are needed. Ctrl-C stops it.
+
+Playback behavior (`harness.replay_prompt.replay` and `run`):
+- Loopback WebSocket server, default port 8768, exact path `/stream`.
+- Each connection gets its own playback starting with the mapping, then every
+  recorded fire. Late joiners and reconnects start at the beginning, not at
+  another client's current position.
+- Default timing is 0.2 seconds before each fire and a 2-second pause after the
+  recording. The entire recording then repeats, starting with a new mapping;
+  the example harness resets its counters each loop.
+- JSON message text is sent unchanged, excluding NDJSON newline terminators.
+  Playback preserves the recorded `t` values and pairs; timing is synthetic,
+  not the original inference latency. It is not a live model or a slow-client
+  drop simulator.
+- `--port`, `--interval`, and `--pause` change the listening port and cadence.
+  An optional positional path selects another NDJSON recording.
+
+Capture provenance: block 0, CPU, `model/checkpoints/init.pt`, 8 generated tokens,
+temperature 0 (greedy), top-k 50, seed 0. The prompt has 4 tokens; the final
+generated token is not fed back, giving 11 model steps. The continuation was
+` time Integrated Integrated Integrated Integrated Integrated Integrated Integrated`.
+The checkpoint SHA-256 was
+`7a7f402e0a05cc169b780209582de4d6fef923e9b55ac4b5b01bd08f0d241df5`.
+The bundled capture fixes the payloads even if a developer's model or checkpoint
+later changes; rerunning generation is not a cross-checkpoint reproducibility
+guarantee.
+
+To capture a different prompt, keep the serving entry points unchanged and use
+their existing recording support. This command uses an automatically assigned
+stream port, so it does not compete with a running model or replay:
+
+```bash
+.venv/bin/python -m model.serve.ask "Once upon a time" --port 0 --max-tokens 8 --temperature 0 --top-k 50 --seed 0 --record /tmp/prompt.ndjson </dev/null
+```
+
+Change the quoted prompt as needed. Stop the default replay before starting this
+alternate recording on the same port:
+
+```bash
+.venv/bin/python -m harness.replay_prompt /tmp/prompt.ndjson --interval 0.1 --pause 1
+```
+
+After stopping the replay, `/tmp/prompt.ndjson` can be deleted. The bundled
+recording is a permanent development fixture; do not delete it.
