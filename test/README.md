@@ -21,7 +21,37 @@ unless that data is cached.
 | `test/test_data.py` | GPT-2 story encoding, literal EOT handling, uint16 binary round trip, and next-token batches |
 | `test/test_model.py` | Sparse address codes, masked gradients, memory, causality, step/forward agreement, greedy generation, checkpoint loading, and one-batch optimization |
 | `test/test_serve.py` | Model listing, completions, chat, SSE output, and request errors against a real local HTTP server |
-| `test/test_viz_stream.py` | Mapping/fire invariants, live streaming and recording, session continuity, mid-run joins, no listeners, and slow-client drops |
+| `test/test_viz_stream.py` | Exact tiny-graph topology and active-KC routing, mapping/fire invariants, live streaming and recording, session continuity, joins/reconnects, epoch replacement, empty steps, and deterministic backpressure/drop recovery |
+
+## Continuous integration
+
+[GitHub Actions CI](../.github/workflows/ci.yml) runs five independent CPU-only
+checks on PRs, pushes to `main`, and manual dispatches:
+
+| Check | Scope |
+|---|---|
+| Data/tokenization | `test/test_data.py` |
+| Model/core | All tests under `test/` except the dedicated data, HTTP API, and graph/WebSocket suites; new model modules are included automatically |
+| HTTP API | `test/test_serve.py` |
+| Graph/WebSocket | `test/test_viz_stream.py` |
+| Smoke (checkpoint, serve, record) | Build an untrained checkpoint, serve one prompt on an ephemeral port, then inspect its NDJSON recording |
+
+The jobs have no dependency edges. A failed suite does not cancel the other
+suites or skip the smoke check. Each test job prints individual cases and adds
+their results, timings, and failure details to the run's **Summary** page;
+downloadable `junit-*` artifacts contain the machine-readable reports.
+`smoke-outputs` contains the prompt output, recording, and viewer output, not the
+checkpoint. Reports are uploaded even when a check fails.
+
+The backpressure test deliberately holds one client's server-side WebSocket
+send, fills its bounded queue, and verifies drops, producer progress, unaffected
+delivery to another client, recovery, and a complete recording. It does not rely
+on OS socket-buffer sizes or a sub-50-ms scheduling deadline.
+
+The workflow graph shows suites, not individual test cases or proof of browser
+rendering. Run the full local suite with the command above; the smoke script can
+also be run from the repository root with
+`PYTHON=.venv/bin/python .github/scripts/smoke.sh`.
 
 ## Network and visual checks
 

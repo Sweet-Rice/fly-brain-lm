@@ -13,9 +13,64 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Five independent checks, no needs edges. The four test partitions cover every
+# test/ file exactly once: Model/core collects everything the other three exclude,
+# so new test modules run without editing this file.
 jobs:
-  test:
-    name: pytest + smoke (CPU torch)
+  tests:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Data/tokenization
+            suite: data
+            pytest_args: test/test_data.py
+          - name: HTTP API
+            suite: serve
+            pytest_args: test/test_serve.py
+          - name: Graph/WebSocket
+            suite: viz
+            pytest_args: test/test_viz_stream.py
+          - name: Model/core
+            suite: core
+            pytest_args: test --ignore=test/test_data.py --ignore=test/test_serve.py --ignore=test/test_viz_stream.py
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/workflows/ci.yml
+      - name: Install CPU PyTorch and project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install numpy pandas pyarrow tiktoken websockets pytest
+          python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+      - name: Pytest (verbose, JUnit)
+        env:
+          PYTEST_ARGS: ${{ matrix.pytest_args }}
+          JUNIT_XML: ${{ runner.temp }}/junit-${{ matrix.suite }}.xml
+        run: python -m pytest -v -rfEs --durations=5 --junitxml="$JUNIT_XML" $PYTEST_ARGS
+      - name: Test summary
+        if: always()
+        env:
+          JUNIT_XML: ${{ runner.temp }}/junit-${{ matrix.suite }}.xml
+          TITLE: ${{ matrix.name }}
+        run: python .github/scripts/test_summary.py "$JUNIT_XML" --title "$TITLE"
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-${{ matrix.suite }}
+          path: ${{ runner.temp }}/junit-${{ matrix.suite }}.xml
+          if-no-files-found: warn
+
+  smoke:
+    name: Smoke (checkpoint, serve, record)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -31,7 +86,38 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install numpy pandas pyarrow tiktoken websockets pytest
           python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
-      - name: Tests
-        run: python -m pytest -q test --durations=5
       - name: Smoke (init checkpoint, serve, record, inspect)
+        id: smoke
         run: .github/scripts/smoke.sh
+      - name: Smoke summary
+        if: always()
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/flybrain-smoke
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          d="$SMOKE_DIR"
+          case "$SMOKE_OUTCOME" in
+            success) status=PASSED ;;
+            failure) status=FAILED ;;
+            *) status="NOT RUN ($SMOKE_OUTCOME)" ;;
+          esac
+          {
+            echo "## Smoke: checkpoint, serve, record: $status"
+            echo
+            if [ -s "$d/ci.pt" ]; then echo "- Checkpoint built: $(stat -c %s "$d/ci.pt") bytes (not uploaded)"; fi
+            if [ -f "$d/ask.txt" ]; then echo "- Serve line: $(grep -m 1 -E '^\[[0-9]+ prompt' "$d/ask.txt" || true)"; fi
+            if [ -f "$d/watch.txt" ]; then
+              echo "- Mapping: $(grep -m 1 'nodes,' "$d/watch.txt" || true)"
+              echo "- Fire steps: $(grep -c '^FIRE ' "$d/watch.txt" || true)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload smoke outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-outputs
+          path: |
+            ${{ runner.temp }}/flybrain-smoke/ask.txt
+            ${{ runner.temp }}/flybrain-smoke/watch.txt
+            ${{ runner.temp }}/flybrain-smoke/ci.ndjson
+          if-no-files-found: warn
