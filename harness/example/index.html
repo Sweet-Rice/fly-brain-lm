@@ -72,7 +72,7 @@ function buildMapping(m) {
     if (!g || !Number.isInteger(g.id) || groupName.has(g.id)) throw new Error(`bad or duplicate group ${JSON.stringify(g)}`);
     groupName.set(g.id, String(g.name));
   }
-  const groupIds = [...groupName.keys()].sort((a, b) => a - b);
+  const groupIds = [...groupName.keys()];                   // mapping order is the suggested layout order
   const nodeList = m.nodes.map((n) => {
     if (!n || !Number.isInteger(n.id) || !Number.isInteger(n.group) || !groupName.has(n.group))
       throw new Error(`bad node ${JSON.stringify(n)}`);
@@ -223,6 +223,7 @@ function onMapping(m) {
 function onFire(m) {
   if (!M) return;   // no usable v1 mapping: fires are dropped without counting
   if (!Number.isInteger(m.t) || m.t < 0 || !Array.isArray(m.pairs)) { S.badFrames++; return; }
+  if (S.lastT !== null && m.t <= S.lastT) return;   // stale or repeated step: drop the whole message
   S.fires++;
   if (S.lastT !== null && m.t > S.lastT + 1) S.gaps++;
   S.lastT = m.t;

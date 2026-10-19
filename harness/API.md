@@ -54,7 +54,7 @@ sequenceDiagram
 |---|---|---|
 | `type` | string | Always `"mapping"`. |
 | `version` | integer | `1` for this document. Checked on every mapping (§7). |
-| `groups` | array of `{id: int, name: string}` | `id` values are unique. `name` is a label. |
+| `groups` | array of `{id: int, name: string}` | `id` values are unique. `name` is a label. Array order is the suggested layout order, input side first. |
 | `nodes` | array of `{id: int, group: int}` | Ids are exactly `0..N-1` in ascending array order (`nodes[i].id == i`). `group` MUST equal the `id` of an entry in `groups`. |
 | `edges` | array of `[src: int, dst: int]` | Pairs are unique. Both are node ids. Direction is src to dst. |
 
@@ -73,7 +73,7 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
 ## 5. `fire` message
 
 - **Format.** `{"type":"fire","t":<int>,"pairs":[[src,dst], ...]}`.
-- **`t`** is an integer ≥ 0: the model step, one token through the visualized block (`attach` fires once per token of the block's address code). Within one server mapping epoch `t` strictly increases. Only `VizStream.set_mapping` resets it to 0; it keeps counting across messages, requests, and client reconnects. A client's first fire after receiving a mapping may have any `t` ≥ 0.
+- **`t`** is an integer ≥ 0: the model step, one token through the visualized block (`attach` fires once per token of the block's address code). Within one server mapping epoch `t` strictly increases. Only `VizStream.set_mapping` resets it to 0; it keeps counting across messages, requests, and client reconnects. A client's first fire after receiving a mapping may have any `t` ≥ 0. A harness MUST drop a fire whose `t` is not greater than the previous accepted fire under the current mapping.
 - **`pairs`** is an array of two-integer `[src,dst]` arrays, each a declared edge, with no duplicates within a message. `VizStream.fire` omits empty arrays. Uniqueness in the model stream comes from `attach` passing each active KC once (`nonzero()`); `FlyGraph.fire_pairs` concatenates their distinct edges but does not deduplicate repeated input KC indices.
 - **Gaps.** A step produces no fire when its pairs are empty (the server omits it), when nothing is listening (no harness and no recording; the server counts the step and skips it), or when a harness's queue is full (dropped). A harness cannot tell these apart. A gap means only that some steps were not delivered. A harness MUST NOT assume a fire for every `t`.
 - **Order.** Each harness's fires arrive in `t` order (one FIFO queue per harness).
@@ -115,7 +115,7 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
 **Harness robustness.**
 - A harness MUST NOT throw out of its message handler. A non-JSON frame, or a JSON value that is not an object, is counted and skipped.
 - A harness SHOULD check each fire pair against its declared edge set and skip pairs that are not declared.
-- The example counts malformed supported mappings as `badFrames`, clears its graph, and waits for a usable mapping. It skips fires with a missing/negative/non-integer `t` or a non-array `pairs` field, also counting them as `badFrames` (`buildMapping`, `onMapping`, `onFire`). These diagnostics are example behavior, not server-side validation.
+- The example counts malformed supported mappings as `badFrames`, clears its graph, and waits for a usable mapping. It skips fires with a missing/negative/non-integer `t` or a non-array `pairs` field, also counting them as `badFrames` (`buildMapping`, `onMapping`, `onFire`). A stale or repeated valid integer `t` drops the whole fire without changing counters. These diagnostics are example behavior, not server-side validation.
 
 ## 8. Model-side contract (changing `model/` without touching `model/serve/`)
 
