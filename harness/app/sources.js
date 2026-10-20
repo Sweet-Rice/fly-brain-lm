@@ -69,7 +69,7 @@ export class LiveSource {
   }
 }
 
-export async function readRecording(file, receiver, onEvent, { signal } = {}) {
+export async function readRecording(file, receiver, onEvent, { signal, beforeMessage } = {}) {
   const result = { lines: 0, events: 0, aborted: Boolean(signal?.aborted), unsupported: false };
   if (result.aborted) return result;
   receiver.reset();
@@ -78,9 +78,12 @@ export async function readRecording(file, receiver, onEvent, { signal } = {}) {
   let pending = "";
   const abort = () => { reader.cancel().catch(() => {}); };
   signal?.addEventListener("abort", abort, { once: true });
-  const consume = (line) => {
+  const consume = async (line) => {
     result.lines++;
     if (!line.trim()) return;
+    const waiting = beforeMessage?.();
+    if (waiting) await waiting;
+    if (signal?.aborted) return;
     const event = receiver.process(line);
     result.events++;
     onEvent(event);
@@ -93,7 +96,7 @@ export async function readRecording(file, receiver, onEvent, { signal } = {}) {
       pending += decoder.decode(value, { stream: !done });
       let newline;
       while ((newline = pending.indexOf("\n")) !== -1) {
-        consume(pending.slice(0, newline));
+        await consume(pending.slice(0, newline));
         pending = pending.slice(newline + 1);
         if (signal?.aborted || result.unsupported) break;
         if (result.lines % 500 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -101,7 +104,7 @@ export async function readRecording(file, receiver, onEvent, { signal } = {}) {
       }
       if (signal?.aborted || result.unsupported) break;
       if (done) {
-        if (pending.length) consume(pending);
+        if (pending.length) await consume(pending);
         break;
       }
     }
