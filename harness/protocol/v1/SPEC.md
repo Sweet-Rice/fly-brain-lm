@@ -118,7 +118,7 @@ A receiver never stops the stream because of recoverable bad data. It drops or i
 | Unknown `type` | Ignore the message. |
 | Unknown field in a known message | Ignore the field. |
 | `fire` before an accepted mapping | Drop the message. |
-| Unsupported mapping `version` | Close a live connection with WebSocket close code `1003` (unsupported data); stop file playback with an unsupported-data result. |
+| Unsupported mapping `version` | Emit the protocol close result `1003` (unsupported data) and close a live connection; browser transport uses `4001` as explained below. Stop file playback with an unsupported-data result. |
 | Mapping violates a mapping constraint | Drop the message and retain the prior mapping, if any. |
 | `t` is not greater than the previous accepted `t` in this mapping epoch | Drop the message. |
 | Fire message contains a malformed pair or a repeated pair | Drop the entire message. |
@@ -127,6 +127,20 @@ A receiver never stops the stream because of recoverable bad data. It drops or i
 | Reconnect | Discard all prior state and wait for a new first mapping. |
 
 Unknown fields are ignored for forward compatibility, but a version 1 producer still MUST emit only the scalar types allowed by this specification.
+
+### 6.1 Browser close-code adaptation
+
+The protocol receiver reports `{action: "close", code: 1003}` consistently with
+the conformance fixtures. Where the transport permits it, send close code 1003.
+The [browser WebSocket API](https://websockets.spec.whatwg.org/#dom-websocket-close)
+only permits application code to send 1000 or a code in 3000–4999; attempting to
+send 1003 throws instead of closing the connection. Browser harnesses MUST
+therefore send **4001**, reason `Unsupported protocol version`, and stop automatic
+reconnection until the user explicitly retries or chooses another source.
+They MUST expose the logical 1003 unsupported-data result to their caller.
+Recording sources stop on that same result without any WebSocket close call.
+This transport adaptation does not change the mapping/fire schemas or fixture
+action objects.
 
 ## 7. Topology changes
 

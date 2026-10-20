@@ -27,8 +27,9 @@ download unless that data is cached.
 
 ## Continuous integration
 
-[GitHub Actions CI](../.github/workflows/ci.yml) runs five independent CPU-only
-checks on PRs, pushes to `main`, and manual dispatches:
+[GitHub Actions CI](../.github/workflows/ci.yml) runs independent checks on PRs,
+pushes to `main`, and manual dispatches. The Python checks use CPU-only PyTorch;
+the separate browser-harness check uses Node.js without model dependencies:
 
 | Check | Scope |
 |---|---|
@@ -37,6 +38,7 @@ checks on PRs, pushes to `main`, and manual dispatches:
 | HTTP API | `test/test_serve.py` |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
 | Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, then inspect the NDJSON recording |
+| Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file input, reconnects, cancellation and WebGPU device lifecycle; see [`harness/app/README.md`](../harness/app/README.md) |
 
 The jobs have no dependency edges. A failed suite does not cancel the other
 suites or skip the smoke check. Each test job prints individual cases and adds

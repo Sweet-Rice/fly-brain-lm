@@ -13,10 +13,23 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Five independent checks, no needs edges. The four test partitions cover every
+# Independent checks, no needs edges. The four Python test partitions cover every
 # test/ file exactly once: Model/core collects everything the other three exclude,
 # so new test modules run without editing this file.
 jobs:
+  harness:
+    name: Browser harness (protocol and sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Harness tests (no dependency installation)
+        working-directory: harness/app
+        run: npm test
+
   tests:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest

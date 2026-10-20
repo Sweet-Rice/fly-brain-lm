@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fly Brain · Visualization harness</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="main.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">FLY BRAIN LM / STREAM V1</p>
+      <h1>Visualization harness</h1>
+      <p>Inspect a live model stream or an NDJSON recording.</p>
+    </header>
+
+    <section aria-labelledby="source-heading">
+      <h2 id="source-heading">Source</h2>
+      <form id="connection">
+        <label for="endpoint">WebSocket endpoint</label>
+        <div class="connection-row">
+          <input id="endpoint" type="url" required spellcheck="false" aria-describedby="endpoint-help">
+          <button type="submit">Connect</button>
+          <button id="disconnect" type="button">Disconnect</button>
+        </div>
+        <p id="endpoint-help" class="hint">Use the exact URL printed by the model or replay server.</p>
+      </form>
+      <label for="recording">Or open a recording</label>
+      <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
+      <p id="source-status" role="status">Disconnected. Connect or open a recording to begin.</p>
+    </section>
+
+    <section aria-labelledby="stream-heading">
+      <h2 id="stream-heading">Accepted stream</h2>
+      <dl class="metrics">
+        <div><dt>Nodes</dt><dd id="nodes">0</dd></div>
+        <div><dt>Edges</dt><dd id="edges">0</dd></div>
+        <div><dt>Last step</dt><dd id="step">—</dd></div>
+        <div><dt>Accepted fires</dt><dd id="fires">0</dd></div>
+        <div><dt>Dropped messages</dt><dd id="dropped">0</dd></div>
+        <div><dt>Undeclared pairs</dt><dd id="pairs-dropped">0</dd></div>
+      </dl>
+      <p id="protocol-status">Waiting for a mapping.</p>
+      <table>
+        <caption>Groups in mapping order</caption>
+        <thead><tr><th scope="col">Group</th><th scope="col">ID</th><th scope="col">Nodes</th></tr></thead>
+        <tbody id="groups"><tr><td colspan="3">No mapping received.</td></tr></tbody>
+      </table>
+      <p id="last-fire" class="hint">No accepted fire event.</p>
+    </section>
+
+    <section aria-labelledby="gpu-heading">
+      <h2 id="gpu-heading">WebGPU viewport</h2>
+      <p id="gpu-status" role="status">Checking WebGPU support…</p>
+      <canvas id="viewport" aria-label="WebGPU viewport reserved for the graph renderer"></canvas>
+      <p class="hint">This scaffold validates the stream and initializes WebGPU. Graph drawing and activity animation are tracked separately in issues #2 and #19.</p>
+    </section>
+  </main>
+</body>
+</html>

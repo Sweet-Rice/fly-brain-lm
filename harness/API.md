@@ -133,8 +133,8 @@ The output is a one-line mapping-only recording. Choose a scratch output path; a
 
 **Version handling.**
 - Each mapping carries its own `version`. `VizStream` does not check or negotiate it because the receiver owns version enforcement.
-- A harness MUST check every mapping. For an unsupported version, a live harness MUST close with WebSocket code 1003; recording playback MUST stop with an unsupported-data result.
-- The current Canvas example predates the full state machine in #18: it clears the graph and displays an unsupported-version banner instead of closing. This is a documented demo limitation, not conforming receiver behavior; the v1 fixtures require the 1003 close.
+- A harness MUST check every mapping. For an unsupported version, a live harness MUST emit protocol close result 1003 and close its connection. Browser adapters send wire code 4001 because JavaScript cannot send 1003; see [SPEC §6.1](protocol/v1/SPEC.md#61-browser-close-code-adaptation). Recording playback MUST stop with an unsupported-data result.
+- The current Canvas example predates the full state machine in `app/`: it clears the graph and displays an unsupported-version banner instead of closing. This is a documented demo limitation, not conforming receiver behavior; the v1 fixtures require the logical 1003 close result.
 - Every accepted mapping replaces the client's graph and last-step baseline, including connect-time replays. A replay is NOT a new server epoch: `VizStream._handler` sends the current mapping without resetting `VizStream.t`. Clients cannot distinguish a replay from a fresh `set_mapping`, so MUST NOT require the first subsequent fire to have `t=0`.
 
 **Harness robustness.**
@@ -208,7 +208,7 @@ rm -f /tmp/v2_stream.py
 
 Expect, read from `window.harnessState` and a screenshot:
 - Before the v2 mapping: the mapping is accepted with the same graph counts as V1 (1958 nodes today), `fires received` is 3, `invalid pairs` is 0, and `ignored messages` is 1 (from `hello`). The extra top-level field and per-node `name` are accepted. If the wiring has fewer than three KCs, use existing KC indices in the script.
-- After the v2 mapping, the current Canvas example shows `unsupported mapping version 2`, clears its graph, and ignores the fourth fire. That demonstrates refusal but not the normative close behavior. A conforming live harness closes with code 1003, as specified and covered by `protocol/v1/fixtures/invalid-cases.json`; #18 owns that harness state-machine work.
+- After the v2 mapping, the current Canvas example shows `unsupported mapping version 2`, clears its graph, and ignores the fourth fire. That demonstrates refusal but not the normative close behavior. The [standalone harness](app/README.md) emits logical close result 1003 and sends browser wire code 4001, as specified in SPEC §6.1; `protocol/v1/fixtures/invalid-cases.json` checks the logical result.
 
 ## 9. Recording format
 
