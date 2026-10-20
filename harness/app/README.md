@@ -3,8 +3,8 @@
 This standalone WebGPU viewer accepts a configurable live WebSocket source or a
 local NDJSON recording through one v1 receiver. It draws every declared node and
 directed edge in groups derived from the mapping and highlights accepted fire
-events. Timed playback controls belong to #20. The existing `harness/example/`
-Canvas demo is unchanged.
+events, with play, pause, restart and speed controls for recordings. The existing
+`harness/example/` Canvas demo is unchanged.
 
 ## Run from a fresh checkout
 
@@ -25,9 +25,38 @@ Choose **Open a recording** and select
 `harness/example/once_upon_a_time.ndjson`. This needs no network service, PyTorch,
 checkpoint or tokenizer. The reference ends with 3 nodes, 2 edges and step 0
 after its replacement mapping; the real capture ends with 1,958 nodes, 19,037
-edges and step 10 (11 accepted fires). File reading processes the recording in
-order, rather than reproducing inference timing. It yields regularly so switching
-sources or clicking Disconnect can cancel a large file.
+edges and step 10 (11 accepted fires). Playback starts automatically when a file
+is selected. This is an explicit offline recording mode, not a fallback for an
+unavailable production model.
+
+### Play a recording
+
+- **Pause** stops delivery of recording messages; **Play** resumes from that point.
+  The remaining playback delay is preserved. An edge already highlighted may
+  finish its 600 ms fade while playback is paused.
+- **Restart** rereads the selected file from its beginning and starts playing.
+  It clears the graph, counters, receiver epoch and activity; the first accepted
+  mapping is epoch 0 again.
+- **Playback speed** offers 0.25×, 0.5×, 1×, 2× and 4×. At the default 1×,
+  accepted fires use a synthetic **500 ms** cadence. Speed changes this cadence,
+  including the remaining current delay, not the renderer's 600 ms highlight
+  duration.
+
+The first mapping and first accepted fire are delivered immediately. After an
+accepted fire, playback waits 500 ms at 1× before delivering the next nonblank
+message; it does not add a delay after the final message. Later replacement
+mappings stay at their position in the recording and clear obsolete graph
+activity. The protocol's `t` only orders accepted fires: omitted steps add no
+extra delay and create no synthetic fires. Recorded messages have no wall-clock timestamps, so playback
+does not reproduce inference or training timing.
+
+Reading is streamed, and choosing another file, connecting a live source or
+clicking Disconnect cancels the current playback. Individual malformed lines
+are counted and skipped through the same receiver used for live input; later
+valid lines still play. An empty file or a file with no accepted mapping reports
+an unusable-recording error. Unsupported protocol versions stop playback, clear
+the graph and show an unsupported-data message. File read errors also appear in
+the source status.
 
 The graph status should match the accepted node/edge counts. Group labels follow
 the mapping's array order; arrowheads point to the destination, including on
@@ -61,9 +90,8 @@ The protocol's `t` determines message order only. A jump in `t` highlights the
 received pairs immediately, without waiting or inventing intermediate fires.
 Filtered undeclared pairs cannot light an edge; valid pairs in the same accepted
 fire still do. Mapping replacement, source switch, disconnect and reconnect
-discard all prior activity, even when an edge id is reused. Reading a recording
-quickly combines its recent fires into a visible burst; it does not reproduce
-their original timing.
+discard all prior activity, even when an edge id is reused. Recording playback
+delivers the same validated fire events at its selected synthetic cadence.
 
 For live input, install the replay's sole dependency if needed, then start it in
 a second terminal from the repository root:
@@ -94,7 +122,9 @@ that whole fire without advancing the step. Undeclared pairs are filtered.
 Unknown fields and message types remain forward compatible.
 
 `sources.js` passes live message text and recording lines through that same
-`process` method. A source switch/disconnect/reconnect clears protocol state;
+`process` method. `playback.js` gates the streaming reader before validation to
+pause delivery and schedule the next message without caching the recording.
+A source switch/disconnect/reconnect clears protocol state;
 late callbacks from an old socket or cancelled file cannot install old data.
 An unexpected socket close retries after one second with a single retry timer.
 Disconnect cancels that timer. File errors are displayed; malformed lines are
@@ -161,9 +191,20 @@ live/file parity, cancellation, stale sockets, reconnect/reset and unsupported
 version shutdown. They also cover deterministic layout, sparse ids, self-loops,
 buffer replacement/release, camera navigation, GPU initialization races,
 deterministic activity expiry/restarts, burst buffer reuse and reduced motion.
+Recording tests cover play/pause, speed changes, restart, stream order and gaps,
+replacement mappings, invalid lines, unusable files and unsupported-version stops.
 Python's contract-artifact tests remain independent.
 
-For a browser check, load the real capture, connect to the replay, stop and
+For a browser check, open the real capture with no model or replay running and
+confirm that its graph renders and edges brighten as playback advances. Pause
+midway and confirm that the accepted step stays fixed after existing highlights
+expire. Resume, try each speed, then restart: the first mapping must return to
+epoch 0 and the fire counters must start over. Use a recording with a malformed
+line followed by valid fires, a gap in `t` and a replacement mapping to check
+that playback continues in recorded order. Empty files and unsupported versions
+should show clear errors; switching to live input must stop recording delivery.
+
+Connect to the replay, stop and
 restart that replay, and confirm mapping-first recovery and cleared counters.
 Active edges and their arrowheads should brighten during fires and settle back
 after 600 ms without activity. Check a stream with gaps in `t` and repeated pairs;

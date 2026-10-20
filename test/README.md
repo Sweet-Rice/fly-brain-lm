@@ -38,7 +38,7 @@ the separate browser-harness check uses Node.js without model dependencies:
 | HTTP API | `test/test_serve.py` |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
 | Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, then inspect the NDJSON recording |
-| Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file input, reconnects, cancellation, graph layout, camera navigation, static GPU buffers and device lifecycle; see [`harness/app/README.md`](../harness/app/README.md) |
+| Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers and device lifecycle; see [`harness/app/README.md`](../harness/app/README.md) |
 
 The jobs have no dependency edges. A failed suite does not cancel the other
 suites or skip the smoke check. Each test job prints individual cases and adds
