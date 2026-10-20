@@ -11,7 +11,7 @@ All commands run from the repo root (`fly-brain-lm/`) with the project venv: `.v
 | `replay_prompt.py` | Replays the bundled "Once upon a time" recording. Does not load a model. |
 | `watch_stream.py` | Terminal viewer for a live stream or an NDJSON recording. |
 | `example/` | Browser example harness and the bundled recording. See [`example/README.md`](example/README.md). |
-| `app/` | Standalone WebGPU graph viewer with validated live/file input and pan, zoom and fit; see [`app/README.md`](app/README.md). |
+| `app/` | Standalone WebGPU graph viewer with validated live/file input, activity highlights and pan, zoom and fit; see [`app/README.md`](app/README.md). |
 | `protocol/v1/` | Normative v1 specification, JSON Schemas, and conformance fixtures. |
 | `API.md` | Model-side implementation guide, current graph details, and migration policy. |
 

@@ -2,9 +2,9 @@
 
 This standalone WebGPU viewer accepts a configurable live WebSocket source or a
 local NDJSON recording through one v1 receiver. It draws every declared node and
-directed edge in groups derived from the mapping and shows accepted fire events
-as text. Activity animation belongs to #19; timed playback controls belong to
-#20. The existing `harness/example/` Canvas demo is unchanged.
+directed edge in groups derived from the mapping and highlights accepted fire
+events. Timed playback controls belong to #20. The existing `harness/example/`
+Canvas demo is unchanged.
 
 ## Run from a fresh checkout
 
@@ -46,6 +46,24 @@ Layout is deterministic: each group gets a grid, with members sorted by numeric
 node id. Empty groups keep their place, isolated nodes remain visible and sparse
 ids do not allocate arrays sized by the largest id. Positions are computed locally;
 no coordinates or floating-point fields are added to the protocol.
+
+### Activity highlights
+
+Every accepted source-to-destination pair brightens its entire directed edge,
+including the destination arrowhead, then fades linearly to its base color over
+**600 ms** of local elapsed time. The highlight mixes 80% white into the edge's
+group color and raises its opacity to 95% at the start. A repeat restarts that
+edge's 600 ms highlight; it does not add intensity. Other active edges keep their
+own start times. With the system's reduced-motion preference enabled, the edge
+holds its full highlight for 600 ms and then returns to its base appearance.
+
+The protocol's `t` determines message order only. A jump in `t` highlights the
+received pairs immediately, without waiting or inventing intermediate fires.
+Filtered undeclared pairs cannot light an edge; valid pairs in the same accepted
+fire still do. Mapping replacement, source switch, disconnect and reconnect
+discard all prior activity, even when an edge id is reused. Reading a recording
+quickly combines its recent fires into a visible burst; it does not reproduce
+their original timing.
 
 For live input, install the replay's sole dependency if needed, then start it in
 a second terminal from the repository root:
@@ -89,12 +107,17 @@ either source until the user chooses a source again.
 - `fire`: `event.detail` is `{t, pairs}`, containing only accepted declared pairs.
 - `reset`: discard all scene and animation state, including on reconnect.
 
-`gpu.js` consumes mapping/reset events, retaining the latest mapping while the
-GPU initializes. `layout.js` builds static triangle geometry; `renderer.js`
-uploads it to edge/node buffers and draws them through a native WGSL pipeline.
+`gpu.js` consumes mapping/fire/reset events, retaining the latest mapping and its
+recent activity while the GPU initializes. `layout.js` builds static triangle
+geometry; `renderer.js` uploads it to edge/node buffers and draws them through a
+native WGSL pipeline. `activity.js` uses a dense edge lookup and reusable typed
+arrays for local start times, independent of sparse node ids and protocol steps.
 `camera.js` handles fit, pan and anchored zoom in CSS pixels. Navigation and
 resize update the camera without rebuilding geometry. Rendering runs only on
-mapping, reset, navigation or resize; fire events do not animate yet.
+mapping, reset, navigation or resize, and while any highlight is active. Fires
+update a reusable GPU activity buffer; animation frames update only uniforms.
+Neither path rebuilds or uploads static graph geometry, and the renderer creates
+no per-edge objects each frame. The animation loop stops when highlights expire.
 
 A replacement mapping rebuilds the complete scene and fits its bounds. Obsolete
 buffers are destroyed after submitted GPU work completes. Disconnect/reset clears
@@ -136,11 +159,18 @@ CI runs this suite independently of the Python jobs. Tests exercise every valid
 and invalid #14 fixture against the actual JS receiver, real capture validation,
 live/file parity, cancellation, stale sockets, reconnect/reset and unsupported
 version shutdown. They also cover deterministic layout, sparse ids, self-loops,
-buffer replacement/release, camera navigation and GPU initialization races.
+buffer replacement/release, camera navigation, GPU initialization races,
+deterministic activity expiry/restarts, burst buffer reuse and reduced motion.
 Python's contract-artifact tests remain independent.
 
 For a browser check, load the real capture, connect to the replay, stop and
 restart that replay, and confirm mapping-first recovery and cleared counters.
+Active edges and their arrowheads should brighten during fires and settle back
+after 600 ms without activity. Check a stream with gaps in `t` and repeated pairs;
+the former must not delay a highlight and the latter must restart its duration.
+Replace the mapping or reconnect during a highlight to confirm no activity leaks
+into the new graph. Enable the system's reduced-motion preference and confirm
+highlights hold steady before disappearing.
 Verify that the reference recording replaces its first graph with only Sensory
 and Output groups, 3 nodes and 2 edges. Load the real capture and inspect all
 five groups, 1,958 nodes and 19,037 directed edges. Test dragging, wheel/button
