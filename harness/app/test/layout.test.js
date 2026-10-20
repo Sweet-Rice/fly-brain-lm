@@ -12,13 +12,15 @@ const mapping = {
 function checkGeometry(graph) {
   for (const vertices of [graph.nodes, graph.edges]) {
     assert.ok(vertices instanceof Float32Array);
-    assert.equal(vertices.length % 18, 0);
-    for (let i = 0; i < vertices.length; i += 6) {
-      const [x, y, r, g, b, a] = vertices.subarray(i, i + 6);
+    assert.equal(vertices.length % 21, 0);
+    for (let i = 0; i < vertices.length; i += 7) {
+      const [x, y, r, g, b, a, edgeIndex] = vertices.subarray(i, i + 7);
       assert.ok(Number.isFinite(x) && Number.isFinite(y));
       assert.ok(x >= graph.bounds.minX - 0.001 && x <= graph.bounds.maxX + 0.001);
       assert.ok(y >= graph.bounds.minY - 0.001 && y <= graph.bounds.maxY + 0.001);
       assert.ok([r, g, b, a].every(value => value >= 0 && value <= 1));
+      assert.ok(Number.isInteger(edgeIndex));
+      assert.ok(vertices === graph.nodes ? edgeIndex === -1 : edgeIndex >= 0 && edgeIndex < graph.edgeCount);
     }
   }
   assert.ok(Object.values(graph.bounds).every(Number.isFinite));
@@ -36,32 +38,42 @@ test('layout respects group order, sorts sparse ids, and does not mutate the map
   assert.ok(graph.labels[0].x < graph.labels[1].x && graph.labels[1].x < graph.labels[2].x);
   assert.equal(graph.nodeCount, 3);
   assert.equal(graph.edgeCount, 3);
-  assert.equal(graph.nodes.length, 3 * 12 * 18);
+  assert.equal(graph.nodes.length, 3 * 12 * 21);
   assert.deepEqual(graph, buildGraph(mapping));
   assert.deepEqual(graph, buildGraph({ ...mapping, nodes: [...mapping.nodes].reverse() }));
   // Each circle begins with its center; node 2 precedes node 90001 in their group.
-  assert.ok(graph.nodes[1] < graph.nodes[12 * 18 + 1]);
+  assert.ok(graph.nodes[1] < graph.nodes[12 * 21 + 1]);
   assert.deepEqual([...graph.nodes.subarray(2, 5)], graph.labels[0].color.map(Math.fround));
 });
 
 test('each directed edge has a shaft and a destination arrowhead in source color', () => {
   const graph = buildGraph({ ...mapping, edges: [[6, 90001]] });
-  assert.equal(graph.edges.length, 3 * 18);
-  const arrowTip = [...graph.edges.subarray(36, 38)];
-  const destination = [...graph.nodes.subarray(12 * 18, 12 * 18 + 2)];
+  assert.equal(graph.edges.length, 3 * 21);
+  const arrowTip = [...graph.edges.subarray(42, 44)];
+  const destination = [...graph.nodes.subarray(12 * 21, 12 * 21 + 2)];
   assert.ok(Math.abs(Math.hypot(arrowTip[0] - destination[0], arrowTip[1] - destination[1]) - 3) < 0.001);
   assert.deepEqual([...graph.edges.subarray(2, 5)], graph.labels[1].color.map(Math.fround));
-  assert.ok(graph.edges[41] > graph.edges[5]);
+  assert.ok(graph.edges[47] > graph.edges[5]);
 });
 
 test('self edges form a visible loop and arrow without NaNs', () => {
   const graph = buildGraph({ ...mapping, edges: [[2, 2]] });
   checkGeometry(graph);
-  assert.equal(graph.edges.length, (16 * 2 + 1) * 18);
+  assert.equal(graph.edges.length, (16 * 2 + 1) * 21);
   const centerY = graph.nodes[1];
   const ys = [];
-  for (let i = 1; i < graph.edges.length; i += 6) ys.push(graph.edges[i]);
+  for (let i = 1; i < graph.edges.length; i += 7) ys.push(graph.edges[i]);
   assert.ok(Math.min(...ys) < centerY - 15);
+});
+
+test('all shaft, arrow, and loop vertices retain their directed mapping edge index', () => {
+  const graph = buildGraph(mapping);
+  assert.deepEqual(graph.edgePairs, mapping.edges);
+  const indices = [];
+  for (let i = 6; i < graph.edges.length; i += 7) indices.push(graph.edges[i]);
+  assert.deepEqual(indices, [
+    ...Array(9).fill(0), ...Array(9).fill(1), ...Array(99).fill(2),
+  ]);
 });
 
 test('empty networks, empty groups, and isolated nodes have valid bounds', () => {
@@ -85,8 +97,8 @@ test('bundled recording draws every declared node and edge deterministically', (
   assert.equal(graph.nodeCount, 1958);
   assert.equal(graph.edgeCount, 19037);
   assert.equal(graph.labels.length, 5);
-  assert.equal(graph.nodes.length, 1958 * 12 * 18);
+  assert.equal(graph.nodes.length, 1958 * 12 * 21);
   const selfEdges = capture.edges.filter(([a, b]) => a === b).length;
-  assert.equal(graph.edges.length, ((19037 - selfEdges) * 3 + selfEdges * 33) * 18);
+  assert.equal(graph.edges.length, ((19037 - selfEdges) * 3 + selfEdges * 33) * 21);
   assert.deepEqual(graph, buildGraph(capture));
 });

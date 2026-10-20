@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRenderer } from '../renderer.js';
+import { EdgeActivity } from '../activity.js';
 
-globalThis.GPUBufferUsage = { UNIFORM: 1, COPY_DST: 2, VERTEX: 4 };
+globalThis.GPUBufferUsage = { UNIFORM: 1, COPY_DST: 2, VERTEX: 4, STORAGE: 8 };
 const camera = { centerX: 10, centerY: 20, scale: 2, width: 800, height: 600 };
-const graph = (edges = 1, nodes = 2) => ({ edges: new Float32Array(edges * 18), nodes: new Float32Array(nodes * 18) });
+const graph = (edges = 1, nodes = 2) => ({
+  edges: new Float32Array(edges * 21), nodes: new Float32Array(nodes * 21),
+  edgePairs: Array.from({ length: edges }, (_, index) => [index, index + 1]),
+});
 
 function setup() {
   const buffers = [];
@@ -12,13 +16,16 @@ function setup() {
   const completions = [];
   const calls = [];
   const device = {
-    limits: { maxBufferSize: 1024 },
+    limits: { maxBufferSize: 1024, maxStorageBufferBindingSize: 1024 },
     createShaderModule: (descriptor) => descriptor,
     createRenderPipeline(descriptor) {
       this.pipeline = descriptor;
       return { getBindGroupLayout: () => ({}) };
     },
-    createBindGroup: (descriptor) => descriptor,
+    createBindGroup(descriptor) {
+      if (this.failBindGroup) throw new Error('bind group failed');
+      return descriptor;
+    },
     createBuffer(descriptor) {
       if (buffers.length === this.failAllocation) throw new Error('allocation failed');
       const buffer = { ...descriptor, destroyed: 0, destroy() { this.destroyed++; } };
@@ -29,7 +36,7 @@ function setup() {
     queue: {
       writeBuffer(buffer, offset, data) {
         if (device.failUpload === buffer) throw new Error('upload failed');
-        writes.push({ buffer, offset, data: Array.from(data) });
+        writes.push({ buffer, offset, data: Array.from(data), source: data });
       },
       onSubmittedWorkDone: () => new Promise((resolve, reject) => completions.push({ resolve, reject })),
     },
@@ -45,16 +52,17 @@ function setup() {
 test('uploads geometry once, draws edges before nodes, and updates only the camera for navigation', () => {
   const s = setup();
   s.renderer.setGraph(graph());
-  assert.equal(s.buffers.length, 3);
+  assert.equal(s.buffers.length, 4);
   assert.equal(s.device.pipeline.primitive.topology, 'triangle-list');
-  assert.equal(s.device.pipeline.vertex.buffers[0].arrayStride, 24);
-  s.renderer.draw(s.pass, camera);
+  assert.equal(s.device.pipeline.vertex.buffers[0].arrayStride, 28);
+  s.renderer.draw(s.pass, camera, 100);
   assert.deepEqual(s.calls, [s.buffers[1], 3, s.buffers[2], 6]);
-  assert.deepEqual(s.writes.at(-1).data, [10, 20, 2, 0, 800, 600, 0, 0]);
-  s.renderer.draw(s.pass, { ...camera, width: 1200, scale: 4 });
-  assert.equal(s.buffers.length, 3);
-  assert.equal(s.writes.length, 4);
-  assert.deepEqual(s.writes.at(-1).data, [10, 20, 4, 0, 1200, 600, 0, 0]);
+  assert.deepEqual(s.writes.at(-1).data, [10, 20, 2, 100, 800, 600, 600, 0]);
+  s.renderer.draw(s.pass, { ...camera, width: 1200, scale: 4 }, 200, true);
+  assert.equal(s.buffers.length, 4);
+  assert.equal(s.writes.length, 5);
+  assert.deepEqual(s.writes.at(-1).data, [10, 20, 4, 200, 1200, 600, 600, 1]);
+  assert.equal(s.writes.at(-1).source, s.writes.at(-2).source);
   s.renderer.destroy();
 });
 
@@ -63,13 +71,14 @@ test('replacement changes the complete scene and retires old buffers after submi
   s.renderer.setGraph(graph());
   s.renderer.setGraph(graph(2, 1));
   s.renderer.draw(s.pass, camera);
-  assert.deepEqual(s.calls, [s.buffers[3], 6, s.buffers[4], 3]);
+  assert.deepEqual(s.calls, [s.buffers[4], 6, s.buffers[5], 3]);
   assert.equal(s.buffers[1].destroyed, 0);
   s.completions[0].resolve();
   await Promise.resolve();
   assert.equal(s.buffers[1].destroyed, 1);
   assert.equal(s.buffers[2].destroyed, 1);
-  assert.equal(s.buffers[3].destroyed, 0);
+  assert.equal(s.buffers[3].destroyed, 1);
+  assert.equal(s.buffers[4].destroyed, 0);
   s.renderer.destroy();
 });
 
@@ -77,7 +86,7 @@ test('empty mappings and reset draw nothing and allocate no geometry', () => {
   const s = setup();
   s.renderer.setGraph(graph(0, 0));
   s.renderer.draw(s.pass, camera);
-  assert.equal(s.buffers.length, 1);
+  assert.equal(s.buffers.length, 2);
   s.renderer.setGraph(graph());
   s.renderer.setGraph(null);
   s.renderer.draw(s.pass, camera);
@@ -88,9 +97,9 @@ test('empty mappings and reset draw nothing and allocate no geometry', () => {
 test('partial allocation failure releases new buffers and preserves the previous scene', () => {
   const s = setup();
   s.renderer.setGraph(graph());
-  s.device.failAllocation = 4;
+  s.device.failAllocation = 5;
   assert.throws(() => s.renderer.setGraph(graph(2, 2)), /allocation failed/);
-  assert.equal(s.buffers[3].destroyed, 1);
+  assert.equal(s.buffers[4].destroyed, 1);
   assert.equal(s.buffers[1].destroyed, 0);
   s.renderer.draw(s.pass, camera);
   assert.deepEqual(s.calls, [s.buffers[1], 3, s.buffers[2], 6]);
@@ -108,10 +117,10 @@ test('oversized or malformed geometry is rejected before any allocation', () => 
 test('upload failure releases both new buffers and preserves the previous scene', () => {
   const s = setup();
   s.renderer.setGraph(graph());
-  s.device.failUploadAllocation = 5;
+  s.device.failUploadAllocation = 6;
   assert.throws(() => s.renderer.setGraph(graph(2, 2)), /upload failed/);
-  assert.equal(s.buffers[3].destroyed, 1);
   assert.equal(s.buffers[4].destroyed, 1);
+  assert.equal(s.buffers[5].destroyed, 1);
   s.renderer.draw(s.pass, camera);
   assert.deepEqual(s.calls, [s.buffers[1], 3, s.buffers[2], 6]);
   s.renderer.destroy();
@@ -126,11 +135,11 @@ test('retirement waits for each relevant queue boundary and survives device loss
   s.completions[0].resolve();
   await Promise.resolve();
   assert.equal(s.buffers[1].destroyed, 1);
-  assert.equal(s.buffers[3].destroyed, 0);
+  assert.equal(s.buffers[4].destroyed, 0);
   assert.equal(s.completions.length, 2);
   s.completions[1].reject(new Error('device lost'));
   await Promise.resolve();
-  assert.equal(s.buffers[3].destroyed, 1);
+  assert.equal(s.buffers[4].destroyed, 1);
   s.renderer.destroy();
 });
 
@@ -146,4 +155,79 @@ test('destroy is idempotent and releases pending, active, and uniform buffers ex
   s.completions[0].resolve();
   await Promise.resolve();
   assert.ok(s.buffers.every((buffer) => buffer.destroyed === 1));
+});
+
+test('fires reuse the activity buffer and never upload or rebuild static geometry', () => {
+  const s = setup();
+  s.renderer.setGraph(graph(3, 2));
+  const bufferCount = s.buffers.length;
+  const geometryWrites = s.writes.filter(write => write.buffer.usage & GPUBufferUsage.VERTEX);
+  const activityBuffer = s.buffers.find(buffer => buffer.usage & GPUBufferUsage.STORAGE);
+  assert.deepEqual(s.writes.at(-1).data, [-1, -1, -1]);
+  assert.equal(s.renderer.fire([[0, 1], [2, 3], [99, 100]], 100), true);
+  assert.equal(s.writes.at(-1).buffer, activityBuffer);
+  assert.deepEqual(s.writes.at(-1).data, [100, -1, 100]);
+  assert.equal(s.renderer.isActive(699), true);
+  assert.equal(s.renderer.isActive(700), false);
+  assert.equal(s.renderer.fire([[0, 1]], 500), true);
+  assert.deepEqual(s.writes.at(-1).data, [500, -1, 100]);
+  assert.equal(s.renderer.isActive(1099), true);
+  assert.equal(s.renderer.isActive(1100), false);
+  const writeCount = s.writes.length;
+  assert.equal(s.renderer.fire([[1, 0]], 600), false);
+  assert.equal(s.writes.length, writeCount);
+  for (let now = 600; now <= 1100; now += 100) s.renderer.draw(s.pass, camera, now);
+  assert.equal(s.buffers.length, bufferCount);
+  assert.deepEqual(s.writes.filter(write => write.buffer.usage & GPUBufferUsage.VERTEX), geometryWrites);
+  s.renderer.destroy();
+});
+
+test('replacement and reset clear highlights, including edges that reuse the same IDs', () => {
+  const s = setup();
+  s.renderer.setGraph(graph());
+  s.renderer.fire([[0, 1]], 10);
+  s.renderer.setGraph(graph());
+  assert.equal(s.renderer.isActive(20), false);
+  assert.deepEqual(s.writes.at(-1).data, [-1]);
+  s.renderer.fire([[0, 1]], 30);
+  s.renderer.setGraph(null);
+  assert.equal(s.renderer.isActive(40), false);
+  assert.equal(s.renderer.fire([[0, 1]], 40), false);
+  s.renderer.destroy();
+});
+
+test('mapping installation keeps fire activity received before the GPU became ready', () => {
+  const s = setup();
+  const next = graph();
+  const activity = new EdgeActivity(next.edgePairs);
+  activity.fire([[0, 1]], 40);
+  s.renderer.setGraph(next, activity);
+  assert.deepEqual(s.writes.at(-1).data, [40]);
+  assert.equal(s.renderer.isActive(50), true);
+  s.renderer.destroy();
+});
+
+test('activity upload and bind group failures release the new scene atomically', () => {
+  for (const failure of ['upload', 'bind group']) {
+    const s = setup();
+    s.renderer.setGraph(graph());
+    s.renderer.fire([[0, 1]], 100);
+    if (failure === 'upload') s.device.failUploadAllocation = 7;
+    else s.device.failBindGroup = true;
+    assert.throws(() => s.renderer.setGraph(graph()), /failed/);
+    assert.ok(s.buffers.slice(4).every(buffer => buffer.destroyed === 1));
+    assert.ok(s.buffers.slice(1, 4).every(buffer => buffer.destroyed === 0));
+    assert.equal(s.renderer.isActive(200), true);
+    s.renderer.draw(s.pass, camera, 200);
+    assert.deepEqual(s.calls, [s.buffers[1], 3, s.buffers[2], 6]);
+    s.renderer.destroy();
+  }
+});
+
+test('activity exceeding the storage binding limit is rejected before allocation', () => {
+  const s = setup();
+  s.device.limits.maxStorageBufferBindingSize = 4;
+  assert.throws(() => s.renderer.setGraph(graph(2)), /storage buffer size limit/);
+  assert.equal(s.buffers.length, 1);
+  s.renderer.destroy();
 });

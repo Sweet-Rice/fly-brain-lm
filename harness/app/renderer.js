@@ -1,19 +1,32 @@
+import { ACTIVITY_DURATION, EdgeActivity } from './activity.js';
+
 const shader = `
 struct Camera {
   center: vec2f,
   scale: f32,
-  padding: f32,
+  time: f32,
   viewport: vec2f,
-  padding2: vec2f,
+  duration: f32,
+  reducedMotion: f32,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
+@group(0) @binding(1) var<storage, read> starts: array<f32>;
 struct Vertex {
   @builtin(position) position: vec4f,
   @location(0) color: vec4f,
 };
-@vertex fn vertex(@location(0) position: vec2f, @location(1) color: vec4f) -> Vertex {
+@vertex fn vertex(@location(0) position: vec2f, @location(1) color: vec4f, @location(2) edgeIndex: f32) -> Vertex {
   let clip = (position - camera.center) * camera.scale * 2.0 / camera.viewport;
-  return Vertex(vec4f(clip.x, -clip.y, 0.0, 1.0), color);
+  var highlighted = color;
+  if (edgeIndex >= 0.0) {
+    let start = starts[u32(edgeIndex)];
+    let age = camera.time - start;
+    if (start >= 0.0 && age >= 0.0 && age < camera.duration) {
+      let intensity = select(1.0 - age / camera.duration, 1.0, camera.reducedMotion > 0.5);
+      highlighted = vec4f(mix(color.rgb, vec3f(1.0), 0.8 * intensity), max(color.a, 0.95 * intensity));
+    }
+  }
+  return Vertex(vec4f(clip.x, -clip.y, 0.0, 1.0), highlighted);
 }
 @fragment fn fragment(input: Vertex) -> @location(0) vec4f {
   return input.color;
@@ -24,10 +37,11 @@ export function createRenderer(device, format) {
   const pipeline = device.createRenderPipeline({
     layout: 'auto',
     vertex: { module, entryPoint: 'vertex', buffers: [{
-      arrayStride: 24,
+      arrayStride: 28,
       attributes: [
         { shaderLocation: 0, offset: 0, format: 'float32x2' },
         { shaderLocation: 1, offset: 8, format: 'float32x4' },
+        { shaderLocation: 2, offset: 24, format: 'float32' },
       ],
     }] },
     fragment: { module, entryPoint: 'fragment', targets: [{ format, blend: {
@@ -37,22 +51,18 @@ export function createRenderer(device, format) {
     primitive: { topology: 'triangle-list' },
   });
   const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const uniforms = new Float32Array(8);
   let bindGroup;
-  try {
-    bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: uniform } }],
-    });
-  } catch (error) {
-    uniform.destroy();
-    throw error;
-  }
+  let activity = null;
+  let activityBuffer;
   let current = [];
+  let currentBuffers = [];
   let retired = [];
   let releasing = false;
   let disposed = false;
   const pending = new Set();
   const release = (buffers) => {
-    for (const { buffer } of buffers) {
+    for (const buffer of buffers) {
       buffer.destroy();
       pending.delete(buffer);
     }
@@ -70,37 +80,77 @@ export function createRenderer(device, format) {
     releasing = false;
   };
   return {
-    setGraph(graph) {
+    setGraph(graph, nextActivity) {
       if (disposed) throw new Error('Renderer has been destroyed');
       const arrays = graph ? [graph.edges, graph.nodes] : [];
       for (const data of arrays) {
-        if (!(data instanceof Float32Array) || data.length % 18 !== 0) {
+        if (!(data instanceof Float32Array) || data.length % 21 !== 0) {
           throw new Error('Graph geometry must contain interleaved triangle vertices');
         }
         if (data.byteLength > device.limits.maxBufferSize) throw new Error('Graph exceeds the GPU buffer size limit');
       }
+      nextActivity ??= graph ? new EdgeActivity(graph.edgePairs) : null;
+      if (nextActivity && (nextActivity.starts.byteLength > device.limits.maxBufferSize ||
+          nextActivity.starts.byteLength > device.limits.maxStorageBufferBindingSize)) {
+        throw new Error('Graph activity exceeds the GPU storage buffer size limit');
+      }
       const next = [];
+      const nextBuffers = [];
+      let nextActivityBuffer;
+      let nextBindGroup;
       try {
         for (const data of arrays) {
           if (!data.length) continue;
           const buffer = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-          next.push({ buffer, count: data.length / 6 });
+          nextBuffers.push(buffer);
+          next.push({ buffer, count: data.length / 7 });
           device.queue.writeBuffer(buffer, 0, data);
         }
+        if (nextActivity) {
+          nextActivityBuffer = device.createBuffer({
+            size: nextActivity.starts.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+          });
+          nextBuffers.push(nextActivityBuffer);
+          device.queue.writeBuffer(nextActivityBuffer, 0, nextActivity.starts);
+          nextBindGroup = device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0), entries: [
+              { binding: 0, resource: { buffer: uniform } },
+              { binding: 1, resource: { buffer: nextActivityBuffer } },
+            ],
+          });
+        }
       } catch (error) {
-        release(next);
+        release(nextBuffers);
         throw error;
       }
-      for (const { buffer } of next) pending.add(buffer);
-      retired.push(...current);
+      for (const buffer of nextBuffers) pending.add(buffer);
+      retired.push(...currentBuffers);
       current = next;
+      currentBuffers = nextBuffers;
+      activity = nextActivity;
+      activityBuffer = nextActivityBuffer;
+      bindGroup = nextBindGroup;
       void releaseRetired();
     },
-    draw(pass, camera) {
+    fire(pairs, now) {
+      if (disposed || !activity?.fire(pairs, now)) return false;
+      device.queue.writeBuffer(activityBuffer, 0, activity.starts);
+      return true;
+    },
+    isActive(now) {
+      return !disposed && Boolean(activity?.active(now));
+    },
+    draw(pass, camera, now = performance.now(), reducedMotion = false) {
       if (disposed || !current.length) return;
-      device.queue.writeBuffer(uniform, 0, new Float32Array([
-        camera.centerX, camera.centerY, camera.scale, 0, camera.width, camera.height, 0, 0,
-      ]));
+      uniforms[0] = camera.centerX;
+      uniforms[1] = camera.centerY;
+      uniforms[2] = camera.scale;
+      uniforms[3] = now;
+      uniforms[4] = camera.width;
+      uniforms[5] = camera.height;
+      uniforms[6] = ACTIVITY_DURATION;
+      uniforms[7] = Number(reducedMotion);
+      device.queue.writeBuffer(uniform, 0, uniforms);
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, bindGroup);
       for (const { buffer, count } of current) {
@@ -114,6 +164,8 @@ export function createRenderer(device, format) {
       for (const buffer of pending) buffer.destroy();
       pending.clear();
       current = [];
+      currentBuffers = [];
+      activity = null;
       retired = [];
       uniform.destroy();
     },

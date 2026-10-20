@@ -24,14 +24,14 @@ export function buildGraph(mapping) {
     bounds.maxY = Math.max(bounds.maxY, y);
   }
 
-  function triangle(target, a, b, c, color, alpha) {
+  function triangle(target, a, b, c, color, alpha, edgeIndex = -1) {
     for (const [x, y] of [a, b, c]) {
-      target.push(x, y, ...color, alpha);
+      target.push(x, y, ...color, alpha, edgeIndex);
       include(x, y);
     }
   }
 
-  function segment(a, b, color) {
+  function segment(a, b, color, edgeIndex) {
     const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
     const nx = -(b[1] - a[1]) / length * 0.35;
     const ny = (b[0] - a[0]) / length * 0.35;
@@ -39,17 +39,17 @@ export function buildGraph(mapping) {
     const q = [a[0] - nx, a[1] - ny];
     const r = [b[0] + nx, b[1] + ny];
     const s = [b[0] - nx, b[1] - ny];
-    triangle(edges, p, q, r, color, 0.12);
-    triangle(edges, r, q, s, color, 0.12);
+    triangle(edges, p, q, r, color, 0.12, edgeIndex);
+    triangle(edges, r, q, s, color, 0.12, edgeIndex);
   }
 
-  function arrow(tip, direction, color) {
+  function arrow(tip, direction, color, edgeIndex) {
     const length = Math.hypot(...direction);
     const ux = direction[0] / length;
     const uy = direction[1] / length;
     triangle(edges, tip,
       [tip[0] - ux * 5 - uy * 2.3, tip[1] - uy * 5 + ux * 2.3],
-      [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, 0.65);
+      [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, 0.65, edgeIndex);
   }
 
   mapping.groups.forEach((group, index) => {
@@ -85,7 +85,7 @@ export function buildGraph(mapping) {
     include(label.x + halfWidth, label.y + 8);
   }
 
-  for (const [source, destination] of mapping.edges) {
+  for (const [edgeIndex, [source, destination]] of mapping.edges.entries()) {
     const a = positions.get(source);
     const b = positions.get(destination);
     if (source === destination) {
@@ -99,8 +99,8 @@ export function buildGraph(mapping) {
           u ** 3 * (a.y - 2) + 3 * u * u * t * (a.y - 24)
             + 3 * u * t * t * (a.y - 24) + t ** 3 * (a.y - 2),
         ];
-        segment(previous, point, a.color);
-        if (i === 16) arrow(point, [point[0] - previous[0], point[1] - previous[1]], a.color);
+        segment(previous, point, a.color, edgeIndex);
+        if (i === 16) arrow(point, [point[0] - previous[0], point[1] - previous[1]], a.color, edgeIndex);
         previous = point;
       }
     } else {
@@ -109,14 +109,14 @@ export function buildGraph(mapping) {
       const length = Math.hypot(dx, dy);
       const start = [a.x + dx / length * RADIUS, a.y + dy / length * RADIUS];
       const end = [b.x - dx / length * RADIUS, b.y - dy / length * RADIUS];
-      segment(start, end, a.color);
-      arrow(end, [dx, dy], a.color);
+      segment(start, end, a.color, edgeIndex);
+      arrow(end, [dx, dy], a.color, edgeIndex);
     }
   }
 
   if (mapping.groups.length === 0) Object.assign(bounds, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
   return {
     nodes: new Float32Array(nodes), edges: new Float32Array(edges), labels, bounds,
-    nodeCount: mapping.nodes.length, edgeCount: mapping.edges.length,
+    nodeCount: mapping.nodes.length, edgeCount: mapping.edges.length, edgePairs: mapping.edges,
   };
 }
