@@ -4,9 +4,9 @@ An experimental, **untrained** language model whose activity can be streamed to 
 browser over WebSocket. Generated text is not expected to be useful. For harness
 UI development, use the bundled replay instead of running the model.
 
-The [standalone harness](harness/app/README.md) adds protocol validation for live
-and file input and WebGPU initialization. The existing Canvas example below
-remains the graph demo while the WebGPU renderer is developed in issue #2.
+The [standalone harness](harness/app/README.md) renders the grouped, directed
+graph with WebGPU from either live input or a recording, with pan, zoom and fit
+controls. The existing Canvas example below remains available as a separate demo.
 
 Run the commands below from the repository root. Use module invocations
 (`python -m ...`), not direct paths to Python source files.
