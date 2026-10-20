@@ -10,12 +10,15 @@ p { margin: 8px 0 16px; }
 section { border: 1px solid #364252; border-radius: 12px; padding: 24px; margin-bottom: 20px; background: #171f2a; }
 label { display: block; font-weight: 600; margin: 12px 0 6px; }
 .connection-row { display: flex; flex-wrap: wrap; gap: 10px; }
-input, button { font: inherit; color: inherit; border: 1px solid #718096; border-radius: 6px; background: #10151d; padding: 9px 12px; min-height: 44px; }
+input, button, select { font: inherit; color: inherit; border: 1px solid #718096; border-radius: 6px; background: #10151d; padding: 9px 12px; min-height: 44px; }
 input[type=url] { flex: 1 1 300px; min-width: 0; }
 input[type=file] { width: 100%; }
 button { cursor: pointer; background: #235b50; font-weight: 600; }
 button[type=button] { background: #293648; }
 button:hover { filter: brightness(1.2); }
+button:disabled, select:disabled { opacity: .5; cursor: default; }
+.playback-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.playback-controls label { margin: 0 0 0 8px; }
 :focus-visible { outline: 3px solid #a8e5d4; outline-offset: 3px; }
 .hint, dt { color: #b9c5d4; font-size: .875rem; }
 #source-status, #gpu-status { overflow-wrap: anywhere; }

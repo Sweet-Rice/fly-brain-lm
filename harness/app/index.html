@@ -28,6 +28,20 @@
       </form>
       <label for="recording">Or open a recording</label>
       <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
+      <div class="playback-controls" role="group" aria-label="Recording playback">
+        <button id="recording-play" type="button" disabled>Play</button>
+        <button id="recording-pause" type="button" disabled>Pause</button>
+        <button id="recording-restart" type="button" disabled>Restart</button>
+        <label for="recording-speed">Playback speed</label>
+        <select id="recording-speed" disabled aria-describedby="recording-help">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </div>
+      <p id="recording-help" class="hint">Recordings play locally with 500 ms between fires at 1×. Pause stops new messages; active highlights finish fading. Recordings are saved data for inspection, not live model output.</p>
       <p id="source-status" role="status">Disconnected. Connect or open a recording to begin.</p>
     </section>
 

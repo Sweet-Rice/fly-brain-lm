@@ -1,11 +1,11 @@
 import { ProtocolReceiver } from "./protocol.js";
-import { LiveSource, readRecording } from "./sources.js";
+import { LiveSource } from "./sources.js";
+import { RecordingSource } from "./playback.js";
 import { initializeGPU } from "./gpu.js";
 
 const receiver = new ProtocolReceiver();
 const element = (id) => document.getElementById(id);
 const canvas = element("viewport");
-let fileController;
 let fires = 0, dropped = 0, droppedPairs = 0;
 
 function renderMapping() {
@@ -83,50 +83,50 @@ const live = new LiveSource(receiver, {
   },
 });
 
-function stopFile() {
-  fileController?.abort();
-  fileController = undefined;
-}
+const recording = new RecordingSource(receiver, {
+  onEvent,
+  onReset: clearDisplay,
+  onStatus({ state, message }) {
+    element("source-status").textContent = message;
+    element("recording-play").disabled = state !== "paused";
+    element("recording-pause").disabled = state !== "playing";
+    element("recording-restart").disabled = !recording.file;
+    element("recording-speed").disabled = !recording.file;
+    if (state === "unsupported") {
+      element("protocol-status").textContent = "Unsupported recording protocol version.";
+    }
+  },
+});
 
 element("endpoint").value = new URLSearchParams(location.search).get("ws") || "ws://127.0.0.1:8765/stream";
 element("connection").addEventListener("submit", (event) => {
   event.preventDefault();
-  stopFile();
+  recording.disconnect();
   element("recording").value = "";
   live.connect(element("endpoint").value);
 });
 element("disconnect").addEventListener("click", () => {
-  stopFile();
+  recording.disconnect();
   live.disconnect();
   clearDisplay();
 });
-element("recording").addEventListener("change", async () => {
+element("recording").addEventListener("change", () => {
   const file = element("recording").files[0];
   if (!file) return;
-  stopFile();
   live.disconnect();
-  receiver.reset();
-  clearDisplay();
-  const controller = new AbortController();
-  fileController = controller;
-  element("source-status").textContent = `Reading ${file.name}…`;
-  try {
-    const result = await readRecording(file, receiver, onEvent, { signal: controller.signal });
-    if (controller.signal.aborted) return;
-    element("source-status").textContent = result.unsupported
-      ? `Stopped ${file.name}: unsupported protocol version.`
-      : `Finished ${file.name}. ${result.lines} lines processed.`;
-  } catch (error) {
-    if (!controller.signal.aborted) element("source-status").textContent = `Cannot read recording: ${error.message}`;
-  }
+  recording.load(file);
 });
+element("recording-play").addEventListener("click", () => recording.play());
+element("recording-pause").addEventListener("click", () => recording.pause());
+element("recording-restart").addEventListener("click", () => recording.restart());
+element("recording-speed").addEventListener("change", () => recording.setSpeed(Number(element("recording-speed").value)));
 
 const gpuReady = initializeGPU(canvas, (message) => { element("gpu-status").textContent = message; }, element("graph-labels"));
 element("fit-graph").addEventListener("click", () => canvas.dispatchEvent(new Event("fit")));
 element("zoom-in").addEventListener("click", () => canvas.dispatchEvent(new CustomEvent("zoom", { detail: 1.25 })));
 element("zoom-out").addEventListener("click", () => canvas.dispatchEvent(new CustomEvent("zoom", { detail: 0.8 })));
 window.addEventListener("pagehide", () => {
-  stopFile();
+  recording.disconnect();
   live.disconnect();
   gpuReady.then((dispose) => dispose());
 });
