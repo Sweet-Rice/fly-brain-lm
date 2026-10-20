@@ -5,7 +5,7 @@ Implements "Fly Brain Visualization Stream Spec" version 1:
   - On connect: the current `mapping`, then live `fire` messages. Integers and strings only.
   - Never blocks the model: a harness that falls behind has `fire` messages dropped (gaps in t allowed).
   - Runs normally with zero harnesses; serves several; a mid-run joiner gets the mapping, then live fires.
-  - Optional recording: the same messages as newline-delimited JSON.
+  - Optional recording: bounded background writer for the same messages as newline-delimited JSON.
   - Full API: harness/API.md
 
 What the mapping describes (one block of the model, default block 0):
@@ -22,8 +22,10 @@ fires one step per token. t keeps counting across messages.
 """
 import asyncio
 import json
+import queue
 import threading
 import time
+import warnings
 
 GROUP_NAMES = ["Glomerulus", "KC_gamma", "KC_alphabeta", "KC_alphaprime_betaprime", "MBON"]
 LOOPBACK_HOST = "127.0.0.1"
@@ -52,10 +54,88 @@ class FlyGraph:
         return [p for k in active_kcs for p in self.kc_pairs[k]]
 
 
+class _NDJSONRecorder:
+    """Bounded background writer. Model-thread enqueue methods never perform file I/O or wait."""
+
+    def __init__(self, path, queue_size):
+        if isinstance(queue_size, bool) or not isinstance(queue_size, int) or queue_size < 1:
+            raise ValueError("record_queue_size must be a positive integer")
+        self.path = path
+        self.dropped = 0
+        self.error = None
+        self._queue = queue.Queue(queue_size)
+        self._stop = threading.Event()
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="flybrain-viz-recorder", daemon=True)
+        self._thread.start()
+
+    @property
+    def active(self):
+        return self.error is None and not self._stop.is_set()
+
+    def mapping(self, msg):
+        """Keep replacement mappings even when that requires dropping queued fires from the old epoch."""
+        while self.active:
+            try:
+                self._queue.put_nowait((True, msg))
+                return True
+            except queue.Full:
+                self._discard_pending()
+        return False
+
+    def fire(self, msg):
+        if not self.active:
+            return False
+        try:
+            self._queue.put_nowait((False, msg))
+            return True
+        except queue.Full:
+            self.dropped += 1
+            return False
+
+    def close(self, timeout):
+        self._stop.set()
+        if self._done.wait(max(0.0, timeout)):
+            return
+        if self.error is None:
+            self.error = TimeoutError(f"visualization recording did not drain within {timeout:g}s")
+        warnings.warn(str(self.error), RuntimeWarning, stacklevel=2)
+
+    def _discard_pending(self):
+        while True:
+            try:
+                is_mapping, _ = self._queue.get_nowait()
+                if not is_mapping:
+                    self.dropped += 1
+            except queue.Empty:
+                return
+
+    def _run(self):
+        current = None
+        try:
+            with open(self.path, "w", encoding="utf-8", buffering=1, newline="\n") as rec:
+                while not self._stop.is_set() or not self._queue.empty():
+                    try:
+                        current = self._queue.get(timeout=0.05)
+                    except queue.Empty:
+                        continue
+                    rec.write(current[1] + "\n")
+                    current = None
+        except Exception as exc:
+            if current is not None and not current[0]:
+                self.dropped += 1
+            self.error = exc
+            warnings.warn(f"visualization recording stopped: {exc}", RuntimeWarning, stacklevel=2)
+        finally:
+            self._discard_pending()
+            self._done.set()
+
+
 class VizStream:
     """Model side. Call set_mapping() once, then fire(pairs) per step. Both return immediately."""
 
-    def __init__(self, host=LOOPBACK_HOST, port=8765, path="/stream", record=None, queue_size=64):
+    def __init__(self, host=LOOPBACK_HOST, port=8765, path="/stream", record=None, queue_size=64,
+                 record_queue_size=256):
         if host != LOOPBACK_HOST:
             raise ValueError(f"visualization stream is loopback-only; host must be {LOOPBACK_HOST!r}")
         self.host, self.port, self.path, self.queue_size = LOOPBACK_HOST, port, path, queue_size
@@ -65,7 +145,7 @@ class VizStream:
         self._mapping_msg = None
         self._clients = set()            # one asyncio.Queue per connected harness (touched only on the loop thread)
         self._n_clients = 0
-        self._rec = open(record, "w", buffering=1) if record else None   # line-buffered: survives Ctrl-C
+        self._recorder = _NDJSONRecorder(record, record_queue_size) if record else None
         self._loop = None
         self._ready = threading.Event()
         self._closed = False
@@ -85,12 +165,20 @@ class VizStream:
 
     @property
     def listening(self):
-        return self._n_clients > 0 or self._rec is not None
+        return self._n_clients > 0 or (self._recorder is not None and self._recorder.active)
+
+    @property
+    def recording_dropped(self):
+        return self._recorder.dropped if self._recorder else 0
+
+    @property
+    def recording_error(self):
+        return self._recorder.error if self._recorder else None
 
     def set_mapping(self, mapping):
         self._mapping_msg = json.dumps(mapping, separators=(",", ":"))
         self.t = 0
-        self._record(self._mapping_msg)
+        self._record(self._mapping_msg, mapping=True)
         self._call(self._broadcast_mapping, self._mapping_msg)
 
     def fire(self, pairs):
@@ -113,18 +201,18 @@ class VizStream:
         return self._n_clients > 0
 
     def close(self, drain_timeout=3.0):
-        """Give connected harnesses up to drain_timeout seconds to receive what is queued, then stop."""
+        """Give network and recording queues up to drain_timeout seconds each, then stop."""
         if self._closed:
             return
         self._closed = True
         if self._loop:
             asyncio.run_coroutine_threadsafe(self._shutdown(drain_timeout), self._loop).result(drain_timeout + 5)
-        if self._rec:
-            self._rec.close()
+        if self._recorder:
+            self._recorder.close(drain_timeout)
 
-    def _record(self, msg):
-        if self._rec:
-            self._rec.write(msg + "\n")
+    def _record(self, msg, mapping=False):
+        if self._recorder:
+            (self._recorder.mapping if mapping else self._recorder.fire)(msg)
 
     def _call(self, fn, *args):
         if self._loop and not self._closed:
@@ -204,7 +292,7 @@ def attach(model, stream, graph, block=0):
 def stream_model(model, wiring, block=0, **server):
     """Start streaming `model` to the harness and return (VizStream, FlyGraph). The mapping is set
     before the server accepts anyone, so it is every harness's first message; after that each token
-    through `block` is one `fire`. `server`: VizStream arguments (loopback host, port, path, record)."""
+    through `block` is one `fire`. `server`: VizStream arguments, including record_queue_size."""
     graph = FlyGraph(wiring, model.cfg.heads_per_lobe)
     stream = VizStream(**server)
     stream.set_mapping(graph.mapping)

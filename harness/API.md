@@ -193,9 +193,11 @@ Expect, read from `window.harnessState` and a screenshot:
 ## 9. Recording format
 
 - `--record FILE` (on `model.serve.ask` and `model.serve.serve`, or the `record` argument of `VizStream`) writes NDJSON: one JSON message per line, in emission order.
-- The first line is the mapping. Each later `set_mapping` call adds another mapping line, so a recording can hold several mappings.
-- Every fire actually emitted is recorded (not the skipped steps). Recording counts as a listener, so fires are recorded even when no harness is connected.
-- Each recording line, excluding its newline terminator, is the exact JSON string sent to a harness (`VizStream._record`, `VizStream.fire`, `VizStream.set_mapping`). It matches the decoded WebSocket text message, not protocol headers or potentially compressed wire-frame bytes. A recording was verified against received text messages line for line. A slow client can receive fewer fires than the recording because recording precedes per-client queue drops.
+- File opening and writes run on a dedicated background thread. The model thread uses only non-blocking operations on a bounded queue (`record_queue_size`, default 256).
+- The first retained line is a mapping. Each later `set_mapping` call adds another mapping line and starts a new `t` epoch. If the recording queue is full, a replacement mapping supersedes queued fires from the old epoch so the file stays usable.
+- A full recording queue drops complete fire messages and leaves allowed gaps in `t`; `VizStream.recording_dropped` counts them. Recording counts as a listener while its writer is healthy, so it works with no harness connected.
+- Each retained line, excluding its newline terminator, is the exact JSON string offered to a harness (`VizStream._record`, `VizStream.fire`, `VizStream.set_mapping`). A normal-speed recording was verified against received text messages line for line; either a slow harness or a slow recorder may independently lose fires.
+- File open/write failures emit a `RuntimeWarning`, appear in `VizStream.recording_error`, disable that recorder, and do not stop model execution. Normal shutdown drains and closes the writer; a drain timeout is also reported without hanging the model.
 - Viewer: `.venv/bin/python -m harness.watch_stream FILE` (§10).
 
 ## 10. Tools

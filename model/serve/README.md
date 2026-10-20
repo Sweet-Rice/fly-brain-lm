@@ -71,9 +71,10 @@ A message can also be given on the command line; the chat keeps reading lines af
 [`127.0.0.1`; other values are rejected because the visualization stream is loopback-only], `--port` [8765],
 `--path` [`/stream`], `--block` [0; which of the 12 blocks to visualize], `--wait` [0 s], `--record FILE`.
 
-**Recording:** `--record FILE` writes the stream as NDJSON, first the mapping line, then one line per fire.
-Use a scratch path, because an existing file is overwritten. This one-shot command uses a free stream
-port and closes stdin, so it finishes after the prompt; then view the recording:
+**Recording:** `--record FILE` writes the stream as NDJSON through a bounded background writer, beginning
+with the mapping. File I/O never waits in the model thread; if storage falls behind, complete fire messages
+are dropped and gaps in `t` remain valid. Use a scratch path because an existing file is overwritten. This
+one-shot command uses a free stream port and closes stdin, so it finishes after the prompt:
 
 ```bash
 .venv/bin/python -m model.serve.ask "Once upon a time" --ckpt /tmp/fly-brain-init.pt --port 0 --max-tokens 8 --record /tmp/fly-brain-story.ndjson </dev/null
