@@ -1,12 +1,12 @@
 # Fly Brain Visualization Stream API (v1)
 
-Serving-side reference for the stream implemented in `harness/viz_stream.py` (`FlyGraph`, `VizStream`, `attach`, `stream_model`). Harness authors and model developers read this. Where this document says MUST, SHOULD, or MAY, the keywords follow RFC 2119. Symbol names are the citation targets; line numbers are deliberately omitted.
+Serving-side reference for the stream implemented in `harness/viz_stream.py` (`FlyGraph`, `VizStream`, `attach`, `stream_model`). Harness authors and model developers read this. The normative wire contract is [`protocol/v1/SPEC.md`](protocol/v1/SPEC.md). Where this document says MUST, SHOULD, or MAY, the keywords follow RFC 2119. Symbol names are the citation targets; line numbers are deliberately omitted.
 
 ## 1. Status & scope
 
-- This document describes "Fly Brain Visualization Stream Spec v1" as implemented by `harness/viz_stream.py`.
-- The team spec at https://claude.ai/code/artifact/3c7476db-401d-4d3f-b92e-0ab223f8af71 is authoritative for the wire format. This document was written from the code. The spec URL could not be read: the reader returned only an artifact shell and a notice about user-generated content. Nothing here has been checked against the spec's text.
-- If the spec and this document conflict, the spec wins. Then this document and `harness/viz_stream.py` MUST be corrected to match it.
+- [`protocol/v1/SPEC.md`](protocol/v1/SPEC.md) is the source-controlled, normative Fly Brain Visualization Stream Specification v1.
+- [`protocol/v1/`](protocol/v1/) also contains Draft 2020-12 JSON Schemas and valid/invalid conformance fixtures shared by independent Python and browser implementations.
+- This document describes the current model-side implementation and adds operational guidance. If it conflicts with the normative specification, the specification wins and the implementation guide MUST be corrected.
 - Values in §6 are informative and may change without a version bump.
 
 ## 2. Transport
@@ -55,7 +55,7 @@ sequenceDiagram
 | `type` | string | Always `"mapping"`. |
 | `version` | integer | `1` for this document. Checked on every mapping (§7). |
 | `groups` | array of `{id: int, name: string}` | `id` values are unique. `name` is a label. Array order is the suggested layout order, input side first. |
-| `nodes` | array of `{id: int, group: int}` | Ids are exactly `0..N-1` in ascending array order (`nodes[i].id == i`). `group` MUST equal the `id` of an entry in `groups`. |
+| `nodes` | array of `{id: int, group: int}` | Ids are unique and non-negative; the current producer emits `0..N-1` in ascending array order (`nodes[i].id == i`), but receivers MUST accept other unique ids. `group` MUST equal the `id` of an entry in `groups`. |
 | `edges` | array of `[src: int, dst: int]` | Pairs are unique. Both are node ids. Direction is src to dst. |
 
 - **A node's type** is the entry in `groups` whose `id` equals `node.group`. Look it up by id. Do not index the `groups` array by `group`: the current ids happen to be `0..4` in array order, which is not a rule.
@@ -104,12 +104,12 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
 - Changing a field's type or meaning.
 - Changing the shape of `edges` or `pairs` elements.
 - Changing the meaning of `t`.
-- Changing the node id convention (`0..N-1`) or the rule that a node's group is looked up by `id`.
+- Allowing negative or repeated node ids, or changing the rule that a node's group is looked up by group `id`.
 
 **Version handling.**
-- Each mapping carries its own `version`. `VizStream` does not check it and does not negotiate it. A connection can receive a version 1 mapping and then a version 2 mapping, because `set_mapping` can be called again on a live connection. Do not treat the version as fixed per connection.
-- A harness MUST check `version` on every mapping. For an unsupported version it MUST refuse that mapping and ignore fires until a mapping it supports arrives.
-- The counter-reset policy belongs to the harness. In the example (`onMapping`, `resetCounters`), an accepted v1 mapping zeroes `fires`, `invalidPairs`, `ignored`, `badFrames`, `lastT`, and `gaps`. A rejected mapping clears the graph (`nodes`/`edges` become 0 and `groups` becomes empty), shows the rejected `version`, and retains the step/fire/diagnostic counters. Invalid v1 mapping data also increments `badFrames`.
+- Each mapping carries its own `version`. `VizStream` does not check or negotiate it because the receiver owns version enforcement.
+- A harness MUST check every mapping. For an unsupported version, a live harness MUST close with WebSocket code 1003; recording playback MUST stop with an unsupported-data result.
+- The current Canvas example predates the full state machine in #18: it clears the graph and displays an unsupported-version banner instead of closing. This is a documented demo limitation, not conforming receiver behavior; the v1 fixtures require the 1003 close.
 - Every accepted mapping replaces the client's graph and last-step baseline, including connect-time replays. A replay is NOT a new server epoch: `VizStream._handler` sends the current mapping without resetting `VizStream.t`. Clients cannot distinguish a replay from a fresh `set_mapping`, so MUST NOT require the first subsequent fire to have `t=0`.
 
 **Harness robustness.**
@@ -162,7 +162,7 @@ Run V1 and V2 below after any change under `model/` or `harness/`. Prerequisites
 6. In terminal B, press Ctrl-D. ask exits, the page shows `disconnected`, and it keeps retrying once per second.
 7. In terminal B, rerun step 2. The page reconnects without a reload and shows the mapping again. Counters reset: `fires received` is 0 and `last t` is `-` until the next fire.
 
-**V2 (version guard and forward compatibility).** Keep the page from V1 open, but change its URL to `http://127.0.0.1:8770/?ws=ws://127.0.0.1:8768/stream`. Then run the throwaway script below from the repo root. The script exits by itself.
+**V2 (current example's version guard; not close-code conformance).** Keep the page from V1 open, but change its URL to `http://127.0.0.1:8770/?ws=ws://127.0.0.1:8768/stream`. Then run the throwaway script below from the repo root. The script exits by itself.
 
 ```bash
 cat > /tmp/v2_stream.py <<'EOF'
@@ -188,7 +188,7 @@ rm -f /tmp/v2_stream.py
 
 Expect, read from `window.harnessState` and a screenshot:
 - Before the v2 mapping: the mapping is accepted with the same graph counts as V1 (1958 nodes today), `fires received` is 3, `invalid pairs` is 0, and `ignored messages` is 1 (from `hello`). The extra top-level field and per-node `name` are accepted. If the wiring has fewer than three KCs, use existing KC indices in the script.
-- After the v2 mapping: the banner reads `unsupported mapping version 2`; `version` is 2, `nodes`/`edges` are 0, and `groups` is empty. The fourth fire is ignored: `fires` stays at 3, `ignored` stays at 1, and diagnostic counters are retained.
+- After the v2 mapping, the current Canvas example shows `unsupported mapping version 2`, clears its graph, and ignores the fourth fire. That demonstrates refusal but not the normative close behavior. A conforming live harness closes with code 1003, as specified and covered by `protocol/v1/fixtures/invalid-cases.json`; #18 owns that harness state-machine work.
 
 ## 9. Recording format
 

@@ -1,6 +1,6 @@
 # Harness: visualization stream tools
 
-The model streams its activity over WebSocket (`ws://127.0.0.1:<port>/stream`): a `mapping` describes the graph, and live `fire` messages name activated edges at processed token steps. This directory holds the server, tools that read the stream, and a browser example. The formal wire protocol is [`API.md`](API.md).
+The model streams its activity over WebSocket (`ws://127.0.0.1:<port>/stream`): a `mapping` describes the graph, and live `fire` messages name activated edges at processed token steps. This directory holds the server, tools that read the stream, and a browser example. The normative wire contract and portable fixtures are in [`protocol/v1/`](protocol/v1/).
 
 All commands run from the repo root (`fly-brain-lm/`) with the project venv: `.venv/bin/python -m …`. Stop each long-running command with Ctrl-C.
 
@@ -10,7 +10,8 @@ All commands run from the repo root (`fly-brain-lm/`) with the project venv: `.v
 | `replay_prompt.py` | Replays the bundled "Once upon a time" recording. Does not load a model. |
 | `watch_stream.py` | Terminal viewer for a live stream or an NDJSON recording. |
 | `example/` | Browser example harness and the bundled recording. See [`example/README.md`](example/README.md). |
-| `API.md` | Formal stream API: transport, message schemas, lifecycle, compatibility rules. |
+| `protocol/v1/` | Normative v1 specification, JSON Schemas, and conformance fixtures. |
+| `API.md` | Model-side implementation guide, current graph details, and migration policy. |
 
 Demo ports used across these docs: page 8770, replay 8768, live chat 8767, live API 8771 (its stream on 8767). Ports 8765 and 8000 are the model's defaults and may belong to someone's running model or API. Do not use them and do not stop processes on them.
 
@@ -135,6 +136,7 @@ When finished, stop the replay with Ctrl-C and remove the temporary file with `r
 
 ## Further reading
 
-- [`API.md`](API.md): formal stream API (wire format, lifecycle, compatibility, model contract, verification). Stop the replay before §8.4's V2 check, which also binds port 8768.
+- [`protocol/v1/`](protocol/v1/): normative stream specification, JSON Schemas, and valid/invalid conformance fixtures.
+- [`API.md`](API.md): model-side implementation details, lifecycle notes, and migration policy. Stop the replay before §8.4's V2 check, which also binds port 8768.
 - [`example/README.md`](example/README.md): browser example, URLs, expected counters, troubleshooting.
 - [`../README.md`](../README.md): repository overview.

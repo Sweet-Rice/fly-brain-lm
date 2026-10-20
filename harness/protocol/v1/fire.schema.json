@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fire.schema.json",
+  "title": "Fly Brain Visualization Stream v1 fire",
+  "type": "object",
+  "required": ["type", "t", "pairs"],
+  "properties": {
+    "type": {"type": "string", "const": "fire"},
+    "t": {"type": "integer", "minimum": 0},
+    "pairs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/pair"},
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": {"$ref": "#/$defs/extensionValue"},
+  "x-flybrain-semantic-rules": [
+    "t strictly increases within a mapping epoch",
+    "each pair names an edge declared by the current mapping"
+  ],
+  "$defs": {
+    "pair": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 0}
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "extensionValue": {
+      "anyOf": [
+        {"type": "integer"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/extensionValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/extensionValue"}}
+      ]
+    }
+  }
+}
