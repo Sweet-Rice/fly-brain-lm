@@ -121,7 +121,10 @@ element("recording").addEventListener("change", async () => {
   }
 });
 
-const gpuReady = initializeGPU(canvas, (message) => { element("gpu-status").textContent = message; });
+const gpuReady = initializeGPU(canvas, (message) => { element("gpu-status").textContent = message; }, element("graph-labels"));
+element("fit-graph").addEventListener("click", () => canvas.dispatchEvent(new Event("fit")));
+element("zoom-in").addEventListener("click", () => canvas.dispatchEvent(new CustomEvent("zoom", { detail: 1.25 })));
+element("zoom-out").addEventListener("click", () => canvas.dispatchEvent(new CustomEvent("zoom", { detail: 0.8 })));
 window.addEventListener("pagehide", () => {
   stopFile();
   live.disconnect();
