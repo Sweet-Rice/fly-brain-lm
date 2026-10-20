@@ -62,7 +62,7 @@ sequenceDiagram
 - **A node's connections** are the edges where it is `src` (its outputs) or `dst` (its inputs).
 - **Extensibility.** Groups and nodes are objects, so they can gain optional fields (§7). An edge is a two-element array, not an extensible object. Optional per-edge metadata MAY use a separate new field, leaving `edges` unchanged. Changing `edges` elements into objects or longer arrays is breaking (§7). Sources: `FlyGraph.__init__`, `VizStream.set_mapping`.
 
-Example. This is the real output of `FlyGraph` for a tiny wiring: `Wiring.random(n_kc=3, n_glom=2, per_kc=1, class_counts=(1,1,1), seed=0)` with `heads_per_lobe=1`.
+Example. This is the output of `FlyGraph(model)` for a `FlyLM` built from `Wiring.random(n_kc=3, n_glom=2, per_kc=1, class_counts=(1,1,1), seed=0)` with `heads_per_lobe=1`.
 
 ```json
 {"type":"mapping","version":1,"groups":[{"id":0,"name":"Glomerulus"},{"id":1,"name":"KC_gamma"},{"id":2,"name":"KC_alphabeta"},{"id":3,"name":"KC_alphaprime_betaprime"},{"id":4,"name":"MBON"}],"nodes":[{"id":0,"group":0},{"id":1,"group":0},{"id":2,"group":1},{"id":3,"group":2},{"id":4,"group":3},{"id":5,"group":4},{"id":6,"group":4},{"id":7,"group":4}],"edges":[[0,2],[2,5],[1,3],[3,6],[1,4],[4,7]]}
@@ -82,14 +82,39 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
 ## 6. Current v1 graph content (informative; may change without a version bump)
 
 - **Groups** (`GROUP_NAMES`): 0 Glomerulus, 1 KC_gamma, 2 KC_alphabeta, 3 KC_alphaprime_betaprime, 4 MBON.
-- **Nodes** (`FlyGraph.__init__`):
+- **Nodes** (`FlyGraph.refresh`):
   - glomeruli: ids `0..G-1`, group 0;
-  - KCs: ids `G..G+K-1` in wiring order, group `1 + kc_class[k]`. Current wiring is class-sorted (`data.build_wiring.build`), but harnesses MUST NOT assume contiguous group membership;
-  - MBON compartments: ids `G+K..G+K+3·heads_per_lobe-1`, group 4. Compartment `c` belongs to lobe `c // heads_per_lobe`.
-- **Edges** (`FlyGraph.kc_pairs`, concatenated in KC order): for KC `k`, one glomerulus-to-KC edge for each glomerulus in `mask[k]` (ascending id), then one KC-to-compartment edge for each of the `heads_per_lobe` compartments of its lobe.
+  - KCs: ids `G..G+K-1` in the selected block's address-mask row order, group `1 + lobe[k]`, where membership comes from that block's memory buffers;
+  - MBON compartments: ids `G+K..G+K+3·heads_per_lobe-1`, group 4. Compartment `c` belongs to lobe `c // heads_per_lobe`; the head count comes from the selected block's memory.
+- **Edges** (`FlyGraph.kc_pairs`, concatenated in KC row order): for KC `k`, one glomerulus-to-KC edge for each true entry of the model's `addr.mask[k]` (ascending glomerulus id), then one KC-to-compartment edge for each head of its lobe (ascending compartment id). Learned strength values do not add or remove declared edges.
 - **A fire** (`attach`, `FlyGraph.fire_pairs`): all input and output edges of the active KCs, concatenated in ascending KC-index order by `attach`. A KC is active when its address code is positive (`code > 0`). `FlyAddress.forward` retains the top `top_k` values (94 in the current checkpoint) and zeroes the rest, so at most 94 KCs are active.
 - **Counts** for `model/checkpoints/init.pt` with `heads_per_lobe` 5: groups 54 / 663 / 874 / 352 / 15, so 54 + 1889 + 15 = 1958 nodes. Edges are 9592 + 9445 = 19037. The 9445 is 1889 × 5. Pairs per fire equal the sum, over active KCs, of (glomerulus inputs + 5); live runs observed roughly 1100–1200 pairs. These counts come from `FlyGraph.__init__` and the current checkpoint, not the wire contract.
 - Harnesses MUST derive layout from the mapping, never from these numbers.
+
+### 6.1 Exporting and replacing model topology
+
+`FlyGraph(model, block=0)` reads the actual selected block, not a separate `Wiring` object. It copies topology tensors to CPU only during construction or an explicit refresh. It does not start a WebSocket server, run inference, import browser code, or send weights/coordinates.
+
+The exporter rejects non-boolean or incorrectly shaped address masks, incompatible address dimensions, invalid head counts, and lobe indices that repeat, are out of range, or leave a KC unassigned. A boolean mask and disjoint lobe membership generate each directed edge exactly once. Empty lobes remain declared groups.
+
+For unchanged visualized topology, repeated exports have identical group/node/edge order, including after a checkpoint round trip or changes to learned weights. Node ids are positional; a topology with different dimensions may assign different ids and therefore needs a complete replacement mapping.
+
+After changing topology or loading state into the same model, pause inference and publish the regenerated snapshot before processing the next token:
+
+```python
+stream.set_mapping(graph.refresh())
+```
+
+`refresh()` replaces both `mapping` and the KC routing table used by an existing `attach` hook. Invalid topology raises `ValueError` without replacing the previous snapshot. Refresh and publication belong on the model-owning thread while inference is paused; topology is not polled in the token hot path. Replacing module/model objects also requires removing the old hook and attaching to the new model.
+
+To export a checkpoint without opening a server, use [`harness.export_mapping`](README.md#export-a-checkpoint-mapping):
+
+```bash
+.venv/bin/python -m harness.export_mapping --ckpt /tmp/fly-brain-init.pt --block 0 --out /tmp/fly-brain-mapping.ndjson
+```
+
+The output is a one-line mapping-only recording. Choose a scratch output path; an existing file is overwritten. CI validates this export against `protocol/v1/mapping.schema.json` and compares it with the first mapping recorded by real model inference.
+
 
 ## 7. Compatibility rules (migration policy)
 
@@ -123,17 +148,16 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
 
 - `model.model.load_checkpoint(path, device)` returns `(model, wiring, ck)`. `ck` is a dict. `model.serve.serve.main` reads `ck.get("note", "")` and `wiring.mask.shape`.
 - `model.stream(prompt_ids, max_new_tokens, temperature, top_k, stop_ids=..., gen=...)` yields int token ids. `model.serve.ask.reply` and `model.serve.serve.Engine.run` iterate it. The HTTP handler closes the `Engine.run` generator to release its lock; it does not call `close()` directly on the model's iterator. `FlyLM.stream` currently is a generator decorated with `@torch.no_grad()`.
-- `harness.viz_stream.stream_model(model, wiring, block, **server)` returns `(VizStream, FlyGraph)`. `model.serve.ask` passes `host`, `port`, `path`, and `record`. `model.serve.serve` passes `port` and `record`.
+- `harness.viz_stream.stream_model(model, wiring, block, **server)` returns `(VizStream, FlyGraph)`. `model.serve.ask` passes `host`, `port`, `path`, and `record`. `model.serve.serve` passes `port` and `record`. The `wiring` parameter remains part of that frozen call contract, but topology is exported from the selected live model block.
 - Attributes read from the returned `VizStream`: `url`, `t`, `dropped`, `harnesses_seen`, `wait_for_harness(timeout)`, `close()`. From the returned `FlyGraph`: `mapping`; `model.serve.ask` reads `graph.mapping["nodes"]` and `graph.mapping["edges"]` for its startup line. `model.serve.serve` reads only the `VizStream`.
 - Both entry points load `--ckpt` (default `model/checkpoints/init.pt`). `load_checkpoint` constructs `Config(**ck["config"])` and strictly loads `ck["state_dict"]`. Parameter names/shapes and saved config must therefore match the running model, or the loader must migrate the checkpoint while preserving this public return contract.
 
 ### 8.2 What `harness/viz_stream.py` depends on (in `model/`)
 
-- `model.cfg.heads_per_lobe` (`Config.heads_per_lobe`, default 5). `FlyGraph` uses it for the compartment count and the per-KC output edges.
 - `model.blocks[block].addr`: a module whose forward output is the `(B, T, K)` address code. Positive means an active KC. `attach`'s hook reads batch element 0 and iterates `T`, firing one step per position. Because the hook is on the module's forward output, `Block.step` (one token at a time) fires once per token.
-- `wiring.mask`: `(K, G)` bool.
-- `wiring.kc_class`: `(K,)` long, values 0, 1, 2 meaning gamma, alphabeta, alphaprime_betaprime.
-- Optional names, used only by §8.3(c): `wiring.glom_names` and `wiring.kc_ids`. Either may be `None`.
+- The selected address module's `mask`: `(K, G)` bool, aligned with `theta` and the glomerulus projection's output width.
+- The selected memory module's `lobe0`, `lobe1`, `lobe2`: one-dimensional integer buffers whose indices form a disjoint partition of the KCs.
+- The selected memory module's `hpl`: positive integer heads per lobe. This determines the MBON compartment count and KC output edges.
 
 **Token timing.** `FlyLM.stream` runs one `step` per prompt token and feeds each yielded token back only when generation resumes for another token. The final yielded token is not fed back: a model stop token, token-limit completion, or a consumer stopping iteration can end generation. For `P` prompt tokens and `n ≥ 1` yielded tokens this gives `P + n - 1` steps. `Engine.run` truncates the prompt to its last `ctx` tokens. `ask.reply` excludes EOT from its printed generated-token count, whereas `Engine.run` counts it; use ask's printed `steps t=...` range to compare fires. The observed no-EOT reply `[4 prompt + 8 generated tokens; steps t=0..10]` produced 11 fires.
 
@@ -141,13 +165,9 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
 
 The following are adapter changes in `harness/viz_stream.py` after the model itself changes; `model/serve/` stays unchanged. Keep the public loader and streaming contracts above. If parameter keys/shapes or `Config` fields change, migrate the checkpoint in `load_checkpoint` or recreate an untrained checkpoint with an updated `model.init_model`; its sanity checks also reference `blk.addr`. Preserve existing checkpoints rather than overwriting trained weights. None of the three wire-preserving scenarios below requires a version bump.
 
-- **(a) Renaming or restructuring `addr`, or changing its output.** In `harness/viz_stream.py`, update `attach()` only: find the new module and normalize its hook output into active KC indices aligned with the rows of `wiring.mask`. Preserve one step per token, batch element 0, and the same active-KC meaning even if the tensor layout or activity encoding changes. No wire version bump if those semantics remain unchanged; changing token/step meaning is breaking (§7). `model/serve/` is not touched.
-- **(b) Changing the lobe count or the meaning of `kc_class`.** In `harness/viz_stream.py`, update `GROUP_NAMES` and `FlyGraph.__init__`:
-  1. Define the model's ordered lobe-class values explicitly (for example `(0, 1, 2, 3)` for four classes); map each value to its KC group and compartment offset.
-  2. Allocate `len(lobe_classes) * heads_per_lobe` MBON nodes, place the MBON group after all KC groups instead of hard-coded group 4, and build each KC's output edges from its mapped lobe offset.
-  3. Keep `FlyGraph(wiring, heads_per_lobe)` unchanged so `stream_model` and V2 need no new parameter. Current hard-codes are `3 * heads_per_lobe`, `1 + cls[k]`, group 4, and the `cls * heads_per_lobe` output range.
-  4. Update graph-content expectations such as `test_mapping_shape`'s `G + K + 15` when the model changes. No wire version bump: group identities and counts are data. `model/serve/` is not touched.
-- **(c) Adding node labels, for example glomerulus names from `wiring.glom_names`.** In `harness/viz_stream.py`, add optional `"name"` strings in `FlyGraph.__init__`: glomerulus `g` uses `wiring.glom_names[g]`, aligned with mask column `g`; KC `k` may use `str(wiring.kc_ids[k])`, aligned with mask row `k`. Omit a name when that optional source is `None`; never emit null. No plumbing change is needed because `FlyGraph` already receives `wiring`. This is additive: no version bump; the example ignores the extra fields. `model/serve/` is not touched.
+- **(a) Renaming or restructuring `addr`, or changing its output.** Update `attach()` and `FlyGraph.refresh()` to read the new module and align active KC indices with its address-mask rows. Preserve one step per token, batch element 0, and the same active-KC meaning. Changing token/step meaning is breaking (§7); changing adapter symbol names is not.
+- **(b) Changing the lobe count or membership representation.** Update `GROUP_NAMES` and `FlyGraph.refresh()` together: read the model's ordered lobes, validate a disjoint KC partition, and allocate each lobe's compartments. Keep `FlyGraph(model, block)` and the frozen `stream_model` contract unchanged. Group counts and topology are data, so this alone does not require a wire-version bump.
+- **(c) Adding optional node labels.** Source them from model-aligned metadata with a documented row/column order; the exporter currently reads topology only. Emit strings and omit unavailable labels rather than sending null. This is additive and does not require a version bump.
 
 ### 8.4 Verification after any model change
 
@@ -171,7 +191,7 @@ sys.path.insert(0, ".")
 from harness.viz_stream import FlyGraph, VizStream
 from model.model import load_checkpoint
 model, wiring, _ = load_checkpoint("model/checkpoints/init.pt")
-g = FlyGraph(wiring, model.cfg.heads_per_lobe)
+g = FlyGraph(model)
 m = copy.deepcopy(g.mapping); m["extra"] = "ignored"
 for n in m["nodes"]: n["name"] = f"n{n['id']}"
 s = VizStream(port=8768); s.set_mapping(m); s.start()

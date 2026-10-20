@@ -94,6 +94,9 @@ is not cached.
 - `model/serve/` executable files are frozen. Preserve the `load_checkpoint` function, the returned
   model's `stream` method, and `harness.viz_stream.stream_model`, plus the return values/attributes
   listed in that API contract. Adapt the model or `harness/viz_stream.py`, not the serving code.
+- Export the loaded checkpoint's topology without inference or a running server using
+  [`python -m harness.export_mapping`](../harness/README.md#export-a-checkpoint-mapping).
+  The exporter reads the selected block's live mask and lobe membership, not a separate wiring snapshot.
 
 ## Next
 

@@ -7,6 +7,7 @@ All commands run from the repo root (`fly-brain-lm/`) with the project venv: `.v
 | Path | Role |
 |---|---|
 | `viz_stream.py` | Stream server used by `model.serve.ask` and `model.serve.serve`. |
+| `export_mapping.py` | Exports one checkpoint's actual model topology without opening a stream or browser. |
 | `replay_prompt.py` | Replays the bundled "Once upon a time" recording. Does not load a model. |
 | `watch_stream.py` | Terminal viewer for a live stream or an NDJSON recording. |
 | `example/` | Browser example harness and the bundled recording. See [`example/README.md`](example/README.md). |
@@ -91,6 +92,19 @@ In a third terminal, while the replay runs:
 - It connects once. If the stream closes, it prints `stream closed` and exits. It does not reconnect.
 - `--brief` prints only neuron types and connection counts, not the per-node list.
 - Each `fire` line shows `t`, the number of connections that fired, and counts per type pair.
+
+## Export a checkpoint mapping
+
+With a [compatible checkpoint](../model/README.md#create-an-untrained-checkpoint), export the selected model block without running inference or opening a WebSocket:
+
+```bash
+.venv/bin/python -m harness.export_mapping --ckpt /tmp/fly-brain-init.pt --block 0 --out /tmp/fly-brain-mapping.ndjson
+.venv/bin/python -m harness.watch_stream /tmp/fly-brain-mapping.ndjson --brief
+```
+
+The output is a one-line v1 mapping-only recording: ordered groups, contiguous node ids, and unique directed edges, with no weights or coordinates. It comes from the loaded model block's mask and lobe buffers rather than a separate wiring snapshot. `--block` defaults to 0. Use a scratch output path; an existing file is overwritten.
+
+The same visualized topology exports identically across repeated exports and checkpoint round trips. For topology changes during a run, pause inference and call `stream.set_mapping(graph.refresh())` before resuming. This updates both the declared graph and routing used by the existing model hook; see [API §6.1](API.md#61-exporting-and-replacing-model-topology).
 
 ## Live model sources
 
