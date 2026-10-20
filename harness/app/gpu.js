@@ -1,18 +1,20 @@
 import { buildGraph } from "./layout.js";
 import { createRenderer } from "./renderer.js";
 import { Camera } from "./camera.js";
+import { EdgeActivity } from "./activity.js";
 
 export async function initializeGPU(canvas, onStatus, labels = null) {
-  let mapping = null, graph = null, renderer, device, context, observer;
+  let mapping = null, graph = null, activity = null, renderer, device, context, observer;
   let disposed = false, frame = null, drag = null;
   const camera = new Camera(canvas.clientWidth, canvas.clientHeight);
   const listeners = [];
+  const motion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
   const listen = (type, handler, options) => {
     canvas.addEventListener(type, handler, options);
     listeners.push(() => canvas.removeEventListener(type, handler, options));
   };
 
-  function draw() {
+  function draw(now = performance.now()) {
     if (disposed || !renderer) return;
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({ colorAttachments: [{
@@ -20,7 +22,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
       clearValue: { r: 0.04, g: 0.07, b: 0.1, a: 1 },
       loadOp: "clear", storeOp: "store",
     }] });
-    renderer.draw(pass, camera);
+    renderer.draw(pass, camera, now, motion?.matches ?? false);
     pass.end();
     device.queue.submit([encoder.finish()]);
     if (labels && graph) {
@@ -37,7 +39,11 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     if (disposed || !renderer || frame !== null) return;
     frame = requestAnimationFrame(() => {
       frame = null;
-      try { draw(); } catch { onStatus("WebGPU rendering failed. Reload to retry."); }
+      try {
+        const now = performance.now();
+        draw(now);
+        if (renderer.isActive(now)) invalidate();
+      } catch { onStatus("WebGPU rendering failed. Reload to retry."); }
     });
   }
 
@@ -45,7 +51,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     if (disposed || !renderer) return;
     try {
       const next = mapping ? buildGraph(mapping) : null;
-      renderer.setGraph(next);
+      renderer.setGraph(next, activity);
       graph = next;
       camera.fit(graph?.bounds);
       if (labels) {
@@ -70,8 +76,20 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
   }
 
   // Register before adapter/device awaits so fast file or live input is retained.
-  listen("mapping", ({ detail }) => { mapping = detail; installMapping(); });
-  listen("reset", () => { mapping = null; drag = null; installMapping(); });
+  listen("mapping", ({ detail }) => {
+    mapping = detail;
+    activity = new EdgeActivity(mapping.edges);
+    installMapping();
+  });
+  listen("reset", () => { mapping = activity = null; drag = null; installMapping(); });
+  listen("fire", ({ detail }) => {
+    if (!activity || disposed) return;
+    const now = performance.now();
+    if (renderer ? renderer.fire(detail.pairs, now) : activity.fire(detail.pairs, now)) invalidate();
+  });
+  const motionChanged = () => invalidate();
+  motion?.addEventListener("change", motionChanged);
+  listeners.push(() => motion?.removeEventListener("change", motionChanged));
   listen("fit", () => { camera.fit(graph?.bounds); invalidate(); });
   listen("zoom", ({ detail }) => { camera.zoom(detail); invalidate(); });
   listen("wheel", (event) => {
