@@ -22,7 +22,7 @@ download unless that data is cached.
 | `test/test_data.py` | GPT-2 story encoding, literal EOT handling, uint16 binary round trip, and next-token batches |
 | `test/test_model.py` | Sparse address codes, masked gradients, memory, causality, step/forward agreement, greedy generation, checkpoint loading, and one-batch optimization |
 | `test/test_serve.py` | Model listing, completions, chat, SSE output, and request errors against a real local HTTP server |
-| `test/test_viz_stream.py` | Exact tiny-graph topology and active-KC routing, mapping/fire invariants, live streaming and recording, session continuity, joins/reconnects, epoch replacement, empty steps, and deterministic backpressure/drop recovery |
+| `test/test_viz_stream.py` | Exact model-block topology and active-KC routing, schema-valid deterministic export across checkpoint round trips, invalid topology rejection, live streaming and recording, joins/reconnects, refreshed topology epochs, empty steps, and deterministic backpressure/drop recovery |
 | `test/test_protocol_contract.py` | Portable v1 JSON Schemas, valid lifecycle fixture, invalid receiver cases, mapping epochs, and semantic id/reference constraints |
 
 ## Continuous integration
@@ -36,14 +36,14 @@ checks on PRs, pushes to `main`, and manual dispatches:
 | Model/core | All tests under `test/` except the dedicated data, HTTP API, and graph/WebSocket suites; new model modules are included automatically |
 | HTTP API | `test/test_serve.py` |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
-| Smoke (checkpoint, serve, record) | Build an untrained checkpoint, serve one prompt on an ephemeral port, then inspect its NDJSON recording |
+| Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, then inspect the NDJSON recording |
 
 The jobs have no dependency edges. A failed suite does not cancel the other
 suites or skip the smoke check. Each test job prints individual cases and adds
 their results, timings, and failure details to the run's **Summary** page;
 downloadable `junit-*` artifacts contain the machine-readable reports.
-`smoke-outputs` contains the prompt output, recording, and viewer output, not the
-checkpoint. Reports are uploaded even when a check fails.
+`smoke-outputs` contains the standalone mapping, prompt output, recording, and viewer
+output, not the checkpoint. Reports are uploaded even when a check fails.
 
 The backpressure test deliberately holds one client's server-side WebSocket
 send, fills its bounded queue, and verifies drops, producer progress, unaffected

@@ -3,16 +3,18 @@ import asyncio
 import itertools
 from contextlib import ExitStack
 import json
+from pathlib import Path
 import threading
 import time
 
 import pytest
 import torch
+from jsonschema import Draft202012Validator
 from websockets.asyncio.server import ServerConnection
 from websockets.sync.client import connect
 
 from harness.viz_stream import FlyGraph, VizStream, attach, stream_model
-from model.model import Config, FlyLM, Wiring
+from model.model import Config, FlyLM, Wiring, load_checkpoint, save_checkpoint
 
 TINY = Config(d_model=64, n_layer=2)
 TIMEOUT = 5.0   # bound on every cross-thread wait: a stuck stream fails the test instead of hanging
@@ -139,7 +141,7 @@ def setup():
     torch.manual_seed(0)
     w = Wiring.random()
     model = FlyLM(TINY, w).eval()
-    graph = FlyGraph(w, TINY.heads_per_lobe)
+    graph = FlyGraph(model)
     return model, w, graph
 
 
@@ -150,6 +152,12 @@ def tiny_wiring():
     for k, gloms in enumerate(fan_in):
         mask[k, gloms] = True
     return Wiring(mask, mask.float(), torch.tensor([0, 1, 2, 1]))
+
+
+def tiny_model(wiring, heads_per_lobe=2):
+    cfg = Config.from_wiring(wiring, vocab_size=32, d_model=8, n_layer=2, d_head=4,
+                             top_k=2, heads_per_lobe=heads_per_lobe)
+    return FlyLM(cfg, wiring).eval()
 
 
 # With heads_per_lobe=2 the 3 glomeruli are ids 0-2, the KCs ids 3-6, and the MBON compartments
@@ -179,15 +187,37 @@ def test_mapping_shape(setup):
 
 
 def test_tiny_graph_exact_topology():
-    graph = FlyGraph(tiny_wiring(), heads_per_lobe=2)
+    graph = FlyGraph(tiny_model(tiny_wiring()))
     edges = check_mapping(graph.mapping)
     groups = {n["id"]: n["group"] for n in graph.mapping["nodes"]}
     assert groups == {0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 2, **{i: 4 for i in range(7, 13)}}
     assert edges == set().union(*TINY_KC_PAIRS)
 
 
+def test_stream_mapping_uses_selected_model_block_not_stale_wiring():
+    wiring = tiny_wiring()
+    model = tiny_model(wiring)
+    selected = model.blocks[1]
+    selected.addr.mask[0, 1] = True
+    selected.mem.lobe0 = torch.empty(0, dtype=torch.long)
+    selected.mem.lobe1 = torch.tensor([3, 0, 1])
+
+    stream, graph = stream_model(model, wiring, block=1, port=0)
+    try:
+        with connect(stream.url, max_size=None) as ws:
+            mapping = json.loads(ws.recv(timeout=TIMEOUT))
+        edges = check_mapping(mapping)
+        groups = {node["id"]: node["group"] for node in mapping["nodes"]}
+        assert (1, 3) in edges and groups[3] == 2
+        assert {(3, 9), (3, 10)} <= edges
+        assert (3, 7) not in edges and (3, 8) not in edges
+        assert mapping == graph.mapping
+    finally:
+        stream.close()
+
+
 def test_tiny_graph_fire_pairs_selects_exactly_active_kcs():
-    graph = FlyGraph(tiny_wiring(), heads_per_lobe=2)
+    graph = FlyGraph(tiny_model(tiny_wiring()))
     assert graph.fire_pairs([]) == []                                        # empty active set: no edges
     for n in range(1, 5):
         for active in itertools.combinations(range(4), n):
@@ -195,6 +225,46 @@ def test_tiny_graph_fire_pairs_selects_exactly_active_kcs():
             got = graph.fire_pairs(list(active))
             assert {tuple(p) for p in got} == expected
             assert len(got) == len(expected)                               # no duplicates, nothing skipped
+
+
+def test_mapping_is_schema_valid_and_stable_across_weights_and_checkpoint(tmp_path):
+    wiring = tiny_wiring()
+    model = tiny_model(wiring)
+    graph = FlyGraph(model)
+    original = json.dumps(graph.mapping, separators=(",", ":"))
+    schema_path = Path(__file__).parents[1] / "harness/protocol/v1/mapping.schema.json"
+    Draft202012Validator(json.loads(schema_path.read_text())).validate(graph.mapping)
+    check_mapping(graph.mapping)
+
+    with torch.no_grad():
+        model.blocks[0].addr.theta.add_(1)
+    model.blocks[0].mem.lobe1 = model.blocks[0].mem.lobe1.flip(0)
+    assert json.dumps(graph.refresh(), separators=(",", ":")) == original
+    assert json.dumps(FlyGraph(model).mapping, separators=(",", ":")) == original
+
+    checkpoint = tmp_path / "model.pt"
+    save_checkpoint(checkpoint, model, wiring)
+    restored, _, _ = load_checkpoint(checkpoint)
+    assert json.dumps(FlyGraph(restored).mapping, separators=(",", ":")) == original
+
+
+@pytest.mark.parametrize("members", [[1, 1, 3], [0, 1, 3], [1], [-1, 1, 3], [1, 3, 4], [1.0, 3.0]])
+def test_mapping_rejects_invalid_lobe_membership_without_replacing_snapshot(members):
+    model = tiny_model(tiny_wiring())
+    graph = FlyGraph(model)
+    original = graph.mapping
+    original_pairs = graph.fire_pairs([1])
+    model.blocks[0].mem.lobe1 = torch.tensor(members)
+    with pytest.raises(ValueError, match="lobe|KC"):
+        graph.refresh()
+    assert graph.mapping is original
+    assert graph.fire_pairs([1]) == original_pairs
+
+
+@pytest.mark.parametrize("block", [-1, 2, True])
+def test_mapping_rejects_unknown_model_block(block):
+    with pytest.raises(ValueError, match="existing model block"):
+        FlyGraph(tiny_model(tiny_wiring()), block)
 
 
 def test_stream_to_harness(setup, tmp_path):
@@ -278,7 +348,7 @@ def test_empty_active_set_advances_t_without_a_message(setup):
 
 def test_recording_queue_never_waits_and_keeps_replacement_mapping(setup, monkeypatch):
     _, w, graph = setup
-    replacement = FlyGraph(w, heads_per_lobe=2)
+    replacement = FlyGraph(tiny_model(w))
     sink = StalledRecording()
     monkeypatch.setattr("harness.viz_stream.open", sink.open, raising=False)
     s = VizStream(record="unused.ndjson", record_queue_size=2)
@@ -385,28 +455,36 @@ def test_stalled_send_fills_queue_drops_overflow_and_recovers(setup, stalled, tm
     assert [json.loads(l) for l in rec.read_text().splitlines()] == healthy_msgs   # recording keeps dropped steps
 
 
-def test_new_mapping_starts_epoch_and_reconnect_gets_current_mapping(setup):
-    _, w, graph = setup
-    v2 = FlyGraph(w, heads_per_lobe=2)                                       # different graph, so it must replace
-    assert v2.mapping != graph.mapping
-    s = VizStream(port=0).start()
-    s.set_mapping(graph.mapping)
-    with connect(s.url, max_size=None) as ws:
-        wait_until(lambda: s.harnesses_seen == 1, "the first harness to register")
-        s.fire(graph.fire_pairs([0, 1]))                                     # t=0
-        s.fire(graph.fire_pairs([0, 1]))                                     # t=1
-        first = read_msgs(ws, 3)
-        s.set_mapping(v2.mapping)                                            # new epoch: t restarts at 0
-        s.fire(v2.fire_pairs([0]))
-        s.fire(v2.fire_pairs([0]))
-        second = read_msgs(ws, 3)
-    with connect(s.url, max_size=None) as ws:                                # reconnect after the new epoch
-        wait_until(lambda: s.harnesses_seen == 2, "the reconnected harness to register")
-        replay = read_msgs(ws, 1)
-        s.fire(v2.fire_pairs([1]))                                           # continues from t=2, no reset
-        third = read_msgs(ws, 1)
-    s.close()
-    assert first[0] == graph.mapping and [m["t"] for m in first[1:]] == [0, 1]
-    assert second[0] == v2.mapping and [m["t"] for m in second[1:]] == [0, 1]
-    assert replay[0] == v2.mapping
-    assert third[0]["type"] == "fire" and third[0]["t"] == 2
+def test_refreshed_model_mapping_starts_epoch_and_reconnect_gets_current_mapping():
+    wiring = tiny_wiring()
+    model = tiny_model(wiring)
+    s, graph = stream_model(model, wiring, port=0)
+    original = graph.mapping
+    try:
+        with connect(s.url, max_size=None) as ws:
+            first = read_msgs(ws, 1)
+            model.generate([1], 2, temperature=0)
+            first += read_msgs(ws, 2)
+
+            selected = model.blocks[0]
+            selected.addr.mask[0, 1] = True
+            selected.mem.lobe0 = torch.empty(0, dtype=torch.long)
+            selected.mem.lobe1 = torch.tensor([3, 0, 1])
+            replacement = graph.refresh()
+            s.set_mapping(replacement)
+            second = read_msgs(ws, 1)
+            model.generate([1], 2, temperature=0)
+            second += read_msgs(ws, 2)
+        with connect(s.url, max_size=None) as ws:
+            replay = read_msgs(ws, 1)
+            model.generate([1], 1, temperature=0)
+            third = read_msgs(ws, 1)
+    finally:
+        s.close()
+
+    assert first[0] == original and [m["t"] for m in first[1:]] == [0, 1]
+    assert second[0] == replacement and [m["t"] for m in second[1:]] == [0, 1]
+    assert graph.fire_pairs([0]) == [[0, 3], [1, 3], [2, 3], [3, 9], [3, 10]]
+    assert replay[0] == replacement and third[0]["t"] == 2
+    check_fires(first[1:], check_mapping(original))
+    check_fires(second[1:] + third, check_mapping(replacement))

@@ -32,23 +32,56 @@ LOOPBACK_HOST = "127.0.0.1"
 
 
 class FlyGraph:
-    def __init__(self, wiring, heads_per_lobe=5):
-        mask = wiring.mask.cpu()
+    """Snapshot one model block's topology. Refresh only while inference is paused."""
+
+    def __init__(self, model, block=0):
+        self._model, self._block = model, block
+        self.refresh()
+
+    def refresh(self):
+        """Rebuild atomically from the live model; publish the returned mapping before resuming."""
+        import torch
+
+        if type(self._block) is not int or not 0 <= self._block < len(self._model.blocks):
+            raise ValueError("block must identify an existing model block")
+        selected = self._model.blocks[self._block]
+        address, memory = selected.addr, selected.mem
+        if address.mask.ndim != 2 or address.mask.dtype != torch.bool:
+            raise ValueError("address mask must be a two-dimensional boolean tensor")
+        mask = address.mask.detach().cpu()
         K, G = mask.shape
-        cls = wiring.kc_class.cpu().tolist()
+        if address.theta.shape != mask.shape or address.receptors.out_features != G:
+            raise ValueError("address mask must match KC weights and the glomerulus projection")
+        heads_per_lobe = memory.hpl
+        if type(heads_per_lobe) is not int or heads_per_lobe < 1:
+            raise ValueError("heads per lobe must be a positive integer")
+        cls = [None] * K
+        for lobe in range(3):
+            members = getattr(memory, f"lobe{lobe}")
+            if members.ndim != 1:
+                raise ValueError("lobe membership must be one-dimensional")
+            for k in members.detach().cpu().tolist():
+                if type(k) is not int or not 0 <= k < K or cls[k] is not None:
+                    raise ValueError("lobe membership must contain distinct declared KC indices")
+                cls[k] = lobe
+        if any(lobe is None for lobe in cls):
+            raise ValueError("every KC must belong to exactly one lobe")
+
         kc0, mb0 = G, G + K                                  # first KC id, first MBON id
         nodes = ([{"id": g, "group": 0} for g in range(G)] +
                  [{"id": kc0 + k, "group": 1 + cls[k]} for k in range(K)] +
                  [{"id": mb0 + c, "group": 4} for c in range(3 * heads_per_lobe)])
-        self.kc_pairs = []                                   # kc_pairs[k] = every edge that fires when KC k is active
+        kc_pairs = []                                       # a boolean mask and disjoint lobes prevent duplicate edges
         for k in range(K):
             into = [[g, kc0 + k] for g in mask[k].nonzero().flatten().tolist()]
             out = [[kc0 + k, mb0 + c] for c in range(cls[k] * heads_per_lobe, (cls[k] + 1) * heads_per_lobe)]
-            self.kc_pairs.append(into + out)
-        self.mapping = {"type": "mapping", "version": 1,
-                        "groups": [{"id": i, "name": n} for i, n in enumerate(GROUP_NAMES)],
-                        "nodes": nodes,
-                        "edges": [p for pairs in self.kc_pairs for p in pairs]}
+            kc_pairs.append(into + out)
+        mapping = {"type": "mapping", "version": 1,
+                   "groups": [{"id": i, "name": n} for i, n in enumerate(GROUP_NAMES)],
+                   "nodes": nodes,
+                   "edges": [p for pairs in kc_pairs for p in pairs]}
+        self.kc_pairs, self.mapping = kc_pairs, mapping
+        return mapping
 
     def fire_pairs(self, active_kcs):
         return [p for k in active_kcs for p in self.kc_pairs[k]]
@@ -291,9 +324,10 @@ def attach(model, stream, graph, block=0):
 
 def stream_model(model, wiring, block=0, **server):
     """Start streaming `model` to the harness and return (VizStream, FlyGraph). The mapping is set
-    before the server accepts anyone, so it is every harness's first message; after that each token
-    through `block` is one `fire`. `server`: VizStream arguments, including record_queue_size."""
-    graph = FlyGraph(wiring, model.cfg.heads_per_lobe)
+    before the server accepts anyone; each token through `block` is one `fire`. Topology comes from
+    that model block, not the `wiring` argument retained by the frozen serving API.
+    `server`: VizStream arguments, including record_queue_size."""
+    graph = FlyGraph(model, block)
     stream = VizStream(**server)
     stream.set_mapping(graph.mapping)
     stream.start()

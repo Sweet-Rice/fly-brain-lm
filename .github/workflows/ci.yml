@@ -84,9 +84,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install numpy pandas pyarrow tiktoken websockets pytest
+          python -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
           python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
-      - name: Smoke (init checkpoint, serve, record, inspect)
+      - name: Smoke (init checkpoint, export mapping, serve, record, inspect)
         id: smoke
         run: .github/scripts/smoke.sh
       - name: Smoke summary
@@ -105,6 +105,7 @@ jobs:
             echo "## Smoke: checkpoint, serve, record: $status"
             echo
             if [ -s "$d/ci.pt" ]; then echo "- Checkpoint built: $(stat -c %s "$d/ci.pt") bytes (not uploaded)"; fi
+            if [ -s "$d/mapping.ndjson" ]; then echo "- Standalone mapping exported: $(stat -c %s "$d/mapping.ndjson") bytes"; fi
             if [ -f "$d/ask.txt" ]; then echo "- Serve line: $(grep -m 1 -E '^\[[0-9]+ prompt' "$d/ask.txt" || true)"; fi
             if [ -f "$d/watch.txt" ]; then
               echo "- Mapping: $(grep -m 1 'nodes,' "$d/watch.txt" || true)"
@@ -120,4 +121,5 @@ jobs:
             ${{ runner.temp }}/flybrain-smoke/ask.txt
             ${{ runner.temp }}/flybrain-smoke/watch.txt
             ${{ runner.temp }}/flybrain-smoke/ci.ndjson
+            ${{ runner.temp }}/flybrain-smoke/mapping.ndjson
           if-no-files-found: warn
