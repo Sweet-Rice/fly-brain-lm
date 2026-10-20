@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "events": [
+    {"action": "replace_mapping", "epoch": 0, "groups": 3, "nodes": 4, "edges": 3},
+    {"action": "accept_fire", "epoch": 0, "t": 0, "pairs": [[0, 2], [1, 2]], "dropped_pairs": []},
+    {"action": "accept_fire", "epoch": 0, "t": 2, "pairs": [[2, 3]], "dropped_pairs": []},
+    {"action": "replace_mapping", "epoch": 1, "groups": 2, "nodes": 3, "edges": 2},
+    {"action": "accept_fire", "epoch": 1, "t": 0, "pairs": [[0, 1], [0, 2]], "dropped_pairs": []}
+  ]
+}

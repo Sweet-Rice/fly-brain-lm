@@ -1,0 +1,5 @@
+{"type":"mapping","version":1,"groups":[{"id":0,"name":"PN"},{"id":1,"name":"KC"},{"id":2,"name":"MBON"}],"nodes":[{"id":0,"group":0},{"id":1,"group":0},{"id":2,"group":1},{"id":3,"group":2}],"edges":[[0,2],[1,2],[2,3]]}
+{"type":"fire","t":0,"pairs":[[0,2],[1,2]]}
+{"type":"fire","t":2,"pairs":[[2,3]]}
+{"type":"mapping","version":1,"groups":[{"id":0,"name":"Sensory"},{"id":1,"name":"Output"}],"nodes":[{"id":0,"group":0},{"id":1,"group":1},{"id":2,"group":1}],"edges":[[0,1],[0,2]]}
+{"type":"fire","t":0,"pairs":[[0,1],[0,2]]}

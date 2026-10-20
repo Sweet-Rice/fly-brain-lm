@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mapping.schema.json",
+  "title": "Fly Brain Visualization Stream v1 mapping",
+  "type": "object",
+  "required": ["type", "version", "groups", "nodes", "edges"],
+  "properties": {
+    "type": {"type": "string", "const": "mapping"},
+    "version": {"type": "integer", "const": 1},
+    "groups": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/group"},
+      "uniqueItems": true
+    },
+    "nodes": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/node"},
+      "uniqueItems": true
+    },
+    "edges": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/pair"},
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": {"$ref": "#/$defs/extensionValue"},
+  "x-flybrain-semantic-rules": [
+    "group ids are unique",
+    "node ids are unique",
+    "each node group names a declared group",
+    "each edge endpoint names a declared node"
+  ],
+  "$defs": {
+    "group": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 0},
+        "name": {"type": "string"}
+      },
+      "additionalProperties": {"$ref": "#/$defs/extensionValue"}
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "group"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 0},
+        "group": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": {"$ref": "#/$defs/extensionValue"}
+    },
+    "pair": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 0}
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "extensionValue": {
+      "anyOf": [
+        {"type": "integer"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/extensionValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/extensionValue"}}
+      ]
+    }
+  }
+}

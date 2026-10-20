@@ -43,12 +43,12 @@ nodes has not received a mapping; see the [browser troubleshooting guide](harnes
 ## Run the real model or tests
 
 The model/data tools additionally use PyTorch, NumPy, pandas, PyArrow, and
-`tiktoken`. Tests use `pytest`. A CPU-only PyTorch install is sufficient for the
-documented examples:
+`tiktoken`. Tests use `pytest` and `jsonschema`. A CPU-only PyTorch install is
+sufficient for the documented examples:
 
 ```bash
 .venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/python -m pip install numpy pandas pyarrow tiktoken websockets pytest
+.venv/bin/python -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
 ```
 
 For another platform or GPU build, use the [PyTorch installation selector](https://pytorch.org/get-started/locally/).
@@ -76,7 +76,9 @@ also download encoding data; replay alone does not load the tokenizer.
 | `data/` | [Bundled wiring, optional downloads, and token data](data/README.md) |
 | `test/` | [Test command, coverage, and runtime requirements](test/README.md) |
 
-The formal wire contract and model migration policy are in [harness/API.md](harness/API.md).
+The normative wire contract, portable schemas, and conformance fixtures are in
+[`harness/protocol/v1/`](harness/protocol/v1/). The model-side implementation
+guide and migration policy are in [`harness/API.md`](harness/API.md).
 
 ## Ports in these guides
 

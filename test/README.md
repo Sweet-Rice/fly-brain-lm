@@ -13,8 +13,9 @@ To select a subset, pass one of the test file paths below instead of `test`.
 No saved checkpoint, real connectome files, prepared `train.bin`/`val.bin`, GPU,
 or running model/API server is required. The tests build CPU models with
 `Wiring.random()` and use temporary paths for recordings and checkpoints.
-`tiktoken` loads GPT-2 encoding data, so its first use may require a download
-unless that data is cached.
+Contract tests use `jsonschema` against the checked-in Draft 2020-12 schemas and
+fixtures. `tiktoken` loads GPT-2 encoding data, so its first use may require a
+download unless that data is cached.
 
 | File | Behavior covered |
 |---|---|
@@ -22,6 +23,7 @@ unless that data is cached.
 | `test/test_model.py` | Sparse address codes, masked gradients, memory, causality, step/forward agreement, greedy generation, checkpoint loading, and one-batch optimization |
 | `test/test_serve.py` | Model listing, completions, chat, SSE output, and request errors against a real local HTTP server |
 | `test/test_viz_stream.py` | Exact tiny-graph topology and active-KC routing, mapping/fire invariants, live streaming and recording, session continuity, joins/reconnects, epoch replacement, empty steps, and deterministic backpressure/drop recovery |
+| `test/test_protocol_contract.py` | Portable v1 JSON Schemas, valid lifecycle fixture, invalid receiver cases, mapping epochs, and semantic id/reference constraints |
 
 ## Continuous integration
 
@@ -33,7 +35,7 @@ checks on PRs, pushes to `main`, and manual dispatches:
 | Data/tokenization | `test/test_data.py` |
 | Model/core | All tests under `test/` except the dedicated data, HTTP API, and graph/WebSocket suites; new model modules are included automatically |
 | HTTP API | `test/test_serve.py` |
-| Graph/WebSocket | `test/test_viz_stream.py` |
+| Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
 | Smoke (checkpoint, serve, record) | Build an untrained checkpoint, serve one prompt on an ephemeral port, then inspect its NDJSON recording |
 
 The jobs have no dependency edges. A failed suite does not cancel the other

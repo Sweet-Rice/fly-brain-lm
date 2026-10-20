@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "malformed-json",
+      "description": "A frame that is not JSON is dropped.",
+      "frames": ["{\"type\":\"mapping\""],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "non-object-json",
+      "description": "A JSON value that is not an object is dropped.",
+      "frames": ["[\"fire\",0]"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "unknown-type",
+      "description": "An unknown message type is ignored.",
+      "frames": ["{\"type\":\"heartbeat\",\"sequence\":1}"],
+      "expected": [{"action": "ignore_message"}]
+    },
+    {
+      "id": "unknown-fields",
+      "description": "Unknown fields on known messages and nested records are ignored.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\",\"label\":\"input\"},{\"id\":1,\"name\":\"KC\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":1,\"label\":\"one\"}],\"edges\":[[0,1]],\"future\":7}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1]],\"duration\":3}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 2, "nodes": 2, "edges": 1},
+        {"action": "accept_fire", "epoch": 0, "t": 0, "pairs": [[0,1]], "dropped_pairs": []}
+      ]
+    },
+    {
+      "id": "fire-before-mapping",
+      "description": "A fire received before any mapping is dropped.",
+      "frames": ["{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1]]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "unsupported-version",
+      "description": "An unsupported mapping version closes a live connection with code 1003.",
+      "frames": ["{\"type\":\"mapping\",\"version\":2,\"groups\":[],\"nodes\":[],\"edges\":[]}"],
+      "expected": [{"action": "close", "code": 1003}]
+    },
+    {
+      "id": "missing-required-field",
+      "description": "A known message missing a required field is dropped.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[],\"nodes\":[]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "wrong-field-type",
+      "description": "A known field with the wrong type makes the message unusable.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":\"0\",\"name\":\"PN\"}],\"nodes\":[],\"edges\":[]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "negative-id",
+      "description": "Identifiers must be non-negative integers.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":-1,\"name\":\"PN\"}],\"nodes\":[],\"edges\":[]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "duplicate-group-id",
+      "description": "Group ids are unique even when other fields differ.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"},{\"id\":0,\"name\":\"KC\"}],\"nodes\":[],\"edges\":[]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "duplicate-node-id",
+      "description": "Node ids are unique even when group assignments differ.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"},{\"id\":1,\"name\":\"KC\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":0,\"group\":1}],\"edges\":[]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "unknown-node-group",
+      "description": "Every node group must name a declared group.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":1}],\"edges\":[]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "edge-with-unknown-node",
+      "description": "Every edge endpoint must name a declared node.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0}],\"edges\":[[0,1]]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "duplicate-edge",
+      "description": "A mapping cannot declare the same directed edge twice.",
+      "frames": ["{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1],[0,1]]}"],
+      "expected": [{"action": "drop_message"}]
+    },
+    {
+      "id": "non-increasing-t",
+      "description": "Repeated and decreasing step indices are each dropped without advancing state.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":2,\"pairs\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":2,\"pairs\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":1,\"pairs\":[[0,1]]}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 1, "nodes": 2, "edges": 1},
+        {"action": "accept_fire", "epoch": 0, "t": 2, "pairs": [[0,1]], "dropped_pairs": []},
+        {"action": "drop_message"},
+        {"action": "drop_message"}
+      ]
+    },
+    {
+      "id": "negative-t",
+      "description": "A negative step index is malformed and does not consume the next valid index.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":-1,\"pairs\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1]]}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 1, "nodes": 2, "edges": 1},
+        {"action": "drop_message"},
+        {"action": "accept_fire", "epoch": 0, "t": 0, "pairs": [[0,1]], "dropped_pairs": []}
+      ]
+    },
+    {
+      "id": "duplicate-fire-pair",
+      "description": "A repeated pair makes the whole fire message invalid; a later fire at the same t can still be accepted.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1],[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1]]}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 1, "nodes": 2, "edges": 1},
+        {"action": "drop_message"},
+        {"action": "accept_fire", "epoch": 0, "t": 0, "pairs": [[0,1]], "dropped_pairs": []}
+      ]
+    },
+    {
+      "id": "malformed-fire-pair",
+      "description": "A malformed pair makes the whole fire message invalid.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0]]}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 1, "nodes": 2, "edges": 1},
+        {"action": "drop_message"}
+      ]
+    },
+    {
+      "id": "undeclared-fire-pair",
+      "description": "Only the undeclared pair is dropped; declared pairs at that step are accepted.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"},{\"id\":1,\"name\":\"KC\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":1},{\"id\":2,\"group\":1}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1],[0,2]]}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 2, "nodes": 3, "edges": 1},
+        {"action": "accept_fire", "epoch": 0, "t": 0, "pairs": [[0,1]], "dropped_pairs": [[0,2]]}
+      ]
+    },
+    {
+      "id": "invalid-replacement-keeps-current-mapping",
+      "description": "An invalid replacement mapping is atomic and leaves the prior mapping usable.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1]]}",
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1],[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1]]}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 1, "nodes": 2, "edges": 1},
+        {"action": "drop_message"},
+        {"action": "accept_fire", "epoch": 0, "t": 0, "pairs": [[0,1]], "dropped_pairs": []}
+      ]
+    },
+    {
+      "id": "replacement-resets-t",
+      "description": "A valid replacement mapping starts a new epoch in which t may restart at zero.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":4,\"pairs\":[[0,1]]}",
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"Input\"},{\"id\":1,\"name\":\"Output\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":1}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1]]}"
+      ],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 1, "nodes": 2, "edges": 1},
+        {"action": "accept_fire", "epoch": 0, "t": 4, "pairs": [[0,1]], "dropped_pairs": []},
+        {"action": "replace_mapping", "epoch": 1, "groups": 2, "nodes": 2, "edges": 1},
+        {"action": "accept_fire", "epoch": 1, "t": 0, "pairs": [[0,1]], "dropped_pairs": []}
+      ]
+    },
+    {
+      "id": "reconnect-discards-state",
+      "description": "A reconnect discards the old mapping and step order, so fires are dropped until the new connection receives a mapping.",
+      "frames": [
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"PN\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":0}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":3,\"pairs\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":4,\"pairs\":[[0,1]]}",
+        "{\"type\":\"mapping\",\"version\":1,\"groups\":[{\"id\":0,\"name\":\"Input\"},{\"id\":1,\"name\":\"Output\"}],\"nodes\":[{\"id\":0,\"group\":0},{\"id\":1,\"group\":1}],\"edges\":[[0,1]]}",
+        "{\"type\":\"fire\",\"t\":0,\"pairs\":[[0,1]]}"
+      ],
+      "reconnect_before": [2],
+      "expected": [
+        {"action": "replace_mapping", "epoch": 0, "groups": 1, "nodes": 2, "edges": 1},
+        {"action": "accept_fire", "epoch": 0, "t": 3, "pairs": [[0,1]], "dropped_pairs": []},
+        {"action": "drop_message"},
+        {"action": "replace_mapping", "epoch": 0, "groups": 2, "nodes": 2, "edges": 1},
+        {"action": "accept_fire", "epoch": 0, "t": 0, "pairs": [[0,1]], "dropped_pairs": []}
+      ]
+    }
+  ]
+}
