@@ -11,8 +11,8 @@ Serving-side reference for the stream implemented in `harness/viz_stream.py` (`F
 
 ## 2. Transport
 
-- **Server.** `VizStream` runs a `websockets` server (`websockets.asyncio.server.serve`) on a background thread. Its constructor defaults are `host="127.0.0.1"`, `port=8765`, `path="/stream"`. These are parameters, not constants. `model.serve.ask` exposes `--host`, `--port`, and `--path`. `model.serve.serve` exposes only `--viz-port`, so its stream keeps the default host.
-- **Loopback is the default, not enforced.** `VizStream(host="0.0.0.0")` accepts connections from other machines. Nothing in `VizStream` rejects a non-loopback peer.
+- **Server.** `VizStream` runs a `websockets` server (`websockets.asyncio.server.serve`) on a background thread. It defaults to `host="127.0.0.1"`, `port=8765`, `path="/stream"`. The port and path are configurable.
+- **Loopback is enforced.** `VizStream` rejects every host other than the literal IPv4 loopback address `127.0.0.1` before opening a recording or starting its server thread. `model.serve.ask --host` is retained for its frozen call contract but accepts only `127.0.0.1`; `model.serve.serve` exposes only `--viz-port`, so its stream also stays on loopback.
 - **Wrong path.** `VizStream._handler` uses an exact match against the configured request target, including any query string. With the default path, `/stream/` and `/stream?client=x` are rejected. This check runs after the handshake: open is followed by close code 1008, reason `unknown path; use /stream` (or the configured path). Code 1008 and that default reason were observed.
 - **Frames.** Each message is one JSON object in one text frame, with compact separators (`json.dumps(..., separators=(",", ":"))`). The server sends no binary frames. Required v1 values have integer or string scalars, never floats or nulls (`FlyGraph.__init__`, `VizStream.fire`). `VizStream` does not validate mappings or fire pairs: custom producers MUST satisfy §4 and §5 themselves. Harnesses MUST NOT crash on malformed frames (§7).
 - **Client to server.** The server never reads application messages (`VizStream._handler` only sends). Harnesses send nothing.

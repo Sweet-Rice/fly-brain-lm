@@ -136,6 +136,12 @@ TINY_KC_PAIRS = [
 ]
 
 
+@pytest.mark.parametrize("host", ["0.0.0.0", "localhost", "::1"])
+def test_stream_rejects_non_ipv4_loopback_bind(host):
+    with pytest.raises(ValueError, match="loopback-only"):
+        VizStream(host=host)
+
+
 def test_mapping_shape(setup):
     _, w, graph = setup
     m = graph.mapping

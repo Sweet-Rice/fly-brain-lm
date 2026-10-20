@@ -67,9 +67,9 @@ A message can also be given on the command line; the chat keeps reading lines af
 ```
 
 **Options** (defaults in brackets): `--ckpt` [`model/checkpoints/init.pt`], `--device` [`cpu`; `cuda` for GPU],
-`--max-tokens` [50], `--temperature` [1.0], `--top-k` [50], `--seed` [0, sampling only], `--host` [`127.0.0.1`],
-`--port` [8765], `--path` [`/stream`], `--block` [0; which of the 12 blocks to visualize], `--wait` [0 s],
-`--record FILE`.
+`--max-tokens` [50], `--temperature` [1.0], `--top-k` [50], `--seed` [0, sampling only], `--host`
+[`127.0.0.1`; other values are rejected because the visualization stream is loopback-only], `--port` [8765],
+`--path` [`/stream`], `--block` [0; which of the 12 blocks to visualize], `--wait` [0 s], `--record FILE`.
 
 **Recording:** `--record FILE` writes the stream as NDJSON, first the mapping line, then one line per fire.
 Use a scratch path, because an existing file is overwritten. This one-shot command uses a free stream

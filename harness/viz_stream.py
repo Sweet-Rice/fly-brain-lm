@@ -26,6 +26,7 @@ import threading
 import time
 
 GROUP_NAMES = ["Glomerulus", "KC_gamma", "KC_alphabeta", "KC_alphaprime_betaprime", "MBON"]
+LOOPBACK_HOST = "127.0.0.1"
 
 
 class FlyGraph:
@@ -54,8 +55,10 @@ class FlyGraph:
 class VizStream:
     """Model side. Call set_mapping() once, then fire(pairs) per step. Both return immediately."""
 
-    def __init__(self, host="127.0.0.1", port=8765, path="/stream", record=None, queue_size=64):
-        self.host, self.port, self.path, self.queue_size = host, port, path, queue_size
+    def __init__(self, host=LOOPBACK_HOST, port=8765, path="/stream", record=None, queue_size=64):
+        if host != LOOPBACK_HOST:
+            raise ValueError(f"visualization stream is loopback-only; host must be {LOOPBACK_HOST!r}")
+        self.host, self.port, self.path, self.queue_size = LOOPBACK_HOST, port, path, queue_size
         self.t = 0                       # next step index; restarts with each mapping
         self.dropped = 0                 # fire messages dropped for slow harnesses
         self.harnesses_seen = 0
@@ -201,7 +204,7 @@ def attach(model, stream, graph, block=0):
 def stream_model(model, wiring, block=0, **server):
     """Start streaming `model` to the harness and return (VizStream, FlyGraph). The mapping is set
     before the server accepts anyone, so it is every harness's first message; after that each token
-    through `block` is one `fire`. `server`: VizStream arguments (host, port, path, record)."""
+    through `block` is one `fire`. `server`: VizStream arguments (loopback host, port, path, record)."""
     graph = FlyGraph(wiring, model.cfg.heads_per_lobe)
     stream = VizStream(**server)
     stream.set_mapping(graph.mapping)
