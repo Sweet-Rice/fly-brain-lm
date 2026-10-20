@@ -114,7 +114,7 @@ The bundled recording is fixed. With the [model dependencies and scratch checkpo
 
 - Change the quoted prompt as needed.
 - `</dev/null` closes stdin, so `ask` exits after the first message.
-- The recording contains the mapping and every fire actually emitted. The number of fires equals the steps `ask` printed (`steps t=0..M` gives M+1 fires).
+- The recording normally contains the mapping and every emitted fire. Its bounded background writer never waits on file I/O in the model thread; if storage falls behind, complete fire messages are dropped and the resulting gaps in `t` remain valid.
 
 Then replay it. Stop the default replay first (Ctrl-C in its terminal), because both use port 8768:
 

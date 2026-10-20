@@ -88,6 +88,32 @@ class StalledSend:
         self.armed = True
 
 
+class StalledRecording:
+    """A file-like sink whose first write waits until the test releases it."""
+
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.lines = []
+        self.closed = False
+
+    def open(self, *args, **kwargs):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.closed = True
+
+    def write(self, text):
+        self.started.set()
+        if not self.release.wait(TIMEOUT):
+            raise TimeoutError("the test did not release the recording write")
+        self.lines.append(text)
+        return len(text)
+
+
 @pytest.fixture
 def stalled(monkeypatch):
     gate = StalledSend()
@@ -248,6 +274,67 @@ def test_empty_active_set_advances_t_without_a_message(setup):
     s.close()
     assert got[0] == graph.mapping
     assert got[1]["type"] == "fire" and got[1]["t"] == 1
+
+
+def test_recording_queue_never_waits_and_keeps_replacement_mapping(setup, monkeypatch):
+    _, w, graph = setup
+    replacement = FlyGraph(w, heads_per_lobe=2)
+    sink = StalledRecording()
+    monkeypatch.setattr("harness.viz_stream.open", sink.open, raising=False)
+    s = VizStream(record="unused.ndjson", record_queue_size=2)
+    failure, published = [], threading.Event()
+
+    def publish():
+        try:
+            pairs = graph.fire_pairs([1])
+            for _ in range(3):
+                s.fire(pairs)
+            s.set_mapping(replacement.mapping)
+            s.fire(replacement.fire_pairs([0]))
+        except Exception as exc:
+            failure.append(exc)
+        finally:
+            published.set()
+
+    try:
+        s.set_mapping(graph.mapping)
+        assert sink.started.wait(TIMEOUT), "the recording writer never reached the blocked file write"
+        publisher = threading.Thread(target=publish, daemon=True)
+        publisher.start()
+        assert published.wait(1.0), "model-side publication waited for recording file I/O"
+        assert not failure and not sink.release.is_set()
+        assert s.recording_dropped == 3                 # t=2 overflowed; queued t=0,1 yielded to replacement mapping
+    finally:
+        sink.release.set()
+        if "publisher" in locals():
+            publisher.join(TIMEOUT)
+        s.close()
+
+    messages = [json.loads(line) for line in sink.lines]
+    assert sink.closed and s.recording_error is None
+    assert messages == [graph.mapping, replacement.mapping,
+                        {"type": "fire", "t": 0, "pairs": replacement.fire_pairs([0])}]
+
+
+def test_recording_failure_is_reported_without_stopping_model(setup, monkeypatch):
+    model, _, graph = setup
+
+    def fail_open(*args, **kwargs):
+        raise OSError("disk offline")
+
+    monkeypatch.setattr("harness.viz_stream.open", fail_open, raising=False)
+    with pytest.warns(RuntimeWarning, match="visualization recording stopped: disk offline"):
+        s = VizStream(record="unwritable.ndjson")
+        wait_until(lambda: s.recording_error is not None, "the recording error to be reported")
+
+    s.set_mapping(graph.mapping)
+    hook = attach(model, s, graph)
+    try:
+        assert len(model.generate([1, 2, 3], 4, temperature=0)) == 4
+    finally:
+        hook.remove()
+        s.close()
+    assert isinstance(s.recording_error, OSError) and not s.listening
 
 
 def test_stalled_send_fills_queue_drops_overflow_and_recovers(setup, stalled, tmp_path):
