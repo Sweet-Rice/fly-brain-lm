@@ -216,8 +216,13 @@ Expect, read from `window.harnessState` and a screenshot:
 - File opening and writes run on a dedicated background thread. The model thread uses only non-blocking operations on a bounded queue (`record_queue_size`, default 256).
 - The first retained line is a mapping. Each later `set_mapping` call adds another mapping line and starts a new `t` epoch. If the recording queue is full, a replacement mapping supersedes queued fires from the old epoch so the file stays usable.
 - A full recording queue drops complete fire messages and leaves allowed gaps in `t`; `VizStream.recording_dropped` counts them. Recording counts as a listener while its writer is healthy, so it works with no harness connected.
+- The producer-to-server handoff is also bounded by `queue_size` (default 64), with one scheduled drain callback. A stalled event loop drops new fires rather than accumulating callbacks. Each client has its own queue of the same capacity; `dropped` includes client deliveries lost at either stage. Replacement mappings supersede stale queued fires. `queue_size` must be a positive integer.
 - Each retained line, excluding its newline terminator, is the exact JSON string offered to a harness (`VizStream._record`, `VizStream.fire`, `VizStream.set_mapping`). A normal-speed recording was verified against received text messages line for line; either a slow harness or a slow recorder may independently lose fires.
 - File open/write failures emit a `RuntimeWarning`, appear in `VizStream.recording_error`, disable that recorder, and do not stop model execution. Normal shutdown drains and closes the writer; a drain timeout is also reported without hanging the model.
+
+See [measured stress limits and reproduction commands](PERFORMANCE.md), including
+the standalone browser's hidden-tab disconnection policy and the limits of v1
+backpressure.
 - Viewer: `.venv/bin/python -m harness.watch_stream FILE` (§10).
 
 ## 10. Tools

@@ -9,6 +9,7 @@ All commands run from the repo root (`fly-brain-lm/`) with the project venv: `.v
 | `viz_stream.py` | Stream server used by `model.serve.ask` and `model.serve.serve`. |
 | `export_mapping.py` | Exports one checkpoint's actual model topology without opening a stream or browser. |
 | `replay_prompt.py` | Replays the bundled "Once upon a time" recording. Does not load a model. |
+| `stress.py` | Profiles the actual topology and provides a finite synthetic live load. See [`PERFORMANCE.md`](PERFORMANCE.md). |
 | `watch_stream.py` | Terminal viewer for a live stream or an NDJSON recording. |
 | `example/` | Browser example harness and the bundled recording. See [`example/README.md`](example/README.md). |
 | `app/` | Standalone WebGPU graph viewer with validated live input, local NDJSON play/pause/restart/speed controls, activity highlights and pan, zoom and fit; see [`app/README.md`](app/README.md). |

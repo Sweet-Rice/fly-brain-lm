@@ -110,6 +110,15 @@ repository guides. Run one source per stream port. Leave other people's services
 on 8765 and 8000 alone; choose another page/replay port if needed. Ctrl-C stops
 each server you started.
 
+Hiding the tab closes the live connection and clears its graph. Returning to the
+tab reconnects to the requested endpoint and requires a fresh mapping; activity
+missed while hidden is discarded. Disconnect or choosing a recording cancels
+that automatic resumption. Recording delivery keeps its selected cadence while
+GPU drawing is suspended in a hidden tab.
+
+Measured limits and repeatable stress checks are in
+[`../PERFORMANCE.md`](../PERFORMANCE.md).
+
 ## Receiver and renderer boundary
 
 `protocol.js` has no DOM, WebSocket or model imports. `ProtocolReceiver.process`
@@ -145,12 +154,15 @@ arrays for local start times, independent of sparse node ids and protocol steps.
 `camera.js` handles fit, pan and anchored zoom in CSS pixels. Navigation and
 resize update the camera without rebuilding geometry. Rendering runs only on
 mapping, reset, navigation or resize, and while any highlight is active. Fires
-update a reusable GPU activity buffer; animation frames update only uniforms.
+update reusable CPU timestamps; the next rendered frame uploads activity once
+for the entire burst. Frames also update camera/time uniforms.
 Neither path rebuilds or uploads static graph geometry, and the renderer creates
 no per-edge objects each frame. The animation loop stops when highlights expire.
 
-A replacement mapping rebuilds the complete scene and fits its bounds. Obsolete
-buffers are destroyed after submitted GPU work completes. Disconnect/reset clears
+A replacement mapping rebuilds the complete scene and fits its bounds. While a
+frame is in flight or the tab is hidden, only the latest mapping is retained;
+layout and upload wait for a visible frame. Obsolete buffer handles are destroyed
+on replacement; WebGPU retains submitted uses until completion. Disconnect/reset clears
 the viewport and labels. Device loss stops drawing and releases resources; reload
 to retry. Allocation failures show a message and clear the old scene so it cannot
 be mistaken for the new topology.
