@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fly Brain · Visualization harness</title>
+  <title>Fly Brain LM workspace</title>
   <link rel="stylesheet" href="style.css">
   <script type="module" src="main.js"></script>
 </head>
@@ -11,56 +11,80 @@
   <main>
     <header>
       <p class="eyebrow">FLY BRAIN LM / STREAM V1</p>
-      <h1>Visualization harness</h1>
-      <p>Inspect a live model stream or an NDJSON recording.</p>
+      <h1>Fly Brain LM workspace</h1>
+      <p>Inspect a live model stream or an NDJSON recording alongside prompt generation.</p>
     </header>
 
-    <section aria-labelledby="source-heading">
-      <h2 id="source-heading">Source</h2>
-      <form id="connection">
-        <label for="endpoint">WebSocket endpoint</label>
-        <div class="connection-row">
-          <input id="endpoint" type="url" required spellcheck="false" aria-describedby="endpoint-help">
-          <button type="submit">Connect</button>
-          <button id="disconnect" type="button">Disconnect</button>
+    <section aria-labelledby="source-heading" class="source-section">
+      <details open class="source-details">
+        <summary class="source-summary">
+          <h2 id="source-heading">Source &amp; Playback</h2>
+        </summary>
+        <div class="source-body">
+          <form id="connection">
+            <label for="endpoint">WebSocket endpoint</label>
+            <div class="connection-row">
+              <input id="endpoint" type="url" required spellcheck="false" aria-describedby="endpoint-help">
+              <button type="submit">Connect</button>
+              <button id="disconnect" type="button">Disconnect</button>
+            </div>
+            <p id="endpoint-help" class="hint">Use the exact URL printed by the model or replay server.</p>
+          </form>
+          <div class="recording-block">
+            <label for="recording">Or open a recording</label>
+            <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
+            <div class="playback-controls" role="group" aria-label="Recording playback">
+              <button id="recording-play" type="button" disabled>Play</button>
+              <button id="recording-pause" type="button" disabled>Pause</button>
+              <button id="recording-restart" type="button" disabled>Restart</button>
+              <label for="recording-speed">Playback speed</label>
+              <select id="recording-speed" disabled aria-describedby="recording-help">
+                <option value="0.25">0.25×</option>
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+                <option value="4">4×</option>
+              </select>
+            </div>
+            <p id="recording-help" class="hint">Recordings play locally with 500 ms between fires at 1×. Pause stops new messages; active highlights finish fading. Recordings are saved data for inspection, not live model output.</p>
+          </div>
+          <p id="source-status" role="status">Disconnected. Connect or open a recording to begin.</p>
         </div>
-        <p id="endpoint-help" class="hint">Use the exact URL printed by the model or replay server.</p>
-      </form>
-      <label for="recording">Or open a recording</label>
-      <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
-      <div class="playback-controls" role="group" aria-label="Recording playback">
-        <button id="recording-play" type="button" disabled>Play</button>
-        <button id="recording-pause" type="button" disabled>Pause</button>
-        <button id="recording-restart" type="button" disabled>Restart</button>
-        <label for="recording-speed">Playback speed</label>
-        <select id="recording-speed" disabled aria-describedby="recording-help">
-          <option value="0.25">0.25×</option>
-          <option value="0.5">0.5×</option>
-          <option value="1" selected>1×</option>
-          <option value="2">2×</option>
-          <option value="4">4×</option>
-        </select>
-      </div>
-      <p id="recording-help" class="hint">Recordings play locally with 500 ms between fires at 1×. Pause stops new messages; active highlights finish fading. Recordings are saved data for inspection, not live model output.</p>
-      <p id="source-status" role="status">Disconnected. Connect or open a recording to begin.</p>
+      </details>
     </section>
 
-    <section aria-labelledby="gpu-heading">
-      <h2 id="gpu-heading">Brain graph</h2>
-      <p id="gpu-status" role="status">Checking WebGPU support…</p>
-      <div class="graph-controls">
-        <button id="fit-graph" type="button">Fit graph</button>
-        <button id="zoom-in" type="button">Zoom in (+)</button>
-        <button id="zoom-out" type="button">Zoom out (−)</button>
-      </div>
-      <div class="graph-view">
-        <canvas id="viewport" tabindex="0" aria-label="Directed brain graph" aria-describedby="graph-help"></canvas>
-        <div id="graph-labels" aria-hidden="true"></div>
-      </div>
-      <p id="graph-help" class="hint">Arrowheads point to the destination. Active edges brighten for 600 ms; repeated activity restarts the highlight. Drag to pan; scroll to zoom. With the graph focused, use arrow keys to pan, +/− to zoom, and 0 or Home to fit.</p>
-    </section>
+    <div class="workspace-grid">
+      <div class="workspace-primary">
+        <section aria-labelledby="gpu-heading" class="graph-section">
+          <h2 id="gpu-heading">Brain graph</h2>
+          <p id="gpu-status" role="status">Checking WebGPU support…</p>
+          <div class="graph-controls">
+            <button id="fit-graph" type="button">Fit graph</button>
+            <button id="zoom-in" type="button">Zoom in (+)</button>
+            <button id="zoom-out" type="button">Zoom out (−)</button>
+          </div>
+          <div class="graph-view">
+            <canvas id="viewport" tabindex="0" aria-label="Directed brain graph" aria-describedby="graph-help"></canvas>
+            <div id="graph-labels" aria-hidden="true"></div>
+          </div>
+          <p id="graph-help" class="hint">Arrowheads point to the destination. Active edges brighten for 600 ms; repeated activity restarts the highlight. Click a neuron node to select and inspect it; drag the canvas to pan; scroll to zoom. Keyboard fallback: enter any neuron ID into the Neuron Inspector panel to inspect it directly. With the graph focused, use arrow keys to pan, +/− to zoom, and 0 or Home to fit.</p>
+        </section>
 
-    <section aria-labelledby="stream-heading">
+        <section aria-labelledby="prompt-heading" class="prompt-section">
+          <h2 id="prompt-heading">Prompt</h2>
+          <div id="prompt-workspace" aria-labelledby="prompt-heading"></div>
+        </section>
+      </div>
+
+      <aside class="workspace-sidebar">
+        <section aria-labelledby="inspector-heading" class="inspector-section">
+          <h2 id="inspector-heading">Neuron Inspector</h2>
+          <div id="inspector-workspace" aria-labelledby="inspector-heading"></div>
+        </section>
+      </aside>
+    </div>
+
+    <section aria-labelledby="stream-heading" class="stream-section">
       <h2 id="stream-heading">Accepted stream</h2>
       <dl class="metrics">
         <div><dt>Nodes</dt><dd id="nodes">0</dd></div>
@@ -78,7 +102,6 @@
       </table>
       <p id="last-fire" class="hint">No accepted fire event.</p>
     </section>
-
   </main>
 </body>
 </html>
