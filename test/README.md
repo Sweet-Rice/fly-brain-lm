@@ -45,14 +45,15 @@ the separate browser-harness check uses Node.js without model dependencies:
 | Model/core | All tests under `test/` except the dedicated data, HTTP API, and graph/WebSocket suites; new model modules are included automatically |
 | HTTP API | `test/test_serve.py` |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
-| Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, run the finite workflow, then feed its fresh recording through the shipped JavaScript playback, receiver, graph layout and edge activity |
+| Smoke (vibe / vibe2 checkpoint, serve, record) | Independent jobs for both implementations: build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, run the finite workflow, then feed its fresh recording through the shipped JavaScript playback, receiver, graph layout and edge activity |
 | Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers and device lifecycle; see [`harness/app/README.md`](../harness/app/README.md) |
 
 The jobs have no dependency edges. A failed suite does not cancel the other
 suites or skip the smoke check. Each test job prints individual cases and adds
 their results, timings, and failure details to the run's **Summary** page;
 downloadable `junit-*` artifacts contain the machine-readable reports.
-`smoke-outputs` contains the standalone mapping, prompt output, recording, and viewer
+`smoke-outputs-vibe` and `smoke-outputs-vibe2` contain each model's standalone
+mapping, prompt output, recording, and viewer
 output, plus the workflow recording, Python and JavaScript run logs, and
 provenance/SHA-256 metadata.
 The checkpoint is not uploaded. Reports are uploaded even when a check fails.

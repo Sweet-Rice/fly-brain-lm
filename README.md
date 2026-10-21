@@ -1,7 +1,9 @@
 # Fly Brain LM
 
-An experimental, **untrained** PyTorch language model whose activity streams to a
-standalone WebGPU graph viewer. Generated text is not expected to be useful.
+Experimental PyTorch fly-brain language models with a standalone WebGPU activity
+viewer. The registry includes the legacy `vibe` scaffold and the `vibe2`
+fly-dopamine implementation. Fresh initializations are **untrained**; their
+generated text has no quality claim.
 The visualization harness inspects activity; prompt UI work belongs to #13.
 
 <a id="start-with-the-recorded-example"></a>

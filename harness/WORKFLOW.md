@@ -80,7 +80,7 @@ POSIX shell:
 .venv/bin/python -m harness.workflow
 ```
 
-This builds the full default untrained model from bundled wiring on CPU, using
+This builds the full default untrained `vibe` model from bundled wiring on CPU, using
 seed 0, 12 layers and width 384. It runs greedy inference for `Once upon a time`
 with up to eight generated tokens. It checks mapping-first delivery, ordered
 declared fires, inference while disconnected, reconnect, mapping refresh with
@@ -88,6 +88,27 @@ restarted `t`, and unchanged generated tokens when the visualization hook is
 detached. It needs no checkpoint and writes no checkpoint. Without `--record`,
 its temporary recording is deleted. Failures exit unsuccessfully; passing this
 command does not prove a browser has a usable WebGPU adapter.
+
+### Run either model implementation
+
+Add `--impl vibe2` to run the fly-dopamine implementation from PR #35 through
+the same smoke scenarios; `--impl vibe` selects the existing scaffold explicitly.
+Without `--impl`, the runner uses `FLYBRAIN_IMPL`, then defaults to `vibe`. Both
+fresh defaults use 12 layers, width 384 and the bundled 54-glomerulus wiring:
+1,958 nodes and 19,037 edges. They are different untrained models and need not
+generate the same tokens or select the same KC paths. Within each implementation,
+removing the hook must leave its generated tokens unchanged. The `personal`
+registry entry is an unimplemented template and fails explicitly.
+
+```console
+python -m harness.workflow --impl vibe
+python -m harness.workflow --impl vibe2
+```
+
+Neither command imports private trained weights. The checked-in reference remains
+the historical `vibe` recording. New recording metadata identifies the selected
+implementation, package and implementation-source digests; source hashes in old
+reference metadata describe the code used at capture time.
 
 ## 4. Exercise the live browser workflow
 
@@ -114,7 +135,8 @@ model hook spaces token steps by 100 ms for visible inspection; a one-second
 pause separates rounds. This demonstration pacing is not inference throughput.
 Its generated text is labelled untrained in the terminal.
 
-Exercise these scenarios in order:
+For `vibe2`, add `--impl vibe2` to the live-source command. Exercise these
+scenarios for each implementation, stopping one source before starting the other:
 
 | Scenario | What to do | Expected browser result |
 |---|---|---|
@@ -146,7 +168,10 @@ POSIX shell:
 .venv/bin/python -m harness.workflow --record /tmp/flybrain-review.ndjson
 ```
 
-The adjacent `.metadata.json` records provenance and the recording digest. Open
+The adjacent `.metadata.json` records provenance and the recording digest. Use a distinct
+filename for each implementation; for example add
+`--impl vibe2 --record /tmp/flybrain-vibe2.ndjson` on POSIX (or a new `$env:TEMP`
+path on Windows). Open
 the NDJSON with the browser file picker. `--serve --record PATH` also records a
 live session; stop it with Ctrl-C to finish the artifact. Recording is optional
 and does not change inference. Its bounded writer can drop complete fires if
@@ -161,10 +186,13 @@ Existing applications can continue using the frozen entry points in
 checkpoint using [`../model/README.md`](../model/README.md), then select it with
 `--ckpt`. The initializer overwrites its output, so choose a new path. The
 workflow runner instead creates its full model directly from bundled wiring.
+Serving loads the implementation named by the checkpoint, regardless of the
+build-selection environment variable. Legacy checkpoints without `impl` load as
+`vibe`; executable files under `model/serve/` remain unchanged.
 
 | Entry point | Visualization configuration |
 |---|---|
-| `harness.workflow` | Loopback only; `--port 0` selects a free port; `--path /stream` or another absolute path. `--serve` keeps inference running; omit it for the finite smoke. `--record PATH` is optional. |
+| `harness.workflow` | `--impl` / `FLYBRAIN_IMPL` select a fresh implementation; default `vibe`. Loopback only; `--port 0` selects a free port; `--path /stream` or another absolute path. `--serve` keeps inference running; omit it for the finite smoke. `--record PATH` is optional. |
 | `model.serve.ask` | `--host 127.0.0.1 --port 8767 --path /stream --block 0`; `--port 0` chooses a free port. Visualization is enabled; there is **no `--no-viz` flag**. |
 | `model.serve.serve` | `--port 8771` is the HTTP API port; `--viz-port 8767` is the separate stream port. Stream path is `/stream`. `--no-viz` disables the stream/recorder without disabling requests. |
 | Standalone page | `http.server` selects the HTTP port; the endpoint field or `?ws=ws://127.0.0.1:<port>/<path>` selects the source. File mode needs no WebSocket. |
@@ -209,7 +237,26 @@ soak, CUDA extraction or hardware sleep/resume check has been performed.
 
 ## Target-machine verification
 
-Verified on 2026-10-21 on the Windows/Radeon development machine:
+Registry integration was checked on 2026-10-21 on the Windows/Radeon machine
+with both `--impl vibe --path /vibe` and `--impl vibe2 --path /vibe2`. Each ran
+the full 12-layer, width-384 untrained CPU model against bundled 54-glomerulus
+wiring. Both drew 1,958 nodes and 19,037 edges with visible real-model activity,
+mapping-epoch resets, zero rejected messages/undeclared pairs and no GPU
+warnings/errors. Switching sources cleared the previous scene. `vibe2`
+continued inference while disconnected and reconnected at step 13 with one
+accepted fire in fresh receiver epoch 0. A genuine pre-registry checkpoint
+without an `impl` field also loaded as `vibe`.
+
+Both full local CI smoke paths initialized a checkpoint, exported its mapping,
+loaded it through frozen serving, recorded actual inference, and generated a
+44-fire/two-epoch workflow capture with identical tokens after hook removal.
+Each fresh capture passed the JavaScript playback/layout/activity check. With
+the model sources stopped, both files completed all 46 lines in the browser at
+epoch 1 / step 10 / 11 accepted fires. These are fresh untrained models, not
+the private trained checkpoint or its 55-glomerulus import; no private-weight
+parity or CUDA result is claimed.
+
+Historical `vibe` verification on 2026-10-21 on the Windows/Radeon development machine:
 
 - [x] Live mapping-first delivery in the standalone WebGPU browser.
 - [x] Actual full-model fires in increasing `t` order and visible highlights.

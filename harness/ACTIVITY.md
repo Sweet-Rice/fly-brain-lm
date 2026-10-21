@@ -8,14 +8,16 @@ use [WORKFLOW.md](WORKFLOW.md).
 ## A fire selects a KC path
 
 `attach(model, stream, graph, block=0)` observes the selected block's
-`FlyAddress.forward` output, `code` with shape `(batch, tokens, KCs)`. For each
-token position, a KC is active exactly when `code[0, position, kc] > 0`.
+`model.kc_code_module(block)` output, `code` with shape `(batch, tokens, KCs)`.
+`model.kc_topology(block)` provides its aligned wiring and three KC lobes.
+Both `vibe` and `vibe2` implement this contract; the adapter reads no architecture
+internals. For each token position, a KC is active exactly when `code[0, position, kc] > 0`.
 Only batch element 0 is visualized. This rule is deterministic for fixed
 address output; it adds no randomness and does not modify model calculations.
 
-The address module computes a glomerular projection, masked KC drive,
-centering, ReLU, top-k selection and normalization. The rule uses the final
-address code, not the pre-selection drive. There can be fewer than `top_k`
+The implementations use different glomerular/address calculations. Both select
+sparse positive KC codes, limited by their configured `top_k`. The rule uses the
+final address code, not the pre-selection drive. There can be fewer than `top_k`
 active KCs when selected values are zero. Zero values do not produce activity.
 
 | Declared connection | Firing rule | Meaning |
@@ -107,7 +109,7 @@ overhead or CUDA timings.
 ### Full inference measurement
 
 [Profile output](activity-profile.json) records the full default untrained
-model: 12 layers, width 384, the checked-in real wiring, 1,958 nodes and 19,037
+`vibe` model: 12 layers, width 384, the checked-in real wiring, 1,958 nodes and 19,037
 edges. Each sample runs a batch-1, four-token `model.forward` under inference
 mode with one CPU thread. There are five warmups and 30 measured samples per
 mode. All modes use the same initialized model, seed 0 and token ids
@@ -145,8 +147,14 @@ machine, not CI thresholds; negative overhead is measurement noise.
 From the repository root with model dependencies installed:
 
 ```console
-python -m harness.profile_activity --repeat 30 --warmup 5
+python -m harness.profile_activity --impl vibe --repeat 30 --warmup 5
 ```
+
+Use `--impl vibe2` to measure the fly-dopamine implementation. The profiler uses
+the same `--impl`, then `FLYBRAIN_IMPL`, then `vibe` build-selection order as the
+workflow. Its metadata identifies the selected implementation and configuration.
+The historical table above measures `vibe` only; it cannot establish `vibe2`
+overhead. Fresh initialization is untrained and uses bundled wiring.
 
 On a CUDA-capable machine with CUDA PyTorch, add `--device cuda`. That profile
 synchronizes at inference boundaries so asynchronous kernel launches are not
@@ -167,7 +175,7 @@ checks live mapping-first delivery, reconnects, a topology refresh, recording
 and identical greedy output after hook removal. Its checked-in reference and
 browser replay provide a review path without loading PyTorch in the browser.
 
-Browser verification on 2026-10-21 used the full untrained CPU model with a
+Historical `vibe` browser verification on 2026-10-21 used the full untrained CPU model with a
 custom `/firing` stream on the Windows/Radeon machine. The WebGPU viewer drew
 1,958 nodes and 19,037 directed edges, with real glomerulus-to-KC and KC-to-MBON
 highlights, mapping-epoch resets, zero rejected messages/undeclared pairs and
