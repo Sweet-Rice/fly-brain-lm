@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { buildGraph } from '../layout.js';
+import { buildGraph, buildSelectionGeometry } from '../layout.js';
 
 const mapping = {
   groups: [{ id: 17, name: 'Output' }, { id: 4, name: 'Input' }, { id: 90, name: 'Empty' }],
@@ -101,4 +101,38 @@ test('bundled recording draws every declared node and edge deterministically', (
   const selfEdges = capture.edges.filter(([a, b]) => a === b).length;
   assert.equal(graph.edges.length, ((19037 - selfEdges) * 3 + selfEdges * 33) * 21);
   assert.deepEqual(graph, buildGraph(capture));
+});
+
+test('buildGraph exposes positions map with coordinates and color for picking', () => {
+  const graph = buildGraph(mapping);
+  assert.ok(graph.positions instanceof Map);
+  assert.equal(graph.positions.size, 3);
+  for (const id of [90001, 6, 2]) {
+    assert.ok(graph.positions.has(id));
+    const pos = graph.positions.get(id);
+    assert.ok(Number.isFinite(pos.x));
+    assert.ok(Number.isFinite(pos.y));
+    assert.equal(pos.color.length, 3);
+    assert.ok(pos.color.every(Number.isFinite));
+  }
+  const emptyGraph = buildGraph({ groups: [], nodes: [], edges: [] });
+  assert.ok(emptyGraph.positions instanceof Map);
+  assert.equal(emptyGraph.positions.size, 0);
+});
+
+test('buildSelectionGeometry generates valid triangles for ring, incident edges, and neighbors', () => {
+  const graph = buildGraph(mapping);
+  const overlay = buildSelectionGeometry(graph, 2);
+  assert.ok(overlay instanceof Float32Array);
+  assert.ok(overlay.length > 0);
+  assert.equal(overlay.length % 21, 0, 'must contain complete triangles');
+  for (let i = 0; i < overlay.length; i += 7) {
+    assert.ok(Number.isFinite(overlay[i]), 'x coordinate must be finite');
+    assert.ok(Number.isFinite(overlay[i + 1]), 'y coordinate must be finite');
+    assert.equal(overlay[i + 6], -1, 'selection overlay vertex must use edgeIndex -1');
+  }
+  const missing = buildSelectionGeometry(graph, 999999);
+  assert.equal(missing.length, 0);
+  const noGraph = buildSelectionGeometry(null, 2);
+  assert.equal(noGraph.length, 0);
 });
