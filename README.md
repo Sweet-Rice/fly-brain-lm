@@ -57,7 +57,7 @@ also download encoding data; replay alone does not load the tokenizer.
 
 - [Initialize a checkpoint](model/README.md). A fresh checkout has bundled wiring,
   but **no checkpoint**: `model/checkpoints/` is gitignored. Do not overwrite an
-  existing trained checkpoint when creating an untrained example.
+  existing trained checkpoint when creating an untrained example. The default build is the `vibe` implementation and writes `model/checkpoints/vibe.pt`; choose `personal` with `--impl personal` or `FLYBRAIN_IMPL=personal`. `vibe2` can also [import trained fly-dopamine weights](model/README.md#vibe2-trained-fly-dopamine-weights) from the private fly-brain-lm repo.
 - [Run terminal chat or the HTTP API](model/serve/README.md). These use a real
   checkpoint and generate a live visualization stream.
 - [Run the tests](test/README.md). Tests use generated wiring and temporary files;
@@ -72,6 +72,9 @@ also download encoding data; replay alone does not load the tokenizer.
 | `harness/` | [Replay options, recordings, and terminal viewer](harness/README.md) |
 | `harness/example/` | [Browser page, connection URLs, and troubleshooting](harness/example/README.md) |
 | `model/` | [Checkpoint initialization and model prerequisites](model/README.md) |
+| `model/vibe/` | [Model implementations and selection](model/README.md) |
+| `model/personal/` | [Writing your own model](model/README.md#personal-model) |
+| `model/vibe2/` | [fly-dopamine port and trained-weight import](model/README.md#vibe2-trained-fly-dopamine-weights) |
 | `model/serve/` | [Terminal chat, HTTP API, and live visualization](model/serve/README.md) |
 | `data/` | [Bundled wiring, optional downloads, and token data](data/README.md) |
 | `test/` | [Test command, coverage, and runtime requirements](test/README.md) |

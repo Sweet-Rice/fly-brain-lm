@@ -20,7 +20,9 @@ download unless that data is cached.
 | File | Behavior covered |
 |---|---|
 | `test/test_data.py` | GPT-2 story encoding, literal EOT handling, uint16 binary round trip, and next-token batches |
-| `test/test_model.py` | Sparse address codes, masked gradients, memory, causality, step/forward agreement, greedy generation, checkpoint loading, and one-batch optimization |
+| `test/test_vibe_model.py` | Vibe implementation: sparse address codes, masked gradients, memory, causality, step/forward agreement, greedy generation, checkpoint loading (including `"impl"`), and one-batch optimization |
+| `test/test_vibe2_model.py` | vibe2 (fly-dopamine) implementation: step/forward agreement, logits invariant under the importer's KC permutation, one KC-code output per processed token during `stream`, alpha/beta dopamine cap, and checkpoint loading |
+| `test/test_model_registry.py` | Implementation selection (`--impl`, `FLYBRAIN_IMPL`, default `vibe`), legacy checkpoints without `"impl"`, checkpoint dispatch to a second implementation, and rejection of unknown implementations or models missing the serving contract |
 | `test/test_serve.py` | Model listing, completions, chat, SSE output, and request errors against a real local HTTP server |
 | `test/test_viz_stream.py` | Exact model-block topology and active-KC routing, schema-valid deterministic export across checkpoint round trips, invalid topology rejection, live streaming and recording, joins/reconnects, refreshed topology epochs, empty steps, and deterministic backpressure/drop recovery |
 | `test/test_protocol_contract.py` | Portable v1 JSON Schemas, valid lifecycle fixture, invalid receiver cases, mapping epochs, and semantic id/reference constraints |

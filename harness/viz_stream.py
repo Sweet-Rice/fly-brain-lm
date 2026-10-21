@@ -10,10 +10,10 @@ Implements "Fly Brain Visualization Stream Spec" version 1:
 
 What the mapping describes (one block of the model, default block 0):
   groups  0 Glomerulus   1 KC_gamma   2 KC_alphabeta   3 KC_alphaprime_betaprime   4 MBON
-  nodes   glomeruli 0..G-1, then KCs G..G+K-1 (wiring order), then the 15 MBON compartments
+  nodes   glomeruli 0..G-1, then KCs G..G+K-1 (wiring order), then the 3 x heads_per_lobe MBON compartments
   edges   glomerulus -> KC   the connectome wiring (9592)
-          KC -> MBON         each KC to the 5 compartments of its lobe (the heads that read/write it)
-What fires at a step (one token): for every active KC (the top-94), all of its glomerulus -> KC
+          KC -> MBON         each KC to the heads_per_lobe compartments of its lobe (the heads that read/write it)
+What fires at a step (one token): for every active KC (code > 0), all of its glomerulus -> KC
 edges and all of its KC -> MBON edges.
 
 Serving a model: stream_model() starts one long-lived stream per model process. Every harness that
@@ -42,22 +42,23 @@ class FlyGraph:
         """Rebuild atomically from the live model; publish the returned mapping before resuming."""
         import torch
 
-        if type(self._block) is not int or not 0 <= self._block < len(self._model.blocks):
+        if type(self._block) is not int or self._block < 0:
             raise ValueError("block must identify an existing model block")
-        selected = self._model.blocks[self._block]
-        address, memory = selected.addr, selected.mem
-        if address.mask.ndim != 2 or address.mask.dtype != torch.bool:
+        try:
+            mask, lobes = self._model.kc_topology(self._block)
+        except IndexError:
+            raise ValueError("block must identify an existing model block") from None
+        if not torch.is_tensor(mask) or mask.ndim != 2 or mask.dtype != torch.bool:
             raise ValueError("address mask must be a two-dimensional boolean tensor")
-        mask = address.mask.detach().cpu()
+        mask = mask.detach().cpu()
         K, G = mask.shape
-        if address.theta.shape != mask.shape or address.receptors.out_features != G:
-            raise ValueError("address mask must match KC weights and the glomerulus projection")
-        heads_per_lobe = memory.hpl
+        heads_per_lobe = self._model.heads_per_lobe
         if type(heads_per_lobe) is not int or heads_per_lobe < 1:
             raise ValueError("heads per lobe must be a positive integer")
+        if len(lobes) != 3:
+            raise ValueError("lobe membership must name exactly three lobes")
         cls = [None] * K
-        for lobe in range(3):
-            members = getattr(memory, f"lobe{lobe}")
+        for lobe, members in enumerate(lobes):
             if members.ndim != 1:
                 raise ValueError("lobe membership must be one-dimensional")
             for k in members.detach().cpu().tolist():
@@ -310,7 +311,7 @@ class VizStream:
 
 
 def attach(model, stream, graph, block=0):
-    """Fire one step per token that passes through `block`'s address code. Returns the hook handle
+    """Fire one step per token that passes through `block`'s KC code (model.kc_code_module(block)). Returns the hook handle
     (call .remove() to detach). Uses batch element 0."""
     def hook(module, inputs, code):                          # code: (B, T, K)
         for t in range(code.shape[1]):
@@ -319,7 +320,7 @@ def attach(model, stream, graph, block=0):
                 stream.fire(graph.fire_pairs(active))
             else:
                 stream.skip()
-    return model.blocks[block].addr.register_forward_hook(hook)
+    return model.kc_code_module(block).register_forward_hook(hook)
 
 
 def stream_model(model, wiring, block=0, **server):

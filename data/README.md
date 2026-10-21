@@ -84,7 +84,7 @@ cp data/connectome/wiring.npz /tmp/wiring.before.npz   # keep a copy; restore wi
 ```
 
 Python API (read-only use): `from data.build_wiring import load_wiring; w = load_wiring()`
-returns a `model.model.Wiring` (torch tensors). It reads `data/connectome/wiring.npz` relative to the
+returns a `model.wiring.Wiring` (torch tensors). It reads `data/connectome/wiring.npz` relative to the
 current directory.
 
 ### `search_wiring_rules.py` (search; may create the edge cache)
