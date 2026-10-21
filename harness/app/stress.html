@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FlyBrain real-topology stress benchmark</title>
+<style>
+body{font:16px system-ui;margin:24px;background:#101923;color:#ebf5ff}input,button{font:inherit;padding:8px}label{display:block;margin:12px 0}canvas{width:100%;height:430px;background:#0a1219}pre{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#83caff}
+</style>
+<h1>Real-topology stress benchmark</h1>
+<p>Developer benchmark using the bundled 1,958-node, 19,037-edge model capture. Traffic timing is synthetic.</p>
+<label>App modules directory <input id="modules" value="./" size="42"></label>
+<button id="benchmark">Run benchmark</button>
+<button id="sustained">Run sustained stress</button>
+<button id="stop" disabled>Stop</button>
+<p id="status" role="status">Ready. A benchmark runs 120 animation frames; sustained stress runs 600 frames with 10 fires per frame and a replacement every 30 frames.</p>
+<canvas id="graph" width="1100" height="430" aria-label="Stress benchmark graph"></canvas>
+<pre id="results" aria-label="Benchmark results"></pre>
+<p>GPU fence measurements include browser/driver scheduling and are not GPU timestamp queries. Buffer bytes count explicit buffers, excluding driver caches and the canvas surface.</p>
+<p><a href="./">Open the harness</a></p>
+<script type="module" src="stress.js"></script>
+</html>
