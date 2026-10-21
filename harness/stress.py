@@ -83,10 +83,11 @@ def profile(module=viz_stream, events=2000):
 
 
 def model_profile(events=2000):
-    """Measure the real default model's mapping and CPU hook extraction, without full inference."""
+    """Measure the legacy capture's model mapping and CPU hook extraction, without full inference."""
     import numpy as np
     import torch
-    from model.model import Config, FlyLM, Wiring
+    from model.model import LEGACY_IMPL, build_model, implementation
+    from model.wiring import Wiring
 
     torch.set_num_threads(1)
     torch.manual_seed(0)
@@ -95,8 +96,8 @@ def model_profile(events=2000):
         wiring = Wiring(torch.from_numpy(source["mask"]).bool(),
                         torch.from_numpy(source["theta"]).float(),
                         torch.from_numpy(source["kc_class"]).long())
-    config = Config.from_wiring(wiring)
-    model = FlyLM(config, wiring).eval()
+    model = build_model(wiring, LEGACY_IMPL).eval()
+    config = implementation(LEGACY_IMPL).export_config(model)
     graph = viz_stream.FlyGraph(model)
     captured, _ = fixture()
     refresh, hook, gather = [], [], []
@@ -105,7 +106,7 @@ def model_profile(events=2000):
         graph.refresh()
         refresh.append((time.perf_counter() - start) * 1000)
     with torch.inference_mode():
-        code = model.blocks[0].addr(torch.randn(1, 1, config.d_model))
+        code = model.kc_code_module(0)(torch.randn(1, 1, config["d_model"]))
     for _ in range(events):
         start = time.perf_counter()
         active = (code[0, 0].detach() > 0).nonzero().flatten().tolist()
@@ -115,7 +116,7 @@ def model_profile(events=2000):
         gather.append((time.perf_counter() - start) * 1000)
     return {
         "wiring": str(path), "torch": torch.__version__, "threads": torch.get_num_threads(),
-        "config": {name: getattr(config, name) for name in
+        "config": {name: config[name] for name in
                    ("vocab_size", "d_model", "n_layer", "n_glom", "n_kc", "top_k", "heads_per_lobe")},
         "mapping_exactly_matches_capture": graph.mapping == captured,
         "mapping_groups_and_nodes_match_capture": all(graph.mapping[key] == captured[key] for key in ("groups", "nodes")),
@@ -125,7 +126,7 @@ def model_profile(events=2000):
         "positive_kcs": len(active), "fire_pairs": len(pairs), "events": events,
         "mapping_refresh": timing(refresh), "cpu_hook_extraction": timing(hook),
         "pair_gather": timing(gather),
-        "note": "Full default untrained CPU model, actual connectome wiring, block-0 address output. "
+        "note": "Full legacy vibe untrained CPU model, actual connectome wiring, block-0 address output. "
                 "Hook extraction repeats one code tensor; excludes full token inference, training, and GPU-to-CPU transfer.",
     }
 
@@ -134,7 +135,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, help="Also profile a saved viz_stream.py")
     parser.add_argument("--events", type=int, default=2000)
-    parser.add_argument("--model", action="store_true", help="Also profile the actual default CPU model's mapping and hook")
+    parser.add_argument("--model", action="store_true", help="Also profile the legacy capture's CPU model mapping and hook")
     parser.add_argument("--serve", action="store_true", help="Serve synthetic top-94 activity for browser checks")
     parser.add_argument("--rate", type=float, default=60)
     parser.add_argument("--seconds", type=float, default=30)

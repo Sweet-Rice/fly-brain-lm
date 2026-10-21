@@ -5,7 +5,6 @@ at inference boundaries; the enabled hook's CPU transfer and extraction are incl
 """
 import argparse
 from contextlib import ExitStack
-from dataclasses import asdict
 import json
 import platform
 from pathlib import Path
@@ -21,15 +20,18 @@ from harness.workflow import ROOT, SEED
 PROMPT_IDS = [7454, 2402, 257, 640]
 
 
-def profile_activity(repeat=30, warmup=5, device="cpu"):
-    """Compare identical four-token forwards of the default real-wiring model."""
+def profile_activity(repeat=30, warmup=5, device="cpu", impl=None):
+    """Compare identical four-token forwards of the selected real-wiring model."""
     if type(repeat) is not int or repeat < 1 or type(warmup) is not int or warmup < 0:
         raise ValueError("repeat must be positive and warmup must be nonnegative integers")
     if device not in ("cpu", "cuda"):
         raise ValueError("device must be cpu or cuda")
     import torch
     from data.build_wiring import load_wiring
-    from model.model import Config, FlyLM, TEMPORARY_NOTE
+    from model.model import build_model, implementation, selected_impl
+
+    impl = selected_impl(impl)
+    impl_module = implementation(impl)
 
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable; no GPU measurements were made")
@@ -39,7 +41,7 @@ def profile_activity(repeat=30, warmup=5, device="cpu"):
         with torch.random.fork_rng(devices=[torch.cuda.current_device()] if device == "cuda" else []):
             torch.random.default_generator.manual_seed(SEED)
             wiring = load_wiring(ROOT / "data/connectome/wiring.npz")
-            model = FlyLM(Config.from_wiring(wiring), wiring).to(device).eval()
+            model = build_model(wiring, impl).to(device).eval()
             graph = FlyGraph(model)
             inputs = torch.tensor([PROMPT_IDS], device=device)
             results = {}
@@ -94,7 +96,8 @@ def profile_activity(repeat=30, warmup=5, device="cpu"):
             for result in results.values():
                 result["p50_overhead_percent"] = 100 * (result["p50_ms"] / baseline - 1)
             return {
-                "model_note": TEMPORARY_NOTE, "config": asdict(model.cfg), "seed": SEED,
+                "impl": impl, "model_note": impl_module.NOTE,
+                "config": impl_module.export_config(model), "seed": SEED,
                 "prompt_ids": PROMPT_IDS, "repeat": repeat, "warmup": warmup,
                 "device": device, "device_name": torch.cuda.get_device_name() if device == "cuda" else platform.processor(),
                 "torch": torch.__version__, "python": platform.python_version(), "platform": platform.platform(),
@@ -115,10 +118,12 @@ def main():
     parser.add_argument("--repeat", type=int, default=30)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    from model.model import IMPLEMENTATIONS
+    parser.add_argument("--impl", choices=IMPLEMENTATIONS, help="Model implementation; otherwise FLYBRAIN_IMPL or registry default")
     args = parser.parse_args()
     if args.repeat < 1 or args.warmup < 0:
         parser.error("repeat must be positive and warmup must be nonnegative")
-    print(json.dumps(profile_activity(args.repeat, args.warmup, args.device), indent=2))
+    print(json.dumps(profile_activity(args.repeat, args.warmup, args.device, args.impl), indent=2))
 
 
 if __name__ == "__main__":

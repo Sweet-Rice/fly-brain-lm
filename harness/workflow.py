@@ -4,8 +4,8 @@ Without --serve, check reconnect, mapping replacement, recording and hook remova
 With --serve, keep generating actual model activity for the browser until Ctrl-C.
 """
 import argparse
-from dataclasses import asdict
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import platform
@@ -47,17 +47,17 @@ def _receive_fires(ws, edges, start, count):
         assert pairs and len(pairs) == len(set(pairs)) and set(pairs) <= edges
 
 
-def run_workflow(record=None, *, serve=False, port=0, path="/stream"):
+def run_workflow(record=None, *, impl=None, serve=False, port=0, path="/stream"):
     """Return provenance after a checked smoke run or a cleanly interrupted browser demo."""
     import tiktoken
     import torch
 
     from data.build_wiring import load_wiring
-    from model.model import Config, FlyLM, TEMPORARY_NOTE
+    from model.model import build_model, implementation, selected_impl
 
     if record is None and not serve:
         with tempfile.TemporaryDirectory(prefix="flybrain-workflow-") as directory:
-            return run_workflow(Path(directory) / "workflow.ndjson", port=port, path=path)
+            return run_workflow(Path(directory) / "workflow.ndjson", impl=impl, port=port, path=path)
     record = Path(record) if record is not None else None
     metadata_path = Path(str(record) + ".metadata.json") if record else None
     if record:
@@ -70,7 +70,10 @@ def run_workflow(record=None, *, serve=False, port=0, path="/stream"):
     torch.manual_seed(SEED)
     wiring_path = ROOT / "data/connectome/wiring.npz"
     wiring = load_wiring(wiring_path)
-    model = FlyLM(Config.from_wiring(wiring), wiring).eval()
+    name = selected_impl(impl)
+    impl_module = implementation(name)
+    model = build_model(wiring, name).eval()
+    config = impl_module.export_config(model)
     encoding = tiktoken.get_encoding("gpt2")
     prompt_ids = encoding.encode(PROMPT)
     graph = FlyGraph(model)
@@ -105,11 +108,11 @@ def run_workflow(record=None, *, serve=False, port=0, path="/stream"):
     try:
         stream.start()
         print(f"visualization stream: {stream.url}", flush=True)
-        print(f"UNTRAINED seed {SEED}: {model.cfg.n_layer} blocks, d_model={model.cfg.d_model}; "
+        print(f"UNTRAINED {name} seed {SEED}: {config['n_layer']} blocks, d_model={config['d_model']}; "
               f"{len(graph.mapping['nodes'])} nodes, {len(graph.mapping['edges'])} edges", flush=True)
         if serve:
             # Pace the real address-hook calls, including prompt tokens; never manufacture fires.
-            pace_hook = model.blocks[0].addr.register_forward_hook(lambda *_: time.sleep(0.1))
+            pace_hook = model.kc_code_module(0).register_forward_hook(lambda *_: time.sleep(0.1))
             try:
                 while True:
                     generate()
@@ -158,12 +161,17 @@ def run_workflow(record=None, *, serve=False, port=0, path="/stream"):
     if stream.recording_error:
         raise RuntimeError("workflow recording failed") from stream.recording_error
     assert stream.dropped == stream.recording_dropped == 0, "the workflow lost activity"
-    config = asdict(model.cfg)
-    config["half_life_init"] = list(config["half_life_init"])
+    source_paths = {
+        "harness/workflow.py", "harness/viz_stream.py", "model/model.py", "model/wiring.py",
+        "data/build_wiring.py",
+        Path(inspect.getfile(type(model))).relative_to(ROOT).as_posix(),
+        Path(impl_module.__file__).relative_to(ROOT).as_posix(),
+    }
     metadata = {
         "generator": "python -m harness.workflow",
         "mode": "serve" if serve else "smoke",
-        "model_note": TEMPORARY_NOTE,
+        "impl": name,
+        "model_note": f"untrained initialization; {impl_module.NOTE}",
         "seed": SEED,
         "device": "cpu",
         "torch_threads": 1,
@@ -188,8 +196,7 @@ def run_workflow(record=None, *, serve=False, port=0, path="/stream"):
         "wiring_sha256": _sha256(wiring_path),
         "source_hash_newlines": "lf",
         "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
-                          for name in (
-            "harness/workflow.py", "harness/viz_stream.py", "model/model.py", "data/build_wiring.py")},
+                          for name in sorted(source_paths)},
         "recording_sha256": _sha256(record) if record else None,
     }
     if metadata_path:
@@ -203,12 +210,13 @@ def run_workflow(record=None, *, serve=False, port=0, path="/stream"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--impl", help="model implementation (else FLYBRAIN_IMPL, else registry default)")
     parser.add_argument("--serve", action="store_true", help="keep generating for the browser until Ctrl-C")
     parser.add_argument("--port", type=int, default=0, help="loopback WebSocket port (0 chooses a free port)")
     parser.add_argument("--path", default="/stream", help="WebSocket path")
     parser.add_argument("--record", type=Path, help="new NDJSON file; writes a .metadata.json sidecar")
     args = parser.parse_args()
-    run_workflow(args.record, serve=args.serve, port=args.port, path=args.path)
+    run_workflow(args.record, impl=args.impl, serve=args.serve, port=args.port, path=args.path)
 
 
 if __name__ == "__main__":

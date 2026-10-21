@@ -17,7 +17,8 @@ def test_real_topology_stress_fixture_is_deterministic_and_declared():
     assert len({node for edge in first for node in edge if node in kcs}) == 94
 
 
-def test_stress_capture_matches_full_default_model_mapping():
+def test_stress_capture_matches_full_default_model_mapping(monkeypatch):
+    monkeypatch.setenv("FLYBRAIN_IMPL", "vibe2")
     import pytest
     torch = pytest.importorskip("torch")
     threads = torch.get_num_threads()

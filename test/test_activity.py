@@ -9,7 +9,8 @@ import pytest
 import torch
 
 from harness.viz_stream import FlyGraph, VizStream, attach
-from model.model import Config, FlyLM, Wiring
+from model.vibe.model import Config, FlyLM
+from model.wiring import Wiring
 
 
 @pytest.fixture
