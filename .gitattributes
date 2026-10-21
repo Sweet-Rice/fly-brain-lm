@@ -1,0 +1,3 @@
+# Reference recording digests must survive a checkout on any platform.
+harness/recordings/*.ndjson text eol=lf
+.github/scripts/*.sh text eol=lf

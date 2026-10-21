@@ -13,6 +13,30 @@ const mapping = {
 };
 const send = (receiver, message) => receiver.process(JSON.stringify(message));
 
+test('real-model review recording accepts both epochs and every declared fire', () => {
+  const recording = new URL('../../recordings/reference.ndjson', import.meta.url);
+  const metadata = JSON.parse(readFileSync(new URL(`${recording.href}.metadata.json`), 'utf8'));
+  const receiver = new ProtocolReceiver();
+  const epochs = [];
+  for (const raw of lines(readFileSync(recording, 'utf8'))) {
+    const event = receiver.process(raw);
+    if (event.action === 'replace_mapping') epochs.push([]);
+    else {
+      assert.equal(event.action, 'accept_fire');
+      assert.deepEqual(event.dropped_pairs, []);
+      assert.ok(event.pairs.length > 0);
+      epochs.at(-1).push(event.t);
+    }
+  }
+  assert.deepEqual(epochs, [Array.from({ length: 33 }, (_, t) => t), Array.from({ length: 11 }, (_, t) => t)]);
+  assert.equal(epochs.length, metadata.epochs);
+  assert.equal(epochs.flat().length, metadata.steps);
+  assert.equal(receiver.epoch, metadata.epochs - 1);
+  assert.equal(receiver.lastT, metadata.last_epoch_steps - 1);
+  assert.equal(receiver.mapping.nodes.length, metadata.topology.nodes);
+  assert.equal(receiver.mapping.edges.length, metadata.topology.edges);
+});
+
 for (const scenario of JSON.parse(fixture('invalid-cases.json')).cases) {
   test(`contract fixture: ${scenario.id}`, () => {
     const receiver = new ProtocolReceiver();
