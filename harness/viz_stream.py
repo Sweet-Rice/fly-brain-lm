@@ -21,6 +21,7 @@ connects, whenever it connects, gets the mapping first; then each message the mo
 fires one step per token. t keeps counting across messages.
 """
 import asyncio
+from collections import deque
 import json
 import queue
 import threading
@@ -171,11 +172,17 @@ class VizStream:
                  record_queue_size=256):
         if host != LOOPBACK_HOST:
             raise ValueError(f"visualization stream is loopback-only; host must be {LOOPBACK_HOST!r}")
+        if type(queue_size) is not int or queue_size < 1:
+            raise ValueError("queue_size must be a positive integer")
         self.host, self.port, self.path, self.queue_size = LOOPBACK_HOST, port, path, queue_size
         self.t = 0                       # next step index; restarts with each mapping
         self.dropped = 0                 # fire messages dropped for slow harnesses
         self.harnesses_seen = 0
         self._mapping_msg = None
+        self._server_mapping_msg = None  # only published mappings may precede queued fires on a new socket
+        self._pending = deque()
+        self._handoff_lock = threading.Lock()
+        self._drain_scheduled = False
         self._clients = set()            # one asyncio.Queue per connected harness (touched only on the loop thread)
         self._n_clients = 0
         self._recorder = _NDJSONRecorder(record, record_queue_size) if record else None
@@ -248,8 +255,33 @@ class VizStream:
             (self._recorder.mapping if mapping else self._recorder.fire)(msg)
 
     def _call(self, fn, *args):
-        if self._loop and not self._closed:
-            self._loop.call_soon_threadsafe(fn, *args)      # hands off to the server thread; never waits
+        if not self._loop or self._closed:
+            return
+        with self._handoff_lock:
+            if fn == self._broadcast_mapping:
+                self._pending.clear()                    # queued fires belong to the old mapping
+            elif len(self._pending) >= self.queue_size:
+                self.dropped += self._n_clients
+                return
+            self._pending.append((fn, args))
+            if not self._drain_scheduled:
+                self._drain_scheduled = True
+                self._loop.call_soon_threadsafe(self._drain_pending)
+
+    def _drain_pending(self):
+        # Yield after a bounded batch so a fast producer cannot starve socket writers.
+        for _ in range(self.queue_size):
+            with self._handoff_lock:
+                item = self._pending.popleft() if self._pending else None
+            if item is None:
+                break
+            fn, args = item
+            fn(*args)
+        with self._handoff_lock:
+            if self._pending:
+                self._loop.call_soon(self._drain_pending)
+            else:
+                self._drain_scheduled = False
 
     # ---- server thread ------------------------------------------------------------------------
     def _run(self):
@@ -262,8 +294,9 @@ class VizStream:
     async def _main(self):
         from websockets.asyncio.server import serve
         self._loop = asyncio.get_running_loop()
+        self._server_mapping_msg = self._mapping_msg
         self._stop = self._loop.create_future()
-        async with serve(self._handler, self.host, self.port) as server:
+        async with serve(self._handler, self.host, self.port, close_timeout=1) as server:
             self.port = server.sockets[0].getsockname()[1]  # real port when 0 was requested
             self._ready.set()
             await self._stop
@@ -274,21 +307,34 @@ class VizStream:
             await conn.close(1008, f"unknown path; use {self.path}")
             return
         q = asyncio.Queue(self.queue_size)
-        if self._mapping_msg:
-            q.put_nowait(self._mapping_msg)                  # mapping is always the first message
+        if self._server_mapping_msg:
+            q.put_nowait(self._server_mapping_msg)           # mapping is always the first message
         self._clients.add(q)
         self._n_clients = len(self._clients)
         self.harnesses_seen += 1
+
+        async def write():
+            try:
+                while True:
+                    await conn.send(await q.get())
+            except ConnectionClosed:
+                pass
+
+        writer = asyncio.create_task(write())
+        closed = asyncio.create_task(conn.wait_closed())
         try:
-            while True:
-                await conn.send(await q.get())
-        except ConnectionClosed:
-            pass
+            await asyncio.wait((writer, closed), return_when=asyncio.FIRST_COMPLETED)
+            if writer.done():
+                await writer
         finally:
+            writer.cancel()
+            closed.cancel()
+            await asyncio.gather(writer, closed, return_exceptions=True)
             self._clients.discard(q)
             self._n_clients = len(self._clients)
 
     def _broadcast_mapping(self, msg):
+        self._server_mapping_msg = msg
         for q in self._clients:
             while not q.empty():                             # a new mapping makes queued fires meaningless
                 q.get_nowait()
@@ -303,7 +349,7 @@ class VizStream:
 
     async def _shutdown(self, timeout):
         end = self._loop.time() + timeout
-        while any(not q.empty() for q in self._clients) and self._loop.time() < end:
+        while (self._pending or any(not q.empty() for q in self._clients)) and self._loop.time() < end:
             await asyncio.sleep(0.02)
         await asyncio.sleep(0.1)                             # let the last send finish
         self._stop.set_result(None)
