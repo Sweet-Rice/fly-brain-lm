@@ -23,6 +23,8 @@ download unless that data is cached.
 |---|---|
 | `test/test_data.py` | GPT-2 story encoding, literal EOT handling, uint16 binary round trip, and next-token batches |
 | `test/test_model.py` | Sparse address codes, masked gradients, memory, causality, step/forward agreement, greedy generation, checkpoint loading, and one-batch optimization |
+| `test/test_activity.py` | Exact positive-KC routes from real model outputs, batch-0/token/block boundaries, determinism, empty steps, unchanged logits and gradients, released activations, idle skips, and one host mask copy per observed address output |
+| `test/test_activity_profile.py` | Full default real-model overhead profile with disabled/idle/recording/live modes, identical logits, real consumers, zero drops, restored thread/RNG state and explicit unavailable-CUDA failure |
 | `test/test_serve.py` | Model listing, completions, chat, SSE output, and request errors against a real local HTTP server |
 | `test/test_viz_stream.py` | Exact model-block topology and active-KC routing, schema-valid deterministic export across checkpoint round trips, invalid topology rejection, live streaming and recording, joins/reconnects, refreshed topology epochs, empty steps, and deterministic backpressure/drop recovery |
 | `test/test_protocol_contract.py` | Portable v1 JSON Schemas, valid lifecycle fixture, invalid receiver cases, mapping epochs, and semantic id/reference constraints |

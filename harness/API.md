@@ -79,6 +79,11 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
 - **Order.** Each harness's fires arrive in `t` order (one FIFO queue per harness).
 - **Within a fire,** the order of `pairs` carries no meaning.
 
+The exact model-side rule, including what input/output edges mean, token timing,
+opt-in attachment and GPU synchronization, is documented in
+[`ACTIVITY.md`](ACTIVITY.md). A v1 fire indicates a selected KC path; it does
+not report a measured edge current, activation strength, or memory update size.
+
 ## 6. Current v1 graph content (informative; may change without a version bump)
 
 - **Groups** (`GROUP_NAMES`): 0 Glomerulus, 1 KC_gamma, 2 KC_alphabeta, 3 KC_alphaprime_betaprime, 4 MBON.
@@ -88,6 +93,7 @@ Reading it: edge `[0,2]` is glomerulus 0 to KC node 2 (`KC_gamma`), and edge `[2
   - MBON compartments: ids `G+K..G+K+3·heads_per_lobe-1`, group 4. Compartment `c` belongs to lobe `c // heads_per_lobe`; the head count comes from the selected block's memory.
 - **Edges** (`FlyGraph.kc_pairs`, concatenated in KC row order): for KC `k`, one glomerulus-to-KC edge for each true entry of the model's `addr.mask[k]` (ascending glomerulus id), then one KC-to-compartment edge for each head of its lobe (ascending compartment id). Learned strength values do not add or remove declared edges.
 - **A fire** (`attach`, `FlyGraph.fire_pairs`): all input and output edges of the active KCs, concatenated in ascending KC-index order by `attach`. A KC is active when its address code is positive (`code > 0`). `FlyAddress.forward` retains the top `top_k` values (94 in the current checkpoint) and zeroes the rest, so at most 94 KCs are active.
+- **Connection classes.** A declared glomerulus-to-KC edge fires exactly when its destination KC is active; a declared KC-to-MBON edge fires exactly when its source KC is active. This applies to all three KC lobes. No separate glomerulus threshold, learned-weight threshold, memory-value threshold or animation-driven selection is applied.
 - **Counts** for `model/checkpoints/init.pt` with `heads_per_lobe` 5: groups 54 / 663 / 874 / 352 / 15, so 54 + 1889 + 15 = 1958 nodes. Edges are 9592 + 9445 = 19037. The 9445 is 1889 × 5. Pairs per fire equal the sum, over active KCs, of (glomerulus inputs + 5); live runs observed roughly 1100–1200 pairs. These counts come from `FlyGraph.__init__` and the current checkpoint, not the wire contract.
 - Harnesses MUST derive layout from the mapping, never from these numbers.
 
@@ -160,6 +166,19 @@ The output is a one-line mapping-only recording. Choose a scratch output path; a
 - The selected memory module's `hpl`: positive integer heads per lobe. This determines the MBON compartment count and KC output edges.
 
 **Token timing.** `FlyLM.stream` runs one `step` per prompt token and feeds each yielded token back only when generation resumes for another token. The final yielded token is not fed back: a model stop token, token-limit completion, or a consumer stopping iteration can end generation. For `P` prompt tokens and `n ≥ 1` yielded tokens this gives `P + n - 1` steps. `Engine.run` truncates the prompt to its last `ctx` tokens. `ask.reply` excludes EOT from its printed generated-token count, whereas `Engine.run` counts it; use ask's printed `steps t=...` range to compare fires. The observed no-EOT reply `[4 prompt + 8 generated tokens; steps t=0..10]` produced 11 fires.
+
+**Attachment and cost.** The model contains no streaming calls. Call `attach`
+explicitly, or use the existing opt-in `stream_model` adapter; HTTP serving's
+`--no-viz` bypasses that adapter. Removing the returned `attach` handle removes
+the hook. An attached hook with no healthy recorder or connected harness only
+advances the step counter: it skips tensor extraction, pair gathering and JSON.
+An observed hook detaches the address code before converting positive indices
+to Python integers, returns no replacement tensor and retains no activation
+history. It copies one detached boolean activity mask to the CPU per observed
+address output, then extracts integer indices on the CPU. On CUDA, this host
+transfer can synchronize the model thread; bounded background socket/file I/O
+does not remove that cost. Unobserved outputs perform no activity tensor copy.
+See [activity overhead and its measurement limits](ACTIVITY.md#instrumentation-cost).
 
 ### 8.3 Migration checklist
 

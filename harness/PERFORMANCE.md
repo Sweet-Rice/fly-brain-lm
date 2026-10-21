@@ -4,6 +4,10 @@ Measured on **2026-10-21**, comparing `a6fedaa` with the issue #21 changes.
 [Raw stage measurements](stress-results.json) accompany these results. Timings
 are observations on this machine, not CI thresholds or guaranteed capacity.
 
+For the current firing rule and a full-model comparison of disabled, idle,
+recording and live instrumentation, see [model activity](ACTIVITY.md#full-inference-measurement).
+The stage-only timings below predate the issue #3 host-mask extraction change.
+
 ## Target and environment
 
 - Actual checked-in connectome: **1,958 nodes, 19,037 directed edges**, five groups.

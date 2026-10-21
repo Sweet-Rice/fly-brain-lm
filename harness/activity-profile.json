@@ -1,0 +1,80 @@
+{
+  "model_note": "TEMPORARY scaffold: untrained, placeholder architecture details",
+  "config": {
+    "vocab_size": 50257,
+    "d_model": 384,
+    "n_layer": 12,
+    "n_glom": 54,
+    "n_kc": 1889,
+    "top_k": 94,
+    "heads_per_lobe": 5,
+    "d_head": 48,
+    "conv_k": 4,
+    "half_life_init": [
+      3.0,
+      69.0,
+      14.0
+    ]
+  },
+  "seed": 0,
+  "prompt_ids": [
+    7454,
+    2402,
+    257,
+    640
+  ],
+  "repeat": 30,
+  "warmup": 5,
+  "device": "cpu",
+  "device_name": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+  "torch": "2.14.1+cpu",
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "threads": 1,
+  "nodes": 1958,
+  "edges": 19037,
+  "modes": {
+    "disabled": {
+      "p50_ms": 105.36600000341423,
+      "p95_ms": 132.14229996083304,
+      "samples": 30,
+      "identical_logits": true,
+      "steps": 0,
+      "network_dropped": 0,
+      "recording_dropped": 0,
+      "p50_overhead_percent": 0.0
+    },
+    "idle": {
+      "p50_ms": 112.68640001071617,
+      "p95_ms": 133.06889997329563,
+      "samples": 30,
+      "identical_logits": true,
+      "steps": 140,
+      "network_dropped": 0,
+      "recording_dropped": 0,
+      "p50_overhead_percent": 6.947592209123177
+    },
+    "recording": {
+      "p50_ms": 113.58390000532381,
+      "p95_ms": 128.25429998338223,
+      "samples": 30,
+      "identical_logits": true,
+      "steps": 140,
+      "network_dropped": 0,
+      "recording_dropped": 0,
+      "recording_lines": 141,
+      "p50_overhead_percent": 7.799385002413772
+    },
+    "live": {
+      "p50_ms": 112.80505001195706,
+      "p95_ms": 139.96570004383102,
+      "samples": 30,
+      "identical_logits": true,
+      "steps": 140,
+      "network_dropped": 0,
+      "recording_dropped": 0,
+      "p50_overhead_percent": 7.060199692786839
+    }
+  },
+  "note": "Four-token forward, batch 1, no autograd; model setup, mapping, equality checks and socket receipt excluded. Recording and socket writers run concurrently. CUDA synchronizes at each inference boundary; the enabled hook also copies its positivity mask to CPU once per address output, then extracts indices on CPU. Negative overhead is measurement noise; timings are not CI thresholds."
+}
