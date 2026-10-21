@@ -66,15 +66,12 @@ test('uploads geometry once, draws edges before nodes, and updates only the came
   s.renderer.destroy();
 });
 
-test('replacement changes the complete scene and retires old buffers after submitted work', async () => {
+test('replacement changes the complete scene and immediately destroys unused buffer handles', () => {
   const s = setup();
   s.renderer.setGraph(graph());
   s.renderer.setGraph(graph(2, 1));
   s.renderer.draw(s.pass, camera);
   assert.deepEqual(s.calls, [s.buffers[4], 6, s.buffers[5], 3]);
-  assert.equal(s.buffers[1].destroyed, 0);
-  s.completions[0].resolve();
-  await Promise.resolve();
   assert.equal(s.buffers[1].destroyed, 1);
   assert.equal(s.buffers[2].destroyed, 1);
   assert.equal(s.buffers[3].destroyed, 1);
@@ -126,24 +123,15 @@ test('upload failure releases both new buffers and preserves the previous scene'
   s.renderer.destroy();
 });
 
-test('retirement waits for each relevant queue boundary and survives device loss', async () => {
+test('repeated replacement retains only current buffers without accumulating retirement promises', () => {
   const s = setup();
-  s.renderer.setGraph(graph());
-  s.renderer.setGraph(graph());
-  s.renderer.setGraph(graph());
-  assert.equal(s.completions.length, 1);
-  s.completions[0].resolve();
-  await Promise.resolve();
-  assert.equal(s.buffers[1].destroyed, 1);
-  assert.equal(s.buffers[4].destroyed, 0);
-  assert.equal(s.completions.length, 2);
-  s.completions[1].reject(new Error('device lost'));
-  await Promise.resolve();
-  assert.equal(s.buffers[4].destroyed, 1);
+  for (let index = 0; index < 1000; index++) s.renderer.setGraph(graph());
+  assert.equal(s.completions.length, 0);
+  assert.equal(s.buffers.filter(buffer => !buffer.destroyed).length, 4);
   s.renderer.destroy();
 });
 
-test('destroy is idempotent and releases pending, active, and uniform buffers exactly once', async () => {
+test('destroy is idempotent and releases active and uniform buffers exactly once', () => {
   const s = setup();
   s.renderer.setGraph(graph());
   s.renderer.setGraph(graph());
@@ -152,8 +140,6 @@ test('destroy is idempotent and releases pending, active, and uniform buffers ex
   s.renderer.draw(s.pass, camera);
   assert.deepEqual(s.calls, []);
   assert.throws(() => s.renderer.setGraph(graph()), /destroyed/);
-  s.completions[0].resolve();
-  await Promise.resolve();
   assert.ok(s.buffers.every((buffer) => buffer.destroyed === 1));
 });
 
@@ -164,13 +150,17 @@ test('fires reuse the activity buffer and never upload or rebuild static geometr
   const geometryWrites = s.writes.filter(write => write.buffer.usage & GPUBufferUsage.VERTEX);
   const activityBuffer = s.buffers.find(buffer => buffer.usage & GPUBufferUsage.STORAGE);
   assert.deepEqual(s.writes.at(-1).data, [-1, -1, -1]);
+  const initialWrites = s.writes.length;
   assert.equal(s.renderer.fire([[0, 1], [2, 3], [99, 100]], 100), true);
-  assert.equal(s.writes.at(-1).buffer, activityBuffer);
-  assert.deepEqual(s.writes.at(-1).data, [100, -1, 100]);
+  assert.equal(s.writes.length, initialWrites);
+  s.renderer.draw(s.pass, camera, 100);
+  const latestActivity = () => s.writes.findLast(write => write.buffer === activityBuffer);
+  assert.deepEqual(latestActivity().data, [100, -1, 100]);
   assert.equal(s.renderer.isActive(699), true);
   assert.equal(s.renderer.isActive(700), false);
   assert.equal(s.renderer.fire([[0, 1]], 500), true);
-  assert.deepEqual(s.writes.at(-1).data, [500, -1, 100]);
+  s.renderer.draw(s.pass, camera, 500);
+  assert.deepEqual(latestActivity().data, [500, -1, 100]);
   assert.equal(s.renderer.isActive(1099), true);
   assert.equal(s.renderer.isActive(1100), false);
   const writeCount = s.writes.length;
@@ -229,5 +219,27 @@ test('activity exceeding the storage binding limit is rejected before allocation
   s.device.limits.maxStorageBufferBindingSize = 4;
   assert.throws(() => s.renderer.setGraph(graph(2)), /storage buffer size limit/);
   assert.equal(s.buffers.length, 1);
+  s.renderer.destroy();
+});
+
+test('thousands of fires coalesce into one fixed-size activity upload on the next frame', () => {
+  const s = setup();
+  s.renderer.setGraph(graph(3));
+  const activityBuffer = s.buffers.find(buffer => buffer.usage & GPUBufferUsage.STORAGE);
+  const storageWrites = () => s.writes.filter(write => write.buffer === activityBuffer);
+  const count = s.buffers.length;
+  for (let index = 0; index < 10000; index++) {
+    s.renderer.fire([[index % 3, index % 3 + 1]], index);
+  }
+  assert.equal(storageWrites().length, 1, 'no per-event GPU work while frames are stalled');
+  s.renderer.draw(s.pass, camera, 10000);
+  assert.equal(storageWrites().length, 2);
+  assert.deepEqual(storageWrites().at(-1).data, [9999, 9997, 9998]);
+  assert.equal(s.buffers.length, count);
+  s.renderer.draw(s.pass, camera, 10001);
+  assert.equal(storageWrites().length, 2, 'unchanged activity needs no further upload');
+  s.renderer.draw(s.pass, camera, 30 * 86400000);
+  assert.deepEqual(storageWrites().at(-1).data, [-1, -1, -1]);
+  assert.equal(s.writes.at(-1).data[3], 600, 'shader clock stays bounded');
   s.renderer.destroy();
 });

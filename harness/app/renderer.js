@@ -57,27 +57,10 @@ export function createRenderer(device, format) {
   let activityBuffer;
   let current = [];
   let currentBuffers = [];
-  let retired = [];
-  let releasing = false;
+  let uploadedVersion = -1;
   let disposed = false;
-  const pending = new Set();
   const release = (buffers) => {
-    for (const buffer of buffers) {
-      buffer.destroy();
-      pending.delete(buffer);
-    }
-  };
-  const releaseRetired = async () => {
-    if (releasing) return;
-    releasing = true;
-    while (retired.length) {
-      const batch = retired;
-      retired = [];
-      // Submitted draws may still read the old mapping's buffers.
-      try { await device.queue.onSubmittedWorkDone(); } catch { /* Device loss also releases their use. */ }
-      if (!disposed) release(batch);
-    }
-    releasing = false;
+    for (const buffer of buffers) buffer.destroy();
   };
   return {
     setGraph(graph, nextActivity) {
@@ -123,18 +106,17 @@ export function createRenderer(device, format) {
         release(nextBuffers);
         throw error;
       }
-      for (const buffer of nextBuffers) pending.add(buffer);
-      retired.push(...currentBuffers);
+      // WebGPU keeps previously submitted uses alive after destroy().
+      release(currentBuffers);
       current = next;
       currentBuffers = nextBuffers;
       activity = nextActivity;
       activityBuffer = nextActivityBuffer;
       bindGroup = nextBindGroup;
-      void releaseRetired();
+      uploadedVersion = activity?.version ?? -1;
     },
     fire(pairs, now) {
       if (disposed || !activity?.fire(pairs, now)) return false;
-      device.queue.writeBuffer(activityBuffer, 0, activity.starts);
       return true;
     },
     isActive(now) {
@@ -145,11 +127,15 @@ export function createRenderer(device, format) {
       uniforms[0] = camera.centerX;
       uniforms[1] = camera.centerY;
       uniforms[2] = camera.scale;
-      uniforms[3] = now;
+      uniforms[3] = activity.time(now);
       uniforms[4] = camera.width;
       uniforms[5] = camera.height;
       uniforms[6] = ACTIVITY_DURATION;
       uniforms[7] = Number(reducedMotion);
+      if (uploadedVersion !== activity.version) {
+        device.queue.writeBuffer(activityBuffer, 0, activity.starts);
+        uploadedVersion = activity.version;
+      }
       device.queue.writeBuffer(uniform, 0, uniforms);
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, bindGroup);
@@ -161,12 +147,10 @@ export function createRenderer(device, format) {
     destroy() {
       if (disposed) return;
       disposed = true;
-      for (const buffer of pending) buffer.destroy();
-      pending.clear();
+      release(currentBuffers);
       current = [];
       currentBuffers = [];
       activity = null;
-      retired = [];
       uniform.destroy();
     },
   };

@@ -45,3 +45,31 @@ test('a large burst reuses one timestamp buffer and mapping replacement starts i
   assert.equal(empty.fire([], 25), false);
   assert.equal(empty.active(25), false);
 });
+
+test('shader timestamps retain sub-millisecond accuracy after days without growing buffers', () => {
+  const activity = new EdgeActivity([[1, 2], [2, 1]]);
+  const starts = activity.starts;
+  for (const day of [1, 30, 365]) {
+    const now = day * 86400000 + 0.25;
+    activity.fire([[1, 2]], now);
+    assert.equal(activity.starts, starts);
+    assert.equal(activity.time(now + 0.5) - starts[0], 0.5);
+    assert.equal(activity.active(now + 599.5), true);
+    assert.equal(activity.active(now + 600), false);
+    assert.equal(activity.time(now + 600) - starts[0], 600);
+    assert.equal(starts[1], -1);
+  }
+});
+
+test('clock rebase retains recent highlights and clears expired timestamps', () => {
+  const activity = new EdgeActivity([[1, 2], [2, 1]]);
+  activity.fire([[1, 2]], 59800);
+  activity.fire([[2, 1]], 59000);
+  const version = activity.version;
+  const time = activity.time(60100);
+  assert.equal(time - activity.starts[0], 300);
+  assert.equal(activity.starts[1], -1);
+  assert.equal(activity.version, version + 1);
+  assert.equal(activity.active(60399), true);
+  assert.equal(activity.active(60400), false);
+});
