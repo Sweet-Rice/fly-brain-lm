@@ -7,6 +7,7 @@ from pathlib import Path
 import socket
 import threading
 import time
+from importlib import import_module
 
 import pytest
 import torch
@@ -15,8 +16,11 @@ from websockets.asyncio.server import ServerConnection
 from websockets.sync.client import connect
 
 from harness.viz_stream import FlyGraph, VizStream, attach, stream_model
-from model.model import Config, FlyLM, Wiring, load_checkpoint, save_checkpoint
+from model.model import IMPLEMENTATIONS, load_checkpoint, save_checkpoint
+from model.wiring import Wiring
 
+vibe = import_module(f"{IMPLEMENTATIONS['vibe']}.model")
+Config, FlyLM = vibe.Config, vibe.FlyLM
 TINY = Config(d_model=64, n_layer=2)
 TIMEOUT = 5.0   # bound on every cross-thread wait: a stuck stream fails the test instead of hanging
 
@@ -265,7 +269,7 @@ def test_mapping_is_schema_valid_and_stable_across_weights_and_checkpoint(tmp_pa
     assert json.dumps(FlyGraph(model).mapping, separators=(",", ":")) == original
 
     checkpoint = tmp_path / "model.pt"
-    save_checkpoint(checkpoint, model, wiring)
+    save_checkpoint(checkpoint, model, wiring, "vibe")
     restored, _, _ = load_checkpoint(checkpoint)
     assert json.dumps(FlyGraph(restored).mapping, separators=(",", ":")) == original
 

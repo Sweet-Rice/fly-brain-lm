@@ -44,6 +44,12 @@ For existing checkpoint users, see [model initialization](model/README.md) and
 `--no-viz` to run normally without the visualization stream. The harness never
 substitutes a recording for a failed production model.
 
+The model registry keeps `vibe` as the default scaffold and adds `vibe2`, the
+fly-dopamine implementation from PR #35. Both can run the same checkpoint-free
+workflow with `--impl vibe` or `--impl vibe2`. Fresh builds are untrained; no
+private trained checkpoint is bundled or independently verified here. See
+[implementation selection and checkpoint compatibility](model/README.md#choosing-an-implementation).
+
 ## Folder guides
 
 | Folder | Documentation |
@@ -52,6 +58,8 @@ substitutes a recording for a failed production model.
 | `harness/app/` | [Standalone WebGPU viewer, playback and controls](harness/app/README.md) |
 | `harness/example/` | [Separate legacy Canvas demo and fixed-prompt replay](harness/example/README.md) |
 | `model/` | [Checkpoint initialization and model prerequisites](model/README.md) |
+| `model/vibe/`, `model/vibe2/` | [Model implementations and selection](model/README.md#choosing-an-implementation) |
+| `model/personal/` | [Writing your own model](model/README.md#personal-model) |
 | `model/serve/` | [Terminal chat, HTTP API and visualization flags](model/serve/README.md) |
 | `data/` | [Bundled wiring, optional downloads and token data](data/README.md) |
 | `test/` | [Tests, coverage and runtime requirements](test/README.md) |

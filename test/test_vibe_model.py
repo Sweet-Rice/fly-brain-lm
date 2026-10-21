@@ -1,7 +1,14 @@
+import importlib
 import math
+
 import torch
 import torch.nn.functional as F
-from model.model import Config, Wiring, FlyAddress, FlyMemory, FlyLM
+
+from model.model import IMPLEMENTATIONS
+from model.wiring import Wiring
+
+vibe = importlib.import_module(f"{IMPLEMENTATIONS['vibe']}.model")
+Config, FlyAddress, FlyMemory, FlyLM = vibe.Config, vibe.FlyAddress, vibe.FlyMemory, vibe.FlyLM
 
 torch.manual_seed(0)
 WIRING = Wiring.random()
@@ -102,12 +109,12 @@ def test_checkpoint_roundtrip(tmp_path):
     from model.model import save_checkpoint, load_checkpoint
     model = FlyLM(TINY, WIRING).eval()
     p = tmp_path / "ck.pt"
-    save_checkpoint(p, model, WIRING)
+    save_checkpoint(p, model, WIRING, "vibe")
     loaded, w, ck = load_checkpoint(p)
     idx = torch.randint(0, 50257, (1, 8))
     with torch.no_grad():
         assert torch.equal(model(idx)[0], loaded(idx)[0])
-    assert torch.equal(w.mask, WIRING.mask) and "TEMPORARY" in ck["note"]
+    assert torch.equal(w.mask, WIRING.mask) and "TEMPORARY" in ck["note"] and ck["impl"] == "vibe"
 
 
 def test_can_overfit_one_batch():

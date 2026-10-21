@@ -2,13 +2,17 @@
 import json
 import threading
 import urllib.request
+from importlib import import_module
 
 import pytest
 import torch
 
-from model.model import Config, FlyLM, Wiring
+from model.model import IMPLEMENTATIONS
 from model.serve.serve import Engine, make_server
+from model.wiring import Wiring
 
+vibe = import_module(f"{IMPLEMENTATIONS['vibe']}.model")
+Config, FlyLM = vibe.Config, vibe.FlyLM
 
 @pytest.fixture(scope="module")
 def base():
