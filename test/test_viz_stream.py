@@ -4,8 +4,10 @@ import itertools
 from contextlib import ExitStack
 import json
 from pathlib import Path
+import socket
 import threading
 import time
+from importlib import import_module
 
 import pytest
 import torch
@@ -14,8 +16,11 @@ from websockets.asyncio.server import ServerConnection
 from websockets.sync.client import connect
 
 from harness.viz_stream import FlyGraph, VizStream, attach, stream_model
-from model.model import Config, FlyLM, Wiring, load_checkpoint, save_checkpoint
+from model.model import IMPLEMENTATIONS, load_checkpoint, save_checkpoint
+from model.wiring import Wiring
 
+vibe = import_module(f"{IMPLEMENTATIONS['vibe']}.model")
+Config, FlyLM = vibe.Config, vibe.FlyLM
 TINY = Config(d_model=64, n_layer=2)
 TIMEOUT = 5.0   # bound on every cross-thread wait: a stuck stream fails the test instead of hanging
 
@@ -176,6 +181,27 @@ def test_stream_rejects_non_ipv4_loopback_bind(host):
         VizStream(host=host)
 
 
+def test_occupied_port_cleans_up_recording_and_allows_repeated_close(tmp_path, recwarn):
+    recording = tmp_path / "failed-start.ndjson"
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        stream = VizStream(port=occupied.getsockname()[1], record=str(recording))
+        stream.set_mapping({"type": "mapping", "version": 1, "groups": [], "nodes": [], "edges": []})
+        with pytest.raises(RuntimeError, match="visualization stream could not start"):
+            stream.start()
+        assert isinstance(stream._error, OSError)
+        assert stream._closed and stream._loop.is_closed()
+        assert stream._recorder._done.is_set()
+        stream._recorder._thread.join(TIMEOUT)
+        assert not stream._recorder._thread.is_alive()
+        stream.close()
+        stream.close()
+    assert stream.recording_error is None
+    assert json.loads(recording.read_text())["type"] == "mapping"
+    assert not recwarn.list
+
+
 def test_mapping_shape(setup):
     _, w, graph = setup
     m = graph.mapping
@@ -243,7 +269,7 @@ def test_mapping_is_schema_valid_and_stable_across_weights_and_checkpoint(tmp_pa
     assert json.dumps(FlyGraph(model).mapping, separators=(",", ":")) == original
 
     checkpoint = tmp_path / "model.pt"
-    save_checkpoint(checkpoint, model, wiring)
+    save_checkpoint(checkpoint, model, wiring, "vibe")
     restored, _, _ = load_checkpoint(checkpoint)
     assert json.dumps(FlyGraph(restored).mapping, separators=(",", ":")) == original
 

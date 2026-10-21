@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fly Brain · Visualization harness</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="main.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">FLY BRAIN LM / STREAM V1</p>
+      <h1>Visualization harness</h1>
+      <p>Inspect a live model stream or an NDJSON recording.</p>
+    </header>
+
+    <section aria-labelledby="source-heading">
+      <h2 id="source-heading">Source</h2>
+      <form id="connection">
+        <label for="endpoint">WebSocket endpoint</label>
+        <div class="connection-row">
+          <input id="endpoint" type="url" required spellcheck="false" aria-describedby="endpoint-help">
+          <button type="submit">Connect</button>
+          <button id="disconnect" type="button">Disconnect</button>
+        </div>
+        <p id="endpoint-help" class="hint">Use the exact URL printed by the model or replay server.</p>
+      </form>
+      <label for="recording">Or open a recording</label>
+      <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
+      <div class="playback-controls" role="group" aria-label="Recording playback">
+        <button id="recording-play" type="button" disabled>Play</button>
+        <button id="recording-pause" type="button" disabled>Pause</button>
+        <button id="recording-restart" type="button" disabled>Restart</button>
+        <label for="recording-speed">Playback speed</label>
+        <select id="recording-speed" disabled aria-describedby="recording-help">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </div>
+      <p id="recording-help" class="hint">Recordings play locally with 500 ms between fires at 1×. Pause stops new messages; active highlights finish fading. Recordings are saved data for inspection, not live model output.</p>
+      <p id="source-status" role="status">Disconnected. Connect or open a recording to begin.</p>
+    </section>
+
+    <section aria-labelledby="gpu-heading">
+      <h2 id="gpu-heading">Brain graph</h2>
+      <p id="gpu-status" role="status">Checking WebGPU support…</p>
+      <div class="graph-controls">
+        <button id="fit-graph" type="button">Fit graph</button>
+        <button id="zoom-in" type="button">Zoom in (+)</button>
+        <button id="zoom-out" type="button">Zoom out (−)</button>
+      </div>
+      <div class="graph-view">
+        <canvas id="viewport" tabindex="0" aria-label="Directed brain graph" aria-describedby="graph-help"></canvas>
+        <div id="graph-labels" aria-hidden="true"></div>
+      </div>
+      <p id="graph-help" class="hint">Arrowheads point to the destination. Active edges brighten for 600 ms; repeated activity restarts the highlight. Drag to pan; scroll to zoom. With the graph focused, use arrow keys to pan, +/− to zoom, and 0 or Home to fit.</p>
+    </section>
+
+    <section aria-labelledby="stream-heading">
+      <h2 id="stream-heading">Accepted stream</h2>
+      <dl class="metrics">
+        <div><dt>Nodes</dt><dd id="nodes">0</dd></div>
+        <div><dt>Edges</dt><dd id="edges">0</dd></div>
+        <div><dt>Last step</dt><dd id="step">—</dd></div>
+        <div><dt>Accepted fires</dt><dd id="fires">0</dd></div>
+        <div><dt>Dropped messages</dt><dd id="dropped">0</dd></div>
+        <div><dt>Undeclared pairs</dt><dd id="pairs-dropped">0</dd></div>
+      </dl>
+      <p id="protocol-status">Waiting for a mapping.</p>
+      <table>
+        <caption>Groups in mapping order</caption>
+        <thead><tr><th scope="col">Group</th><th scope="col">ID</th><th scope="col">Nodes</th></tr></thead>
+        <tbody id="groups"><tr><td colspan="3">No mapping received.</td></tr></tbody>
+      </table>
+      <p id="last-fire" class="hint">No accepted fire event.</p>
+    </section>
+
+  </main>
+</body>
+</html>

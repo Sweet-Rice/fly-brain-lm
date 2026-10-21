@@ -1,96 +1,90 @@
 # Fly Brain LM
 
-An experimental, **untrained** language model whose activity can be streamed to a
-browser over WebSocket. Generated text is not expected to be useful. For harness
-UI development, use the bundled replay instead of running the model.
+Experimental PyTorch fly-brain language models with a standalone WebGPU activity
+viewer. The registry includes the legacy `vibe` scaffold and the `vibe2`
+fly-dopamine implementation. Fresh initializations are **untrained**; their
+generated text has no quality claim.
+The visualization harness inspects activity; prompt UI work belongs to #13.
 
-Run the commands below from the repository root. Use module invocations
-(`python -m ...`), not direct paths to Python source files.
+<a id="start-with-the-recorded-example"></a>
 
-## Start with the recorded example
+## Start with the offline graph
 
-This path needs only Python and `websockets`: no PyTorch, checkpoint, GPU, or data
-download. The recording is already included in the repository.
+From a clean checkout, only Python 3 and a WebGPU-capable Chrome or Edge browser
+are needed. There is no frontend build, package installation, checkpoint, CUDA,
+tokenizer download or running model for this path.
 
-For a fresh checkout, create the environment and install the replay dependency.
-If `.venv` already exists, reuse it rather than recreating it:
+Run from the repository root:
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install websockets
+```console
+python -m http.server 8772 --bind 127.0.0.1 --directory harness
 ```
 
-Terminal A — replay the real captured prompt **`Once upon a time`**:
+On systems where Python is named `python3`, use that name instead. Open
+**http://127.0.0.1:8772/app/**, click **Or open a recording**, and choose
+[`harness/recordings/reference.ndjson`](harness/recordings/reference.ndjson).
+Expect five groups, **1,958 nodes and 19,037 directed edges**, followed by
+brightening edges as recorded fires play. Use Pause, Play, Restart and Playback
+speed to inspect the capture. Timing is synthetic; the events were generated
+by the real untrained model. Keep the page server running; Ctrl-C stops it.
 
-```bash
-.venv/bin/python -m harness.replay_prompt
-```
-
-Terminal B — serve the example page (skip if it is already served on 8770):
-
-```bash
-.venv/bin/python -m http.server 8770 --bind 127.0.0.1 --directory harness/example
-```
-
-Open **http://127.0.0.1:8770/?ws=ws://127.0.0.1:8768/stream**.
-Expect `connected` and a graph. Playback repeats automatically; there is no prompt
-to type. Keep both terminals running. Ctrl-C stops each server.
-
-The page server and stream source are separate processes. Starting the page
-server alone does not start a replay or model. A disconnected page with zero
-nodes has not received a mapping; see the [browser troubleshooting guide](harness/example/README.md).
+This works without `websockets`, PyTorch or Node.js. After checkout, the offline
+demo needs no external network access. Serve it on loopback as shown, rather
+than opening the HTML with `file://`.
 
 ## Run the real model or tests
 
-The model/data tools additionally use PyTorch, NumPy, pandas, PyArrow, and
-`tiktoken`. Tests use `pytest` and `jsonschema`. A CPU-only PyTorch install is
-sufficient for the documented examples:
+The [workflow guide](harness/WORKFLOW.md) contains Windows PowerShell and POSIX
+setup commands, a headless smoke command, a live model-to-browser demonstration,
+reconnect and mapping-replacement checks, reference-recording provenance, and
+troubleshooting. It uses the bundled wiring, so no large connectome download or
+existing checkpoint is required. Installing model packages and the first
+tokenizer load can require network access.
 
-```bash
-.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/python -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
-```
+For existing checkpoint users, see [model initialization](model/README.md) and
+[terminal chat / HTTP API](model/serve/README.md). The HTTP API supports
+`--no-viz` to run normally without the visualization stream. The harness never
+substitutes a recording for a failed production model.
 
-For another platform or GPU build, use the [PyTorch installation selector](https://pytorch.org/get-started/locally/).
-Package installation requires network access. The first GPT-2 tokenizer load may
-also download encoding data; replay alone does not load the tokenizer.
-
-- [Initialize a checkpoint](model/README.md). A fresh checkout has bundled wiring,
-  but **no checkpoint**: `model/checkpoints/` is gitignored. Do not overwrite an
-  existing trained checkpoint when creating an untrained example.
-- [Run terminal chat or the HTTP API](model/serve/README.md). These use a real
-  checkpoint and generate a live visualization stream.
-- [Run the tests](test/README.md). Tests use generated wiring and temporary files;
-  they do not require a saved model or the full connectome download.
-- [Prepare or rebuild data](data/README.md). The large connectome download and
-  TinyStories preparation are optional for the replay and existing bundled wiring.
+The model registry keeps `vibe` as the default scaffold and adds `vibe2`, the
+fly-dopamine implementation from PR #35. Both can run the same checkpoint-free
+workflow with `--impl vibe` or `--impl vibe2`. Fresh builds are untrained; no
+private trained checkpoint is bundled or independently verified here. See
+[implementation selection and checkpoint compatibility](model/README.md#choosing-an-implementation).
 
 ## Folder guides
 
 | Folder | Documentation |
 |---|---|
-| `harness/` | [Replay options, recordings, and terminal viewer](harness/README.md) |
-| `harness/example/` | [Browser page, connection URLs, and troubleshooting](harness/example/README.md) |
+| `harness/` | [End-to-end workflow](harness/WORKFLOW.md), [stream tools](harness/README.md), [measured limits](harness/PERFORMANCE.md) |
+| `harness/app/` | [Standalone WebGPU viewer, playback and controls](harness/app/README.md) |
+| `harness/example/` | [Separate legacy Canvas demo and fixed-prompt replay](harness/example/README.md) |
 | `model/` | [Checkpoint initialization and model prerequisites](model/README.md) |
-| `model/serve/` | [Terminal chat, HTTP API, and live visualization](model/serve/README.md) |
-| `data/` | [Bundled wiring, optional downloads, and token data](data/README.md) |
-| `test/` | [Test command, coverage, and runtime requirements](test/README.md) |
+| `model/vibe/`, `model/vibe2/` | [Model implementations and selection](model/README.md#choosing-an-implementation) |
+| `model/personal/` | [Writing your own model](model/README.md#personal-model) |
+| `model/serve/` | [Terminal chat, HTTP API and visualization flags](model/serve/README.md) |
+| `data/` | [Bundled wiring, optional downloads and token data](data/README.md) |
+| `test/` | [Tests, coverage and runtime requirements](test/README.md) |
 
-The normative wire contract, portable schemas, and conformance fixtures are in
-[`harness/protocol/v1/`](harness/protocol/v1/). The model-side implementation
-guide and migration policy are in [`harness/API.md`](harness/API.md).
+The normative wire contract, portable schemas and conformance fixtures are in
+[`harness/protocol/v1/`](harness/protocol/v1/). Model integration and migration
+policy are in [`harness/API.md`](harness/API.md).
 
-## Ports in these guides
+The [visualization epic acceptance guide](harness/ACCEPTANCE.md) maps issue #23's
+criteria to implementation, tests, browser evidence and pending child PRs.
 
-| Example service | Loopback port |
+<a id="ports-in-these-guides"></a>
+
+## Ports in the guides
+
+| Service | Loopback port |
 |---|---:|
-| Recorded replay WebSocket | 8768 |
-| Browser page HTTP | 8770 |
-| Live chat or API visualization WebSocket | 8767 |
+| Standalone page HTTP | 8772 |
+| Workflow live WebSocket | Chosen by the OS with `--port 0`; use the printed URL |
+| Legacy recorded replay WebSocket / Canvas page | 8768 / 8770 |
+| Existing chat or API visualization WebSocket | 8767 |
 | Model HTTP API | 8771 |
 
-These are documentation examples, not changes to the program defaults. Chat and
-API examples share visualization port 8767, so run one live source at a time.
-Do not stop someone else's process to free a port: select another port with the
-relevant flag and update the browser/client URL. In particular, leave existing
-services on 8765 and 8000 alone.
+Run one source per stream port. If a port is occupied, choose another and update
+the browser URL; do not stop someone else's process. Leave existing services on
+the program defaults, 8765 and 8000, alone.

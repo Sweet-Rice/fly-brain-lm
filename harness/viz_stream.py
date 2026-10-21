@@ -10,10 +10,10 @@ Implements "Fly Brain Visualization Stream Spec" version 1:
 
 What the mapping describes (one block of the model, default block 0):
   groups  0 Glomerulus   1 KC_gamma   2 KC_alphabeta   3 KC_alphaprime_betaprime   4 MBON
-  nodes   glomeruli 0..G-1, then KCs G..G+K-1 (wiring order), then the 15 MBON compartments
+  nodes   glomeruli 0..G-1, then KCs G..G+K-1 (wiring order), then the 3 x heads_per_lobe MBON compartments
   edges   glomerulus -> KC   the connectome wiring (9592)
-          KC -> MBON         each KC to the 5 compartments of its lobe (the heads that read/write it)
-What fires at a step (one token): for every active KC (the top-94), all of its glomerulus -> KC
+          KC -> MBON         each KC to the heads_per_lobe compartments of its lobe (the heads that read/write it)
+What fires at a step (one token): for every active KC (code > 0), all of its glomerulus -> KC
 edges and all of its KC -> MBON edges.
 
 Serving a model: stream_model() starts one long-lived stream per model process. Every harness that
@@ -21,6 +21,7 @@ connects, whenever it connects, gets the mapping first; then each message the mo
 fires one step per token. t keeps counting across messages.
 """
 import asyncio
+from collections import deque
 import json
 import queue
 import threading
@@ -42,22 +43,23 @@ class FlyGraph:
         """Rebuild atomically from the live model; publish the returned mapping before resuming."""
         import torch
 
-        if type(self._block) is not int or not 0 <= self._block < len(self._model.blocks):
+        if type(self._block) is not int or self._block < 0:
             raise ValueError("block must identify an existing model block")
-        selected = self._model.blocks[self._block]
-        address, memory = selected.addr, selected.mem
-        if address.mask.ndim != 2 or address.mask.dtype != torch.bool:
+        try:
+            mask, lobes = self._model.kc_topology(self._block)
+        except IndexError:
+            raise ValueError("block must identify an existing model block") from None
+        if not torch.is_tensor(mask) or mask.ndim != 2 or mask.dtype != torch.bool:
             raise ValueError("address mask must be a two-dimensional boolean tensor")
-        mask = address.mask.detach().cpu()
+        mask = mask.detach().cpu()
         K, G = mask.shape
-        if address.theta.shape != mask.shape or address.receptors.out_features != G:
-            raise ValueError("address mask must match KC weights and the glomerulus projection")
-        heads_per_lobe = memory.hpl
+        heads_per_lobe = self._model.heads_per_lobe
         if type(heads_per_lobe) is not int or heads_per_lobe < 1:
             raise ValueError("heads per lobe must be a positive integer")
+        if len(lobes) != 3:
+            raise ValueError("lobe membership must name exactly three lobes")
         cls = [None] * K
-        for lobe in range(3):
-            members = getattr(memory, f"lobe{lobe}")
+        for lobe, members in enumerate(lobes):
             if members.ndim != 1:
                 raise ValueError("lobe membership must be one-dimensional")
             for k in members.detach().cpu().tolist():
@@ -171,11 +173,17 @@ class VizStream:
                  record_queue_size=256):
         if host != LOOPBACK_HOST:
             raise ValueError(f"visualization stream is loopback-only; host must be {LOOPBACK_HOST!r}")
+        if type(queue_size) is not int or queue_size < 1:
+            raise ValueError("queue_size must be a positive integer")
         self.host, self.port, self.path, self.queue_size = LOOPBACK_HOST, port, path, queue_size
         self.t = 0                       # next step index; restarts with each mapping
         self.dropped = 0                 # fire messages dropped for slow harnesses
         self.harnesses_seen = 0
         self._mapping_msg = None
+        self._server_mapping_msg = None  # only published mappings may precede queued fires on a new socket
+        self._pending = deque()
+        self._handoff_lock = threading.Lock()
+        self._drain_scheduled = False
         self._clients = set()            # one asyncio.Queue per connected harness (touched only on the loop thread)
         self._n_clients = 0
         self._recorder = _NDJSONRecorder(record, record_queue_size) if record else None
@@ -188,6 +196,7 @@ class VizStream:
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
         if not self._ready.wait(10) or self._error:
+            self.close()
             raise RuntimeError(f"visualization stream could not start on {self.host}:{self.port}: "
                                f"{self._error or 'timed out'}")
         return self
@@ -238,18 +247,45 @@ class VizStream:
         if self._closed:
             return
         self._closed = True
-        if self._loop:
-            asyncio.run_coroutine_threadsafe(self._shutdown(drain_timeout), self._loop).result(drain_timeout + 5)
-        if self._recorder:
-            self._recorder.close(drain_timeout)
+        try:
+            if self._loop and self._loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._shutdown(drain_timeout), self._loop).result(drain_timeout + 5)
+        finally:
+            if self._recorder:
+                self._recorder.close(drain_timeout)
 
     def _record(self, msg, mapping=False):
         if self._recorder:
             (self._recorder.mapping if mapping else self._recorder.fire)(msg)
 
     def _call(self, fn, *args):
-        if self._loop and not self._closed:
-            self._loop.call_soon_threadsafe(fn, *args)      # hands off to the server thread; never waits
+        if not self._loop or self._closed:
+            return
+        with self._handoff_lock:
+            if fn == self._broadcast_mapping:
+                self._pending.clear()                    # queued fires belong to the old mapping
+            elif len(self._pending) >= self.queue_size:
+                self.dropped += self._n_clients
+                return
+            self._pending.append((fn, args))
+            if not self._drain_scheduled:
+                self._drain_scheduled = True
+                self._loop.call_soon_threadsafe(self._drain_pending)
+
+    def _drain_pending(self):
+        # Yield after a bounded batch so a fast producer cannot starve socket writers.
+        for _ in range(self.queue_size):
+            with self._handoff_lock:
+                item = self._pending.popleft() if self._pending else None
+            if item is None:
+                break
+            fn, args = item
+            fn(*args)
+        with self._handoff_lock:
+            if self._pending:
+                self._loop.call_soon(self._drain_pending)
+            else:
+                self._drain_scheduled = False
 
     # ---- server thread ------------------------------------------------------------------------
     def _run(self):
@@ -262,8 +298,9 @@ class VizStream:
     async def _main(self):
         from websockets.asyncio.server import serve
         self._loop = asyncio.get_running_loop()
+        self._server_mapping_msg = self._mapping_msg
         self._stop = self._loop.create_future()
-        async with serve(self._handler, self.host, self.port) as server:
+        async with serve(self._handler, self.host, self.port, close_timeout=1) as server:
             self.port = server.sockets[0].getsockname()[1]  # real port when 0 was requested
             self._ready.set()
             await self._stop
@@ -274,21 +311,34 @@ class VizStream:
             await conn.close(1008, f"unknown path; use {self.path}")
             return
         q = asyncio.Queue(self.queue_size)
-        if self._mapping_msg:
-            q.put_nowait(self._mapping_msg)                  # mapping is always the first message
+        if self._server_mapping_msg:
+            q.put_nowait(self._server_mapping_msg)           # mapping is always the first message
         self._clients.add(q)
         self._n_clients = len(self._clients)
         self.harnesses_seen += 1
+
+        async def write():
+            try:
+                while True:
+                    await conn.send(await q.get())
+            except ConnectionClosed:
+                pass
+
+        writer = asyncio.create_task(write())
+        closed = asyncio.create_task(conn.wait_closed())
         try:
-            while True:
-                await conn.send(await q.get())
-        except ConnectionClosed:
-            pass
+            await asyncio.wait((writer, closed), return_when=asyncio.FIRST_COMPLETED)
+            if writer.done():
+                await writer
         finally:
+            writer.cancel()
+            closed.cancel()
+            await asyncio.gather(writer, closed, return_exceptions=True)
             self._clients.discard(q)
             self._n_clients = len(self._clients)
 
     def _broadcast_mapping(self, msg):
+        self._server_mapping_msg = msg
         for q in self._clients:
             while not q.empty():                             # a new mapping makes queued fires meaningless
                 q.get_nowait()
@@ -303,23 +353,27 @@ class VizStream:
 
     async def _shutdown(self, timeout):
         end = self._loop.time() + timeout
-        while any(not q.empty() for q in self._clients) and self._loop.time() < end:
+        while (self._pending or any(not q.empty() for q in self._clients)) and self._loop.time() < end:
             await asyncio.sleep(0.02)
         await asyncio.sleep(0.1)                             # let the last send finish
         self._stop.set_result(None)
 
 
 def attach(model, stream, graph, block=0):
-    """Fire one step per token that passes through `block`'s address code. Returns the hook handle
+    """Fire one step per token that passes through `block`'s KC code (model.kc_code_module(block)). Returns the hook handle
     (call .remove() to detach). Uses batch element 0."""
     def hook(module, inputs, code):                          # code: (B, T, K)
+        positive = None
         for t in range(code.shape[1]):
             if stream.listening:
-                active = (code[0, t].detach() > 0).nonzero().flatten().tolist()
+                if positive is None:
+                    # One host transfer per address output; avoid CUDA nonzero's per-token synchronization.
+                    positive = (code[0].detach() > 0).cpu()
+                active = positive[t].nonzero().flatten().tolist()
                 stream.fire(graph.fire_pairs(active))
             else:
                 stream.skip()
-    return model.blocks[block].addr.register_forward_hook(hook)
+    return model.kc_code_module(block).register_forward_hook(hook)
 
 
 def stream_model(model, wiring, block=0, **server):

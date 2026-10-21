@@ -1,0 +1,312 @@
+{
+  "measured_on": "2026-10-21",
+  "baseline_commit": "a6fedaa51e7ec7ff8f72c7a074758eb106f43ef1",
+  "machine": {
+    "os": "Windows",
+    "cpu": "AMD Ryzen 7 5800HS, 8 cores / 16 threads",
+    "physical_memory_bytes": 16541487104,
+    "gpu": "AMD Radeon Graphics, driver 31.0.21925.1001",
+    "node": "22.17.0",
+    "python": "3.12",
+    "note": "Synthetic development stress; not a multi-day wall-clock soak."
+  },
+  "producer_and_model": {
+    "before": {
+      "nodes": 1958,
+      "edges": 19037,
+      "active_kcs": 94,
+      "events": 2000,
+      "mapping_json_bytes": 239205,
+      "mapping_serialization": {
+        "p50_ms": 4.3223,
+        "p95_ms": 4.4624
+      },
+      "activity_extraction": {
+        "p50_ms": 0.0227,
+        "p95_ms": 0.0408
+      },
+      "fire_serialization_and_enqueue": {
+        "p50_ms": 0.2044,
+        "p95_ms": 0.2443
+      },
+      "stalled_loop_callbacks": 2000,
+      "stalled_loop_pending": 0,
+      "dropped_client_fires": 0,
+      "stalled_loop_retained_json_bytes": 19675813,
+      "note": "Stalled loop is deterministic; socket/file stalls are covered by tests."
+    },
+    "after": {
+      "nodes": 1958,
+      "edges": 19037,
+      "active_kcs": 94,
+      "events": 2000,
+      "mapping_json_bytes": 239205,
+      "mapping_serialization": {
+        "p50_ms": 4.3331,
+        "p95_ms": 4.689
+      },
+      "activity_extraction": {
+        "p50_ms": 0.0229,
+        "p95_ms": 0.0398
+      },
+      "fire_serialization_and_enqueue": {
+        "p50_ms": 0.1958,
+        "p95_ms": 0.2264
+      },
+      "stalled_loop_callbacks": 1,
+      "stalled_loop_pending": 64,
+      "dropped_client_fires": 3872,
+      "stalled_loop_retained_json_bytes": 630413,
+      "note": "Stalled loop is deterministic; socket/file stalls are covered by tests."
+    },
+    "model": {
+      "wiring": "data/connectome/wiring.npz",
+      "torch": "2.14.1+cpu",
+      "threads": 1,
+      "config": {
+        "vocab_size": 50257,
+        "d_model": 384,
+        "n_layer": 12,
+        "n_glom": 54,
+        "n_kc": 1889,
+        "top_k": 94,
+        "heads_per_lobe": 5
+      },
+      "mapping_exactly_matches_capture": true,
+      "mapping_groups_and_nodes_match_capture": true,
+      "mapping_edge_set_matches_capture": true,
+      "nodes": 1958,
+      "edges": 19037,
+      "positive_kcs": 94,
+      "fire_pairs": 1140,
+      "events": 2000,
+      "mapping_refresh": {
+        "p50_ms": 21.9334,
+        "p95_ms": 90.811
+      },
+      "cpu_hook_extraction": {
+        "p50_ms": 0.0268,
+        "p95_ms": 0.0542
+      },
+      "pair_gather": {
+        "p50_ms": 0.026,
+        "p95_ms": 0.056
+      },
+      "note": "Full default untrained CPU model, actual connectome wiring, block-0 address output. Hook extraction repeats one code tensor; excludes full token inference, training, and GPU-to-CPU transfer."
+    }
+  },
+  "node": {
+    "before": {
+      "modules": "baseline",
+      "nodes": 1958,
+      "edges": 19037,
+      "parse_mapping": {
+        "p50_ms": 2.1823,
+        "p95_ms": 8.3913
+      },
+      "parse_and_validate_mapping": {
+        "p50_ms": 5.9737,
+        "p95_ms": 10.3598
+      },
+      "layout": {
+        "p50_ms": 65.9917,
+        "p95_ms": 92.4844
+      },
+      "parse_fire": {
+        "p50_ms": 0.1036,
+        "p95_ms": 0.1498
+      },
+      "parse_and_validate_fire": {
+        "p50_ms": 0.2923,
+        "p95_ms": 0.3754
+      },
+      "cpu_activity": {
+        "p50_ms": 0.0438,
+        "p95_ms": 0.0645
+      },
+      "geometry_bytes": 6770988,
+      "activity_bytes": 76148,
+      "note": "Protocol timings include JSON.parse; layout does not include GPU upload. Captured fires use the real model topology."
+    },
+    "after": {
+      "modules": "harness/app",
+      "nodes": 1958,
+      "edges": 19037,
+      "parse_mapping": {
+        "p50_ms": 2.2637,
+        "p95_ms": 7.5835
+      },
+      "parse_and_validate_mapping": {
+        "p50_ms": 5.5914,
+        "p95_ms": 10.854
+      },
+      "layout": {
+        "p50_ms": 59.1175,
+        "p95_ms": 77.1072
+      },
+      "parse_fire": {
+        "p50_ms": 0.1008,
+        "p95_ms": 0.1261
+      },
+      "parse_and_validate_fire": {
+        "p50_ms": 0.2802,
+        "p95_ms": 0.3754
+      },
+      "cpu_activity": {
+        "p50_ms": 0.0328,
+        "p95_ms": 0.0518
+      },
+      "geometry_bytes": 6770988,
+      "activity_bytes": 76148,
+      "note": "Protocol timings include JSON.parse; layout does not include GPU upload. Captured fires use the real model topology."
+    }
+  },
+  "browser": {
+    "before": {
+      "modules": "/.venv/issue21-before-app/",
+      "adapter": {
+        "vendor": "amd",
+        "architecture": "gcn-5",
+        "device": "",
+        "description": "",
+        "isFallbackAdapter": false
+      },
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+      "nodes": 1958,
+      "edges": 19037,
+      "layout_ms": 100.8,
+      "gpu_upload_cpu_ms": 10.3,
+      "gpu_upload_with_fence_ms": 73.9,
+      "events": 120,
+      "frames": 120,
+      "replacements": 50,
+      "cpu_fire_and_submit": {
+        "p50_ms": 0.4,
+        "p95_ms": 0.6
+      },
+      "submitted_work_fence": {
+        "p50_ms": 5.5,
+        "p95_ms": 7.9
+      },
+      "animation_frame_gap": {
+        "p50_ms": 6.9,
+        "p95_ms": 7
+      },
+      "writes_per_1000_event_burst": 1001,
+      "static_buffer_creations_during_activity": 0,
+      "steady_live_buffers": 4,
+      "settled_live_buffers": 4,
+      "hidden_transitions": 0,
+      "buffers": {
+        "created": 154,
+        "live": 0,
+        "peak_live": 154,
+        "bytes": 0,
+        "peak_bytes": 349203968,
+        "writes": 1394,
+        "written_bytes": 434493568
+      }
+    },
+    "after": {
+      "modules": "/harness/app/",
+      "adapter": {
+        "vendor": "amd",
+        "architecture": "gcn-5",
+        "device": "",
+        "description": "",
+        "isFallbackAdapter": false
+      },
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+      "nodes": 1958,
+      "edges": 19037,
+      "layout_ms": 66.2,
+      "gpu_upload_cpu_ms": 3.2,
+      "gpu_upload_with_fence_ms": 18.4,
+      "events": 120,
+      "frames": 120,
+      "replacements": 50,
+      "cpu_fire_and_submit": {
+        "p50_ms": 0.4,
+        "p95_ms": 0.7
+      },
+      "submitted_work_fence": {
+        "p50_ms": 5.8,
+        "p95_ms": 7.7
+      },
+      "animation_frame_gap": {
+        "p50_ms": 7,
+        "p95_ms": 7.1
+      },
+      "writes_per_1000_event_burst": 2,
+      "static_buffer_creations_during_activity": 0,
+      "steady_live_buffers": 4,
+      "settled_live_buffers": 4,
+      "hidden_transitions": 0,
+      "buffers": {
+        "created": 154,
+        "live": 0,
+        "peak_live": 7,
+        "bytes": 0,
+        "peak_bytes": 13694304,
+        "writes": 395,
+        "written_bytes": 358421716
+      }
+    },
+    "sustained": {
+      "modules": "/harness/app/",
+      "adapter": {
+        "vendor": "amd",
+        "architecture": "gcn-5",
+        "device": "",
+        "description": "",
+        "isFallbackAdapter": false
+      },
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+      "nodes": 1958,
+      "edges": 19037,
+      "layout_ms": 60.6,
+      "gpu_upload_cpu_ms": 3.3,
+      "gpu_upload_with_fence_ms": 13,
+      "events": 6000,
+      "frames": 600,
+      "replacements": 70,
+      "cpu_fire_and_submit": {
+        "p50_ms": 0.8,
+        "p95_ms": 1.2
+      },
+      "submitted_work_fence": {
+        "p50_ms": 5.7,
+        "p95_ms": 7.6
+      },
+      "animation_frame_gap": {
+        "p50_ms": 6.9,
+        "p95_ms": 13.9
+      },
+      "writes_per_1000_event_burst": 2,
+      "static_buffer_creations_during_activity": 0,
+      "steady_live_buffers": 4,
+      "settled_live_buffers": 4,
+      "hidden_transitions": 0,
+      "buffers": {
+        "created": 214,
+        "live": 0,
+        "peak_live": 7,
+        "bytes": 0,
+        "peak_bytes": 13694304,
+        "writes": 1415,
+        "written_bytes": 531930836
+      }
+    }
+  },
+  "main_harness_live_check": {
+    "rate_per_second": 120,
+    "duration_seconds": 120,
+    "producer_steps": 14400,
+    "server_dropped_client_fires": 0,
+    "connections_seen": 1,
+    "observed_step_during_navigation": 9309,
+    "observed_accepted_fires_at_that_step": 9310,
+    "observed_gpu_errors": 0,
+    "note": "End-of-stream resets UI counters; final delivered count was not separately retained."
+  }
+}

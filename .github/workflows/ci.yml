@@ -13,10 +13,23 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Five independent checks, no needs edges. The four test partitions cover every
+# Independent checks, no needs edges. The four Python test partitions cover every
 # test/ file exactly once: Model/core collects everything the other three exclude,
 # so new test modules run without editing this file.
 jobs:
+  harness:
+    name: Browser harness (protocol and sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Harness tests (no dependency installation)
+        working-directory: harness/app
+        run: npm test
+
   tests:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -70,9 +83,15 @@ jobs:
           if-no-files-found: warn
 
   smoke:
-    name: Smoke (checkpoint, serve, record)
+    name: Smoke (${{ matrix.impl }} checkpoint, serve, record)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        impl: [vibe, vibe2]
+    env:
+      FLYBRAIN_IMPL: ${{ matrix.impl }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -80,6 +99,9 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: .github/workflows/ci.yml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
       - name: Install CPU PyTorch and project dependencies
         run: |
           python -m pip install --upgrade pip
@@ -89,11 +111,18 @@ jobs:
       - name: Smoke (init checkpoint, export mapping, serve, record, inspect)
         id: smoke
         run: .github/scripts/smoke.sh
+      - name: Play the fresh real-model recording through the browser modules
+        id: harness-smoke
+        shell: bash
+        env:
+          FLYBRAIN_WORKFLOW_RECORDING: ${{ runner.temp }}/flybrain-smoke/workflow.ndjson
+        run: node --test harness/app/test/workflow.test.js | tee "${{ runner.temp }}/flybrain-smoke/workflow-harness.txt"
       - name: Smoke summary
         if: always()
         env:
           SMOKE_DIR: ${{ runner.temp }}/flybrain-smoke
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          HARNESS_OUTCOME: ${{ steps.harness-smoke.outcome }}
         run: |
           d="$SMOKE_DIR"
           case "$SMOKE_OUTCOME" in
@@ -104,6 +133,8 @@ jobs:
           {
             echo "## Smoke: checkpoint, serve, record: $status"
             echo
+            echo "- Model implementation: $FLYBRAIN_IMPL"
+            echo "- Fresh recording through JavaScript playback, layout and activity: $HARNESS_OUTCOME"
             if [ -s "$d/ci.pt" ]; then echo "- Checkpoint built: $(stat -c %s "$d/ci.pt") bytes (not uploaded)"; fi
             if [ -s "$d/mapping.ndjson" ]; then echo "- Standalone mapping exported: $(stat -c %s "$d/mapping.ndjson") bytes"; fi
             if [ -f "$d/ask.txt" ]; then echo "- Serve line: $(grep -m 1 -E '^\[[0-9]+ prompt' "$d/ask.txt" || true)"; fi
@@ -111,15 +142,21 @@ jobs:
               echo "- Mapping: $(grep -m 1 'nodes,' "$d/watch.txt" || true)"
               echo "- Fire steps: $(grep -c '^FIRE ' "$d/watch.txt" || true)"
             fi
+            if [ -s "$d/workflow.ndjson" ]; then echo "- End-to-end workflow recording: $(stat -c %s "$d/workflow.ndjson") bytes"; fi
+            if [ -s "$d/workflow.ndjson.metadata.json" ]; then echo "- Workflow provenance and SHA-256: workflow.ndjson.metadata.json (see smoke-outputs)"; fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload smoke outputs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: smoke-outputs
+          name: smoke-outputs-${{ matrix.impl }}
           path: |
             ${{ runner.temp }}/flybrain-smoke/ask.txt
             ${{ runner.temp }}/flybrain-smoke/watch.txt
             ${{ runner.temp }}/flybrain-smoke/ci.ndjson
             ${{ runner.temp }}/flybrain-smoke/mapping.ndjson
+            ${{ runner.temp }}/flybrain-smoke/workflow.txt
+            ${{ runner.temp }}/flybrain-smoke/workflow.ndjson
+            ${{ runner.temp }}/flybrain-smoke/workflow.ndjson.metadata.json
+            ${{ runner.temp }}/flybrain-smoke/workflow-harness.txt
           if-no-files-found: warn

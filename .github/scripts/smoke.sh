@@ -34,3 +34,8 @@ grep -q '1958 nodes, 19037 connections' "$WORK/watch.txt"
 fires=$(grep -c '^FIRE ' "$WORK/watch.txt")
 test "$fires" -ge 4
 echo "smoke OK: $fires fire steps recorded"
+
+# The finite workflow also exercises a replacement mapping and restarted token steps.
+"$PY" -m harness.workflow --record "$WORK/workflow.ndjson" | tee "$WORK/workflow.txt"
+test -s "$WORK/workflow.ndjson"
+test -s "$WORK/workflow.ndjson.metadata.json"

@@ -1,0 +1,41 @@
+:root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; color: #e5eaf1; background: #10151d; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1080px; margin: auto; padding: 32px 24px 64px; }
+header { margin-bottom: 28px; }
+h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); margin: 4px 0; letter-spacing: -.03em; }
+h2 { font-size: 1.1rem; margin: 0 0 16px; }
+p { margin: 8px 0 16px; }
+.eyebrow { color: #9bdcca; font-size: .75rem; letter-spacing: .12em; }
+section { border: 1px solid #364252; border-radius: 12px; padding: 24px; margin-bottom: 20px; background: #171f2a; }
+label { display: block; font-weight: 600; margin: 12px 0 6px; }
+.connection-row { display: flex; flex-wrap: wrap; gap: 10px; }
+input, button, select { font: inherit; color: inherit; border: 1px solid #718096; border-radius: 6px; background: #10151d; padding: 9px 12px; min-height: 44px; }
+input[type=url] { flex: 1 1 300px; min-width: 0; }
+input[type=file] { width: 100%; }
+button { cursor: pointer; background: #235b50; font-weight: 600; }
+button[type=button] { background: #293648; }
+button:hover { filter: brightness(1.2); }
+button:disabled, select:disabled { opacity: .5; cursor: default; }
+.playback-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.playback-controls label { margin: 0 0 0 8px; }
+:focus-visible { outline: 3px solid #a8e5d4; outline-offset: 3px; }
+.hint, dt { color: #b9c5d4; font-size: .875rem; }
+#source-status, #gpu-status { overflow-wrap: anywhere; }
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.metrics div { padding: 12px; background: #10151d; border-radius: 6px; }
+dd { font-size: 1.6rem; margin: 0; font-variant-numeric: tabular-nums; }
+table { width: 100%; border-collapse: collapse; text-align: left; overflow-wrap: anywhere; }
+caption { text-align: left; color: #b9c5d4; padding: 12px 0; }
+th, td { padding: 8px; border-bottom: 1px solid #364252; }
+.graph-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.graph-view { position: relative; overflow: hidden; border: 1px solid #364252; border-radius: 6px; }
+canvas { width: 100%; height: clamp(340px, 50vh, 540px); display: block; background: #10151d; touch-action: none; cursor: grab; }
+canvas:active { cursor: grabbing; }
+#graph-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+#graph-labels span { position: absolute; left: 0; top: 0; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 520px) {
+  main { padding: 20px 12px; }
+  section { padding: 16px; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

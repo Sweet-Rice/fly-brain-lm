@@ -1,0 +1,70 @@
+{
+  "generator": "python -m harness.workflow",
+  "mode": "smoke",
+  "model_note": "TEMPORARY scaffold: untrained, placeholder architecture details",
+  "seed": 0,
+  "device": "cpu",
+  "torch_threads": 1,
+  "torch_version": "2.14.1+cpu",
+  "python_version": "3.12.10",
+  "config": {
+    "vocab_size": 50257,
+    "d_model": 384,
+    "n_layer": 12,
+    "n_glom": 54,
+    "n_kc": 1889,
+    "top_k": 94,
+    "heads_per_lobe": 5,
+    "d_head": 48,
+    "conv_k": 4,
+    "half_life_init": [
+      3.0,
+      69.0,
+      14.0
+    ]
+  },
+  "prompt": "Once upon a time",
+  "tokenizer": "gpt2",
+  "prompt_ids": [
+    7454,
+    2402,
+    257,
+    640
+  ],
+  "max_new_tokens": 8,
+  "temperature": 0,
+  "stop_ids": [
+    50256
+  ],
+  "generated_ids": [
+    640,
+    35432,
+    35432,
+    35432,
+    35432,
+    35432,
+    35432,
+    35432
+  ],
+  "rounds": 4,
+  "epochs": 2,
+  "steps": 44,
+  "last_epoch_steps": 11,
+  "network_dropped": 0,
+  "recording_dropped": 0,
+  "visualization_disabled_identical": true,
+  "topology": {
+    "groups": 5,
+    "nodes": 1958,
+    "edges": 19037
+  },
+  "wiring_sha256": "a4d3f54f8d7df9c24e215d167978c456a7d9c0b639e429904b2d09dfcd202843",
+  "source_hash_newlines": "lf",
+  "source_sha256": {
+    "harness/workflow.py": "609b26cbd6d61ae5d86defa5edc4783de7f4324dd73f3454a862e864058f7f39",
+    "harness/viz_stream.py": "86d4489357083ea34878dbf4ec620fa08e7ac0964344468605150263b4eb16a7",
+    "model/model.py": "4d9e8d0af6859e56076958933753487f73d53408d9161c243a5cf68de72a3096",
+    "data/build_wiring.py": "992e793d90eac4b34802bc5f9db5a566e9403f61d72e14fb37d1e62385e9b895"
+  },
+  "recording_sha256": "7fe97e51cf7b556581b0608ca841029d6f17a975b1f455e450265a54859f5c92"
+}
