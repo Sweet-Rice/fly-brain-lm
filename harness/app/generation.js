@@ -101,7 +101,7 @@ function formatSafeError(error, response = null) {
       return sanitizeSafeMessage(error);
     }
     if (response.status >= 500) {
-      return `Model server error (${response.status} ${response.statusText || 'Internal Server Error'}).`;
+      return `Model server error (${response.status} ${response.statusText || 'Internal Server Error'}). Check that the model API is running, then Retry Health.`;
     }
   }
 

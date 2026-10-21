@@ -478,7 +478,7 @@ python -m pytest test/test_app_server.py
    Start `python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767`
    in Terminal 1, and `python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771`
    in Terminal 2. Open `http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream`.
-   - Verify `#prompt-health-status` reports `ok` with model ID `flybrain-untrained`.
+   - Verify `#prompt-health-status` reports the configured model ID and note, and enables Generate.
    - Enter a prompt, press `Ctrl+Enter` or click **Generate**; verify incremental text
      appears in `#prompt-output` and the finish reason is reported.
    - Start a longer generation and click **Cancel**; verify generation stops, already
@@ -492,3 +492,13 @@ python -m pytest test/test_app_server.py
      to clear selection.
    - Stop Terminal 1 and click Retry on the health indicator; verify an actionable 503
      unavailable notice is shown.
+
+### Observed workspace smoke
+
+Checked with a fresh, untrained full `vibe2` checkpoint, the unchanged Python model
+server, and the same-origin app server in headless Chromium using SwiftShader WebGPU.
+Observed real SSE output and graph fires, cancel/resubmit, exact clipboard copying
+with browser permission, invalid-input rejection, API-down offline inspection, and
+API-key rejection/recovery. Node picking, neighbor focus, recording restart and
+recorded-to-live switching worked. Layout stayed within the viewport at 360 px and
+with CSS zoom set to 200%. This is software-GPU evidence, not native-device benchmarking.
