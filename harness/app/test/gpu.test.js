@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { initializeGPU } from "../gpu.js";
+import { initializeGPU, pickNode } from "../gpu.js";
+import { buildGraph } from "../layout.js";
+import { Camera } from "../camera.js";
 import { ProtocolReceiver } from "../protocol.js";
 
 function platform(t, gpu = {}) {
@@ -595,4 +597,248 @@ test("hidden documents retain latest state without GPU work and resume without s
   dispose();
   document.dispatchEvent(new Event("visibilitychange"));
   assert.equal(mock.frames.size, 0);
+});
+
+test("pickNode picks correct node under transform and returns null for background", () => {
+  const graph = buildGraph(mapping);
+  const camera = new Camera(800, 600);
+  camera.fit(graph.bounds);
+  const pos2 = graph.positions.get(2);
+  const pos99 = graph.positions.get(99);
+  const screen2 = camera.worldToScreen(pos2.x, pos2.y);
+  const rect = { left: 10, top: 20 };
+
+  assert.equal(pickNode(graph, camera, screen2.x + rect.left, screen2.y + rect.top, rect), 2);
+
+  camera.pan(120, -50);
+  camera.zoom(2.5, 400, 300);
+  const screen99 = camera.worldToScreen(pos99.x, pos99.y);
+  assert.equal(pickNode(graph, camera, screen99.x + rect.left, screen99.y + rect.top, rect), 99);
+
+  assert.equal(pickNode(graph, camera, -500, -500, rect), null);
+});
+
+test("node click emits node-select with runtime ID and highlights neighborhood under transform", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  const selections = [];
+  mock.canvas.addEventListener("node-select", (e) => selections.push(e.detail));
+
+  const graph = buildGraph(mapping);
+  const camera = new Camera(mock.canvas.clientWidth, mock.canvas.clientHeight);
+  camera.fit(graph.bounds);
+  const pos2 = graph.positions.get(2);
+  const screen2 = camera.worldToScreen(pos2.x, pos2.y);
+
+  mock.emit("pointerdown", { button: 0, pointerId: 1, clientX: screen2.x + 10, clientY: screen2.y + 20 });
+  mock.emit("pointerup", { pointerId: 1, clientX: screen2.x + 10, clientY: screen2.y + 20 });
+  await mock.flush();
+  assert.equal(selections.length, 1);
+  assert.equal(selections[0].id, 2);
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 5, "overlay buffer allocated");
+
+  mock.emit("keydown", { key: "ArrowLeft" });
+  mock.emit("keydown", { key: "+" });
+  await mock.flush();
+
+  const uniforms = mock.calls.writes.findLast(w => w.buffer.usage & GPUBufferUsage.UNIFORM).data;
+  camera.centerX = uniforms[0];
+  camera.centerY = uniforms[1];
+  camera.scale = uniforms[2];
+
+  const pos99 = graph.positions.get(99);
+  const screen99 = camera.worldToScreen(pos99.x, pos99.y);
+
+  mock.emit("pointerdown", { button: 0, pointerId: 1, clientX: screen99.x + 10, clientY: screen99.y + 20 });
+  mock.emit("pointerup", { pointerId: 1, clientX: screen99.x + 10, clientY: screen99.y + 20 });
+  await mock.flush();
+  assert.equal(selections.length, 2);
+  assert.equal(selections[1].id, 99);
+  dispose();
+});
+
+test("drag vs click: dragging pans camera and prevents node selection", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  const selections = [];
+  mock.canvas.addEventListener("node-select", (e) => selections.push(e.detail));
+  const uniform = () => mock.calls.writes.findLast(w => w.buffer.usage & GPUBufferUsage.UNIFORM).data;
+  const initialCam = [...uniform()];
+
+  mock.emit("pointerdown", { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  mock.emit("pointermove", { pointerId: 1, clientX: 150, clientY: 130 });
+  mock.emit("pointerup", { pointerId: 1, clientX: 150, clientY: 130 });
+  await mock.flush();
+  assert.equal(selections.length, 0, "drag must not emit node-select");
+  assert.notDeepEqual(uniform(), initialCam, "drag must pan camera");
+
+  const graph = buildGraph(mapping);
+  const camera = new Camera(mock.canvas.clientWidth, mock.canvas.clientHeight);
+  camera.fit(graph.bounds);
+  mock.emit("keydown", { key: "Home" });
+  await mock.flush();
+  const screen2 = camera.worldToScreen(graph.positions.get(2).x, graph.positions.get(2).y);
+  mock.emit("pointerdown", { button: 0, pointerId: 1, clientX: screen2.x + 10, clientY: screen2.y + 20 });
+  mock.emit("pointerup", { pointerId: 1, clientX: screen2.x + 10, clientY: screen2.y + 20 });
+  await mock.flush();
+  assert.equal(selections.length, 1);
+  assert.equal(selections[0].id, 2);
+  dispose();
+});
+
+test("background click clears selection and emits node-select with null", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  const selections = [];
+  mock.canvas.addEventListener("node-select", (e) => selections.push(e.detail));
+
+  mock.emit("select-node", { detail: { id: 2 } });
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 5);
+
+  mock.emit("pointerdown", { button: 0, pointerId: 1, clientX: -500, clientY: -500 });
+  mock.emit("pointerup", { pointerId: 1, clientX: -500, clientY: -500 });
+  await mock.flush();
+  assert.equal(selections.length, 1);
+  assert.equal(selections[0].id, null);
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 4, "background click clears overlay");
+  dispose();
+});
+
+test("select-node event before and after GPU initialization updates selection", async t => {
+  const mock = platform(t);
+  let ready;
+  navigator.gpu.requestAdapter = () => new Promise(resolve => { ready = resolve; });
+  const initialization = initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mapping });
+  mock.emit("select-node", { detail: { id: 2 } });
+  ready({ requestDevice: async () => mock.device });
+  const dispose = await initialization;
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 5, "selection retained and drawn on initial frame");
+  mock.emit("select-node", { detail: { id: 99 } });
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 5);
+  mock.emit("select-node", { detail: { id: null } });
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 4, "null id clears selection overlay");
+  dispose();
+});
+
+test("mapping replacement and reset clear selection overlay", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  mock.emit("select-node", { detail: { id: 2 } });
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 5);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 4, "mapping replacement clears selection overlay");
+  mock.emit("select-node", { detail: { id: 2 } });
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 5);
+  mock.emit("reset");
+  await mock.flush();
+  assert.equal(mock.calls.buffers.filter(b => !b.destroys).length, 1, "reset destroys graph and selection overlay");
+  dispose();
+});
+
+test("no buffer allocations per fire while a node is selected", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  mock.emit("select-node", { detail: { id: 2 } });
+  await mock.flush();
+  const bufferCount = mock.calls.buffers.length;
+  const geometryWrites = () => mock.calls.writes.filter(w => w.buffer.usage & GPUBufferUsage.VERTEX).length;
+  const initialWrites = geometryWrites();
+  mock.emit("fire", { detail: { pairs: [[2, 99]] } });
+  await mock.flush(1100);
+  assert.equal(mock.calls.buffers.length, bufferCount, "no new buffers allocated on fire");
+  assert.equal(geometryWrites(), initialWrites, "no geometry uploaded on fire");
+  dispose();
+});
+
+test("when WebGPU unavailable or graph not installed, blank canvas click does not clear inspector selection", async t => {
+  // 1. WebGPU unavailable: inspector selected an ID, clicking canvas must not emit node-select: null
+  const mockUnavailable = platform(t, { requestAdapter: () => assert.fail("must not request a device") });
+  globalThis.isSecureContext = false;
+  const disposeUnavailable = await initializeGPU(mockUnavailable.canvas, mockUnavailable.status);
+  const selectionsUnavailable = [];
+  mockUnavailable.canvas.addEventListener("node-select", (e) => selectionsUnavailable.push(e.detail));
+
+  mockUnavailable.emit("select-node", { detail: { id: 2 } });
+  mockUnavailable.emit("pointerdown", { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  mockUnavailable.emit("pointerup", { pointerId: 1, clientX: 100, clientY: 100 });
+  mockUnavailable.emit("click", { clientX: 100, clientY: 100 });
+  await mockUnavailable.flush();
+  assert.equal(selectionsUnavailable.length, 0, "blank canvas click with unavailable WebGPU must not clear selection");
+  disposeUnavailable();
+
+  // 2. WebGPU available but graph not installed: clicking canvas must not emit node-select: null
+  const mockNoGraph = platform(t);
+  const disposeNoGraph = await initializeGPU(mockNoGraph.canvas, mockNoGraph.status);
+  const selectionsNoGraph = [];
+  mockNoGraph.canvas.addEventListener("node-select", (e) => selectionsNoGraph.push(e.detail));
+
+  mockNoGraph.emit("select-node", { detail: { id: 2 } });
+  await mockNoGraph.flush();
+
+  mockNoGraph.emit("pointerdown", { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  mockNoGraph.emit("pointerup", { pointerId: 1, clientX: 100, clientY: 100 });
+  mockNoGraph.emit("click", { clientX: 100, clientY: 100 });
+  await mockNoGraph.flush();
+  assert.equal(selectionsNoGraph.length, 0, "blank canvas click with uninstalled graph must not clear selection");
+
+  // 3. Picking real background with loaded graph still clears
+  mockNoGraph.emit("mapping", { detail: mapping });
+  await mockNoGraph.flush();
+  mockNoGraph.emit("pointerdown", { button: 0, pointerId: 1, clientX: -500, clientY: -500 });
+  mockNoGraph.emit("pointerup", { pointerId: 1, clientX: -500, clientY: -500 });
+  await mockNoGraph.flush();
+  assert.equal(selectionsNoGraph.length, 1);
+  assert.equal(selectionsNoGraph[0].id, null, "clicking background with loaded graph clears selection");
+  disposeNoGraph();
+});
+
+test("errors allocating selection preserve prior valid render and cleanup", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+
+  mock.emit("select-node", { detail: { id: 2 } });
+  await mock.flush();
+  const initialActive = mock.calls.buffers.filter(b => !b.destroys);
+  assert.equal(initialActive.length, 5, "overlay buffer allocated for node 2");
+  const overlayBuffer2 = initialActive.at(-1);
+
+  const origCreateBuffer = mock.device.createBuffer;
+  mock.device.createBuffer = (options) => {
+    if (options.usage & GPUBufferUsage.VERTEX) {
+      throw new Error("GPU allocation failure");
+    }
+    return origCreateBuffer.call(mock.device, options);
+  };
+
+  mock.emit("select-node", { detail: { id: 99 } });
+  await mock.flush();
+
+  assert.equal(overlayBuffer2.destroys, 0, "node 2 overlay buffer preserved on allocation error");
+  const activeBuffers = mock.calls.buffers.filter(b => !b.destroys);
+  assert.equal(activeBuffers.length, 5, "active buffer count unchanged");
+  assert.equal(activeBuffers.at(-1), overlayBuffer2, "prior valid overlay remains active");
+
+  mock.device.createBuffer = origCreateBuffer;
+  dispose();
+  assert.equal(overlayBuffer2.destroys, 1, "preserved buffer destroyed on cleanup");
 });

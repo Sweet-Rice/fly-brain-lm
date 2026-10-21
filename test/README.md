@@ -28,11 +28,11 @@ download unless that data is cached.
 | `test/test_activity.py` | Exact positive-KC routes from real model outputs, batch-0/token/block boundaries, determinism, empty steps, unchanged logits and gradients, released activations, idle skips, and one host mask copy per observed address output |
 | `test/test_activity_profile.py` | Registry-selected real-model overhead profile with disabled/idle/recording/live modes, identical logits, real consumers, zero drops, restored thread/RNG state and explicit unavailable-CUDA failure |
 | `test/test_serve.py` | Model listing, completions, chat, SSE output, and request errors against a real local HTTP server |
+| `test/test_app_server.py` | App server loopback binding, static asset confinement under `harness/`, rejection of directory traversal and repo secrets, root `/` redirect to `/app/`, proxy route whitelist (`GET /health`, `GET /v1/models`, `POST /v1/completions`, `POST /v1/chat/completions`), upstream unavailable 503 JSON, incremental SSE streaming without buffering, upstream socket closure on client abort, and memory-only `Authorization` header pass-through (10 observed tests) |
 | `test/test_viz_stream.py` | Exact model-block topology and active-KC routing, schema-valid deterministic export across checkpoint round trips, invalid topology rejection, live streaming and recording, joins/reconnects, refreshed topology epochs, empty steps, and deterministic backpressure/drop recovery |
 | `test/test_protocol_contract.py` | Portable v1 JSON Schemas, valid lifecycle fixture, invalid receiver cases, mapping epochs, and semantic id/reference constraints |
 | `test/test_workflow.py` | Both built-in implementations through full real-wiring CPU inference over real sockets, reconnects, replacement epochs, disabled-hook token equality, implementation-aware provenance, and overwrite protection |
 | `test/test_workflow_reference.py` | Checked-in real-model workflow recording, provenance digest, schemas, declared edges, and restarted step ordering across replacement mappings; no model import required |
-
 ## Continuous integration
 
 [GitHub Actions CI](../.github/workflows/ci.yml) runs independent checks on PRs,
@@ -43,11 +43,10 @@ the separate browser-harness check uses Node.js without model dependencies:
 |---|---|
 | Data/tokenization | `test/test_data.py` |
 | Model/core | All tests under `test/` except the dedicated data, HTTP API, and graph/WebSocket suites; new model modules are included automatically |
-| HTTP API | `test/test_serve.py` |
+| HTTP API & App server proxy | `test/test_serve.py` and `test/test_app_server.py` (10 tests) |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
 | Smoke (vibe / vibe2 checkpoint, serve, record) | Independent jobs for both implementations: build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, run the finite workflow, then feed its fresh recording through the shipped JavaScript playback, receiver, graph layout and edge activity |
-| Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers and device lifecycle; see [`harness/app/README.md`](../harness/app/README.md) |
-
+| Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers, node picking and overlay selection, neuron inspector topology indexing and bounded fire history, prompt composer validation and rejection, state transitions, SSE stream parsing, and error handling; see [`harness/app/README.md`](../harness/app/README.md) |
 The jobs have no dependency edges. A failed suite does not cancel the other
 suites or skip the smoke check. Each test job prints individual cases and adds
 their results, timings, and failure details to the run's **Summary** page;
@@ -62,11 +61,34 @@ The backpressure test deliberately holds one client's server-side WebSocket
 send, fills its bounded queue, and verifies drops, producer progress, unaffected
 delivery to another client, recovery, and a complete recording. It does not rely
 on OS socket-buffer sizes or a sub-50-ms scheduling deadline.
-
 The workflow graph shows suites, not individual test cases or proof of browser
 rendering. Run the full local suite with the command above; the smoke script can
 also be run from the repository root with
 `PYTHON=.venv/bin/python .github/scripts/smoke.sh`.
+
+### JavaScript harness test suites (`harness/app/test/`)
+
+Run with Node.js 22+:
+
+```bash
+npm --prefix harness/app test
+```
+
+Or directly with Node's native test runner:
+
+```bash
+node --test harness/app/test/*.test.js
+```
+
+| Suite | Scope covered |
+|---|---|
+| `generation.test.js` | Parameter validation and rejection (empty/whitespace rejection, bounds validation for `max_tokens` [1..128], `temperature` [0..2], and `top_k` [1..50257]; upstream server cap is separate), inference state machine transitions (`idle`, `validating`, `submitting`, `streaming`, `cancelling`, `completed`, `cancelled`, `failed`), SSE line and JSON chunk parser, usage chunk handling, terminal `[DONE]` detection, UTF-8 multi-byte split handling across chunk boundaries, malformed/truncated stream error recovery with preserved partial text, cancellation abort signal handling, reader lock release, health readiness checks and retry, normalized API key header sync, actionable proxy errors (501/405/503), traceback sanitization, and terminal accessibility announcements |
+| `prompt-view.test.js` | DOM rendering with stable `prompt-*` IDs and accessible announcements, keyboard shortcut `Ctrl+Enter` / `Cmd+Enter` (ignores repeat keydown, preserves newlines and IME composition), Generate, Cancel, Clear, and Copy buttons lifecycle, Copy button clipboard interaction via `navigator.clipboard.writeText` with rapid feedback timer reset, Clear action resetting prompt input and output when idle (disabled during generation), readiness gating of submission, manual health retry button with typed API key sync and clearing, error banner display, terminal status announcements with accurate Unicode codepoint counting, and safe disposer cleanup |
+| `inspector.test.js` | Sparse node ID indexing, incoming/outgoing degree and neighbor list computation, neighbor list pagination without truncation (`Prev` and `Next`, 10 per page), self-loop activity deduplication per step, bounded per-node recent observed fire history capped at 32 steps (`MAX_RECENT_STEPS`) within the current epoch, epoch reset and mapping replacement clearing stale selections and histories, keyboard selection form, custom event dispatch (`select-node` and `node-select` without echo loops), explicit `Body ID: not exported` status, role display from declared group, and plain-words missing-data caveat ("No observed fire does not mean inactive; fire means positive KC code, not biological spikes") |
+| `gpu.test.js` & `layout.test.js` | Node picking under camera pan/zoom transformations, drag vs click threshold differentiation, background click clearing selection, dynamic selection ring and incident edge overlay rendering without per-frame allocations, and selection events prior to GPU readiness |
+| `protocol.test.js` | Shared v1 contract fixtures, action outputs, invalid line and version handling |
+| `sources.test.js` & `playback.test.js` | Live WebSocket and file stream ingestion, cadence pacing, pause/play/restart, gap handling, and replacement mappings |
+| `activity.test.js` & `camera.test.js` & `renderer.test.js` | Highlight decay, reduced motion, camera pan/zoom/fit coordinate math, WGSL pipeline upload, and burst buffer reuse |
 
 ## Network and visual checks
 

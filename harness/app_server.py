@@ -1,0 +1,591 @@
+"""FlyBrain WebGPU Application Server and OpenAI-compatible Model Proxy.
+
+This module provides a no-build, stdlib-only HTTP server combining:
+1. Static asset serving for the harness/ directory (WebGPU visualization harness,
+   recordings, protocol fixtures), confined to the harness directory without
+   exposing repository secrets or permitting path traversal.
+   The root path ("/" and "/app") redirects to "/app/".
+2. Fixed-target reverse proxy for OpenAI-compatible model servers (e.g. model.serve.serve).
+   Whitelisted routes:
+     GET  /health
+     GET  /v1/models
+     POST /v1/completions
+     POST /v1/chat/completions
+   All other proxy routes or arbitrary URLs are rejected.
+3. Incremental SSE (Server-Sent Events) streaming with cancellation propagation:
+   When downstream clients (such as browser AbortController) disconnect, the proxy
+   detects the disconnection via bounded select polling, breaks the stream, and
+   immediately tears down and closes the upstream HTTP connection (resetting the socket
+   via SO_LINGER where supported).
+   Cancellation propagation semantics:
+   Upstream generation termination is next-write best-effort: upstream computation
+   completes its in-progress token step and halts upon its next socket write or flush
+   when BrokenPipeError/ConnectionResetError is raised, releasing the engine lock and
+   generation resources.
+
+Usage:
+    python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
+"""
+
+import argparse
+import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
+import json
+import mimetypes
+import os
+from pathlib import Path
+import posixpath
+import select
+import socket
+import struct
+import sys
+from typing import Any, Dict, Optional, Tuple, Union
+import urllib.parse
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8772
+DEFAULT_API_URL = "http://127.0.0.1:8771"
+MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024  # 10 MB limit on incoming JSON payloads
+STREAM_SELECT_TIMEOUT = 0.25  # Bounded polling interval (seconds) for disconnect detection
+
+PROXY_GET_ROUTES = frozenset({"/health", "/v1/models"})
+PROXY_POST_ROUTES = frozenset({"/v1/completions", "/v1/chat/completions"})
+
+# Ensure modern web mime types are recognized
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("text/html; charset=utf-8", ".html")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("application/x-ndjson", ".ndjson")
+mimetypes.add_type("application/x-ndjson", ".jsonl")
+
+
+def is_loopback_host(host: str) -> bool:
+    """Return True if host is a literal loopback address or localhost."""
+    cleaned = host.strip("[]").lower()
+    if cleaned in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        ip = ipaddress.ip_address(cleaned)
+        return ip.is_loopback
+    except ValueError:
+        return False
+
+
+def validate_loopback_url(url: str) -> urllib.parse.SplitResult:
+    """Validate that the configured API URL uses http/https and targets loopback."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Upstream API URL scheme must be http or https, got {parsed.scheme!r}")
+    host = parsed.hostname or ""
+    if not is_loopback_host(host):
+        raise ValueError(f"Upstream API host must be literal loopback, got {host!r}")
+    return parsed
+
+
+def resolve_static_asset(requested_path: str, assets_dir: Path) -> Optional[Path]:
+    """Safely resolve a requested URL path within assets_dir.
+
+    Enforces confinement:
+    - Never serves files outside assets_dir (traversal prevention).
+    - Never serves hidden files/directories (starting with '.') or __pycache__.
+    - Maps directory paths to index.html if present.
+    Returns resolved Path if a regular file exists and is allowed, else None.
+    """
+    parsed_path = urllib.parse.urlsplit(requested_path).path
+    unquoted = urllib.parse.unquote(parsed_path)
+    rel_path = unquoted.lstrip("/")
+
+    # Normalize POSIX path to eliminate redundant slashes and dots
+    norm = posixpath.normpath(rel_path)
+    if norm.startswith("..") or "/../" in norm:
+        return None
+
+    parts = norm.split("/")
+    if any(part.startswith(".") or part == "__pycache__" for part in parts if part):
+        return None
+
+    try:
+        target = (assets_dir / norm).resolve()
+    except (ValueError, OSError):
+        return None
+
+    # Verify confinement within assets_dir
+    try:
+        rel_to_base = target.relative_to(assets_dir)
+    except ValueError:
+        return None
+
+    if any(part.startswith(".") or part == "__pycache__" for part in rel_to_base.parts):
+        return None
+
+    if target.is_dir():
+        index_file = target / "index.html"
+        try:
+            resolved_index = index_file.resolve()
+        except (ValueError, OSError):
+            return None
+        try:
+            rel_index = resolved_index.relative_to(assets_dir)
+        except ValueError:
+            return None
+        if any(part.startswith(".") or part == "__pycache__" for part in rel_index.parts):
+            return None
+        if resolved_index.is_file():
+            return resolved_index
+        return None
+    if target.is_file():
+        return target
+
+    return None
+
+
+class AppHTTPServer(ThreadingHTTPServer):
+    """Threading HTTP server carrying configured upstream API URL and assets directory."""
+
+    daemon_threads = True
+
+    def __init__(
+        self,
+        server_address: Tuple[str, int],
+        RequestHandlerClass: type,
+        api_url: str,
+        assets_dir: Path,
+    ):
+        super().__init__(server_address, RequestHandlerClass)
+        self.api_url = api_url
+        self.parsed_api_url = validate_loopback_url(api_url)
+        self.assets_dir = assets_dir.resolve()
+
+
+class AppRequestHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for static harness assets and proxied model API routes."""
+
+    server_version = "FlyBrainAppServer/1.0"
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        """Concise server logging without logging sensitive headers or payload bodies."""
+        sys.stderr.write(f"[app_server] {self.address_string()} {fmt % args}\n")
+
+    def _send_json(self, code: int, obj: dict, headers: Optional[Dict[str, str]] = None) -> None:
+        """Send a structured JSON response."""
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        if headers:
+            for k, v in headers.items():
+                self.send_header(k, v)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _send_json_error(self, code: int, msg: str, error_type: str = "invalid_request_error") -> None:
+        """Send a standard JSON error response conforming to OpenAI error conventions."""
+        self._send_json(code, {"error": {"message": msg, "type": error_type}})
+
+    def send_error(self, code: int, message: Optional[str] = None, explain: Optional[str] = None) -> None:
+        """Override default HTML error handler to guarantee safe JSON responses."""
+        self._send_json_error(code, message or "Error", "invalid_request_error")
+
+    def do_HEAD(self) -> None:
+        """Handle HEAD requests for static assets."""
+        self._handle_static_or_redirect(send_body=False)
+
+    def do_GET(self) -> None:
+        """Route GET requests: whitelisted model proxy routes or static assets."""
+        url_split = urllib.parse.urlsplit(self.path)
+        norm_path = posixpath.normpath(url_split.path.rstrip("/"))
+
+        if norm_path in PROXY_GET_ROUTES:
+            self._proxy_request(norm_path, url_split.query)
+            return
+
+        if norm_path in PROXY_POST_ROUTES:
+            self._send_json_error(405, f"Method GET not allowed for {norm_path}", "invalid_request_error")
+            return
+
+        self._handle_static_or_redirect(send_body=True)
+
+    def do_POST(self) -> None:
+        """Route POST requests: whitelisted model proxy routes only."""
+        url_split = urllib.parse.urlsplit(self.path)
+        norm_path = posixpath.normpath(url_split.path.rstrip("/"))
+
+        if norm_path in PROXY_POST_ROUTES:
+            self._proxy_request(norm_path, url_split.query)
+            return
+
+        if norm_path in PROXY_GET_ROUTES:
+            self._send_json_error(405, f"Method POST not allowed for {norm_path}", "invalid_request_error")
+            return
+
+        self._send_json_error(404, f"No route {self.path}", "invalid_request_error")
+
+    def _handle_static_or_redirect(self, send_body: bool = True) -> None:
+        """Serve static assets or redirect root to /app/."""
+        url_split = urllib.parse.urlsplit(self.path)
+        raw_path = url_split.path
+
+        # Root and /app redirect to /app/
+        if raw_path in ("/", "/app"):
+            self.send_response(307)
+            self.send_header("Location", "/app/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        asset = resolve_static_asset(raw_path, self.server.assets_dir)
+        if asset is None:
+            self._send_json_error(404, "Asset not found", "not_found")
+            return
+
+        # Ensure directory URLs without trailing slash redirect to trailing slash
+        check_path = self.server.assets_dir / raw_path.lstrip("/")
+        if check_path.is_dir() and not raw_path.endswith("/"):
+            self.send_response(307)
+            self.send_header("Location", raw_path + "/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        content_type, _ = mimetypes.guess_type(str(asset))
+        content_type = content_type or "application/octet-stream"
+
+        try:
+            size = asset.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            if send_body:
+                with open(asset, "rb") as f:
+                    while chunk := f.read(65536):
+                        self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _proxy_request(self, norm_path: str, query: str) -> None:
+        """Proxy a whitelisted request to the fixed upstream loopback API."""
+        body_bytes = None
+        if self.command == "POST":
+            content_len_hdr = self.headers.get("Content-Length")
+            if content_len_hdr is None:
+                self._send_json_error(411, "Length Required: Content-Length header missing")
+                return
+            try:
+                content_len = int(content_len_hdr)
+            except ValueError:
+                self._send_json_error(400, "Invalid Content-Length header")
+                return
+            if content_len < 0:
+                self._send_json_error(400, "Invalid Content-Length header")
+                return
+            if content_len > MAX_REQUEST_BODY_SIZE:
+                self._send_json_error(413, f"Request body exceeds {MAX_REQUEST_BODY_SIZE} bytes")
+                return
+            try:
+                body_bytes = self.rfile.read(content_len)
+            except OSError:
+                self._send_json_error(400, "Failed to read request body")
+                return
+            if len(body_bytes) != content_len:
+                self._send_json_error(400, "Truncated request body")
+                return
+
+        parsed_api = self.server.parsed_api_url
+        upstream_host = parsed_api.hostname or "127.0.0.1"
+        upstream_port = parsed_api.port or (443 if parsed_api.scheme == "https" else 80)
+        is_ssl = (parsed_api.scheme == "https")
+
+        api_base = parsed_api.path.rstrip("/")
+        upstream_path = f"{api_base}{norm_path}"
+        if query:
+            upstream_path += f"?{query}"
+
+        # Selective headers forwarding: memory-only authorization, content-type, accept
+        upstream_headers: Dict[str, str] = {}
+        if ctype := self.headers.get("Content-Type"):
+            upstream_headers["Content-Type"] = ctype
+        if auth := self.headers.get("Authorization"):
+            # Pass-through in memory only; never logged or persisted to disk
+            upstream_headers["Authorization"] = auth
+        if accept := self.headers.get("Accept"):
+            upstream_headers["Accept"] = accept
+
+        conn = None
+        try:
+            if is_ssl:
+                conn = http.client.HTTPSConnection(upstream_host, upstream_port, timeout=60.0)
+            else:
+                conn = http.client.HTTPConnection(upstream_host, upstream_port, timeout=60.0)
+
+            conn.request(self.command, upstream_path, body=body_bytes, headers=upstream_headers)
+            upstream_sock = getattr(conn, "sock", None)
+            resp = conn.getresponse()
+        except (ConnectionRefusedError, socket.gaierror):
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._send_json_error(503, "Upstream model server unavailable", "service_unavailable")
+            return
+        except (socket.timeout, TimeoutError):
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._send_json_error(504, "Upstream model server timed out", "timeout_error")
+            return
+        except (http.client.HTTPException, OSError):
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._send_json_error(503, "Upstream model server communication failed", "service_unavailable")
+            return
+
+        resp_status = resp.status
+        resp_content_type = resp.getheader("Content-Type", "")
+
+        if "text/event-stream" in resp_content_type:
+            self._forward_sse_stream(conn, resp, upstream_sock, resp_status)
+        else:
+            self._forward_nonstream_response(conn, resp, resp_status, resp_content_type)
+
+    def _forward_nonstream_response(
+        self,
+        conn: http.client.HTTPConnection,
+        resp: http.client.HTTPResponse,
+        status: int,
+        content_type: str,
+    ) -> None:
+        """Forward non-streaming response body and headers."""
+        try:
+            body = resp.read()
+        except OSError:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._send_json_error(503, "Failed to read upstream response", "service_unavailable")
+            return
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+        # Protect against leaking upstream HTML tracebacks or local filesystem paths
+        if status >= 500 and "application/json" not in content_type:
+            self._send_json_error(status, "Upstream model server error", "upstream_error")
+            return
+
+        self.send_response(status)
+        if content_type:
+            self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        # No CORS headers are emitted (same-origin application)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _forward_sse_stream(
+        self,
+        conn: http.client.HTTPConnection,
+        resp: http.client.HTTPResponse,
+        upstream_sock: Optional[socket.socket],
+        status: int,
+    ) -> None:
+        """Forward Server-Sent Events incrementally with browser disconnect detection.
+        Cancellation propagation semantics:
+        When the downstream client disconnects or aborts (e.g. AbortController), this
+        handler detects downstream EOF/reset via bounded select, terminates the streaming
+        loop, and immediately closes the upstream HTTP connection and socket (issuing an
+        immediate RST via SO_LINGER where supported).
+        Upstream generation termination is next-write best-effort: upstream computation
+        completes its in-progress token step and halts upon its next socket write or flush
+        when BrokenPipeError/ConnectionResetError is raised, releasing the engine generation
+        lock and resources.
+        """
+        self.send_response(status)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        # No CORS headers
+        self.end_headers()
+
+        client_sock = self.connection
+
+        if upstream_sock:
+            try:
+                upstream_sock.setblocking(False)
+            except Exception:
+                pass
+
+        try:
+            while not resp.isclosed():
+                # Read buffered bytes from Python's BufferedReader first if available without blocking
+                buffered = False
+                if hasattr(resp, "fp") and resp.fp and not getattr(resp.fp, "closed", False):
+                    try:
+                        peek = resp.fp.peek(1)
+                        if peek:
+                            buffered = True
+                    except (BlockingIOError, OSError):
+                        pass
+
+                if buffered:
+                    try:
+                        chunk = resp.read1(4096)
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    continue
+
+                try:
+                    r, _, _ = select.select([client_sock, upstream_sock or resp], [], [], STREAM_SELECT_TIMEOUT)
+                except (ValueError, OSError):
+                    break
+
+                # Check if downstream client disconnected
+                if client_sock in r:
+                    client_disconnected = False
+                    try:
+                        peek = client_sock.recv(1, socket.MSG_PEEK)
+                        if not peek:
+                            client_disconnected = True
+                    except (ConnectionResetError, BrokenPipeError, OSError):
+                        client_disconnected = True
+
+                    if client_disconnected:
+                        break
+
+                # Check if upstream produced data
+                up_target = upstream_sock or resp
+                if up_target in r:
+                    try:
+                        chunk = resp.read1(4096)
+                    except (BlockingIOError, OSError):
+                        chunk = None
+
+                    if chunk is not None:
+                        if not chunk:
+                            # Upstream EOF reached cleanly
+                            break
+                        try:
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            break
+        finally:
+            # Propagate client disconnect to upstream: reset socket and close connection
+            if upstream_sock:
+                try:
+                    upstream_sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                except Exception:
+                    pass
+                try:
+                    upstream_sock.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+            try:
+                resp.close()
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+            if upstream_sock:
+                try:
+                    upstream_sock.close()
+                except Exception:
+                    pass
+
+def make_server(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    api_url: str = DEFAULT_API_URL,
+    assets_dir: Optional[Union[str, Path]] = None,
+) -> AppHTTPServer:
+    """Create and bind an AppHTTPServer instance.
+
+    Parameters:
+        host: Literal loopback IP or hostname (default: "127.0.0.1").
+        port: Port to bind (default: 8772). Passing port=0 binds an OS-assigned free port.
+        api_url: Upstream model API URL (default: "http://127.0.0.1:8771"). Must be loopback.
+        assets_dir: Directory containing harness assets (default: harness/ directory).
+
+    Returns:
+        AppHTTPServer instance ready for serve_forever().
+    """
+    if not is_loopback_host(host):
+        raise ValueError(f"App server host must be literal loopback, got {host!r}")
+
+    validate_loopback_url(api_url)
+
+    if assets_dir is None:
+        resolved_assets = Path(__file__).resolve().parent
+    else:
+        resolved_assets = Path(assets_dir).resolve()
+
+    if not resolved_assets.is_dir():
+        raise ValueError(f"Assets directory does not exist: {resolved_assets}")
+
+    return AppHTTPServer((host, port), AppRequestHandler, api_url=api_url, assets_dir=resolved_assets)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="FlyBrain WebGPU Harness & OpenAI Model Proxy Server")
+    parser.add_argument("--host", default=DEFAULT_HOST, help=f"Loopback host to bind (default: {DEFAULT_HOST})")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port to bind (default: {DEFAULT_PORT})")
+    parser.add_argument("--api-url", default=DEFAULT_API_URL, help=f"Upstream model API URL (default: {DEFAULT_API_URL})")
+    parser.add_argument("--assets-dir", default=None, help="Directory to serve harness assets from (default: harness/)")
+
+    args = parser.parse_args()
+
+    try:
+        server = make_server(
+            host=args.host,
+            port=args.port,
+            api_url=args.api_url,
+            assets_dir=args.assets_dir,
+        )
+    except ValueError as e:
+        sys.stderr.write(f"Error starting app server: {e}\n")
+        sys.exit(1)
+
+    bound_host, bound_port = server.server_address[:2]
+    ready_url = f"http://{bound_host}:{bound_port}/app/"
+    print(f"FlyBrain app server listening at {ready_url} (proxying {args.api_url})", flush=True)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

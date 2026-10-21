@@ -1,12 +1,38 @@
-import { buildGraph } from "./layout.js";
+import { buildGraph, RADIUS } from "./layout.js";
 import { createRenderer } from "./renderer.js";
 import { Camera } from "./camera.js";
 import { EdgeActivity } from "./activity.js";
 
+export function pickNode(graph, camera, clientX, clientY, rect = { left: 0, top: 0 }) {
+  if (!graph?.positions || graph.positions.size === 0) return null;
+  const screenX = (clientX ?? 0) - (rect.left || 0);
+  const screenY = (clientY ?? 0) - (rect.top || 0);
+  const maxScreenDist = Math.max(RADIUS * camera.scale + 2, 8);
+  const maxScreenDistSq = maxScreenDist * maxScreenDist;
+  let minScreenDistSq = Infinity;
+  let closestId = null;
+
+  for (const [id, pos] of graph.positions) {
+    const screenNodeX = (pos.x - camera.centerX) * camera.scale + camera.width / 2;
+    const screenNodeY = (pos.y - camera.centerY) * camera.scale + camera.height / 2;
+    const dx = screenNodeX - screenX;
+    const dy = screenNodeY - screenY;
+    const distSq = dx * dx + dy * dy;
+    if (distSq <= maxScreenDistSq && distSq < minScreenDistSq) {
+      minScreenDistSq = distSq;
+      closestId = id;
+    }
+  }
+  return closestId;
+}
 export async function initializeGPU(canvas, onStatus, labels = null) {
   let mapping = null, graph = null, activity = null, renderer, device, context, observer;
   let disposed = false, frame = null, drag = null;
   let busy = false, dirty = false, mappingPending = true, resizePending = true;
+  let selectedId = null;
+  let lastPickTime = 0;
+  let lastDragTime = 0;
+  const DRAG_THRESHOLD = 4;
   const camera = new Camera(canvas.clientWidth, canvas.clientHeight);
   const listeners = [];
   const motion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -76,6 +102,13 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
       const next = mapping ? buildGraph(mapping) : null;
       renderer.setGraph(next, activity);
       graph = next;
+      if (selectedId !== null) {
+        try {
+          renderer.setSelectedNode(selectedId, graph);
+        } catch {
+          // Allocation failure preserves prior valid state
+        }
+      }
       camera.fit(graph?.bounds);
       if (labels) {
         labels.replaceChildren(...(graph?.labels ?? []).map((label) => {
@@ -99,12 +132,33 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
 
   // Register before adapter/device awaits so fast file or live input is retained.
   listen("mapping", ({ detail }) => {
+    if (mapping !== null || graph !== null) {
+      selectedId = null;
+      renderer?.setSelectedNode(null, null);
+    }
     mapping = detail;
     activity = new EdgeActivity(mapping.edges);
     mappingPending = true;
     invalidate();
   });
-  listen("reset", () => { mapping = activity = null; drag = null; mappingPending = true; invalidate(); });
+  listen("reset", () => {
+    selectedId = null;
+    renderer?.setSelectedNode(null, null);
+    mapping = activity = null;
+    drag = null;
+    mappingPending = true;
+    invalidate();
+  });
+  listen("select-node", ({ detail }) => {
+    const id = detail?.id !== undefined ? detail.id : (typeof detail === "number" ? detail : null);
+    try {
+      renderer?.setSelectedNode(id, graph);
+      selectedId = id;
+    } catch {
+      // Allocation failure preserves prior valid selection
+    }
+    invalidate();
+  });
   listen("fire", ({ detail }) => {
     if (!activity || disposed) return;
     const now = performance.now();
@@ -129,23 +183,69 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     camera.zoom(Math.exp(-event.deltaY * 0.001), event.clientX - rect.left, event.clientY - rect.top);
     invalidate();
   }, { passive: false });
+  function pick(clientX, clientY) {
+    if (disposed || !graph) return;
+    lastPickTime = performance.now();
+    const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+    const closestId = pickNode(graph, camera, clientX, clientY, rect);
+    try {
+      renderer?.setSelectedNode(closestId, graph);
+      selectedId = closestId;
+    } catch {
+      // Allocation failure preserves prior valid selection
+    }
+    invalidate();
+    canvas.dispatchEvent(new CustomEvent("node-select", { detail: { id: closestId } }));
+  }
+
   listen("pointerdown", (event) => {
     if (event.button !== 0) return;
     canvas.focus({ preventScroll: true });
-    canvas.setPointerCapture(event.pointerId);
-    drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    canvas.setPointerCapture?.(event.pointerId);
+    drag = {
+      id: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+    };
   });
   listen("pointermove", (event) => {
     if (!drag || drag.id !== event.pointerId) return;
-    camera.pan(event.clientX - drag.x, event.clientY - drag.y);
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > DRAG_THRESHOLD) {
+      drag.moved = true;
+    }
+    camera.pan(dx, dy);
     drag.x = event.clientX;
     drag.y = event.clientY;
     invalidate();
   });
-  const stopDrag = () => { drag = null; };
+  const stopDrag = (event) => {
+    if (drag && (event?.pointerId === undefined || event.pointerId === drag.id)) {
+      if (drag.moved) {
+        lastDragTime = performance.now();
+      } else {
+        pick(event?.clientX ?? drag.startX, event?.clientY ?? drag.startY);
+      }
+      drag = null;
+    }
+  };
   listen("pointerup", stopDrag);
-  listen("pointercancel", stopDrag);
-  listen("lostpointercapture", stopDrag);
+  listen("pointercancel", () => {
+    if (drag?.moved) lastDragTime = performance.now();
+    drag = null;
+  });
+  listen("lostpointercapture", () => {
+    if (drag?.moved) lastDragTime = performance.now();
+    drag = null;
+  });
+  listen("click", (event) => {
+    if (performance.now() - lastPickTime < 100 || performance.now() - lastDragTime < 100) return;
+    pick(event.clientX, event.clientY);
+  });
   listen("keydown", (event) => {
     const moves = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] };
     if (moves[event.key]) camera.pan(...moves[event.key]);

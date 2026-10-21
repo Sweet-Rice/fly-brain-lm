@@ -1,8 +1,8 @@
 # Real model to browser: reproducible workflow
 
-Run every command from the repository root. The standalone harness in `app/`
-only displays validated graph/activity data. It has no prompt UI; that belongs
-to #13. Live activity here comes from actual PyTorch model hooks. The model is
+Run every command from the repository root. The integrated browser workspace in `app/`
+combines WebGPU activity inspection with an in-browser prompt composer and neuron
+inspector. Live activity here comes from actual PyTorch model hooks. The model is
 **untrained**, so its generated text has no quality claim.
 
 ## 1. Offline review from a clean checkout
@@ -26,8 +26,10 @@ clears state and rereads the file from epoch 0, and speed changes the synthetic
 500 ms fire cadence at 1×. The 600 ms highlight duration is independent of
 playback speed. An existing highlight may finish fading after Pause. Gaps in
 `t` add neither waiting time nor fabricated activity. No external network access
-is used after checkout; `websockets` is unnecessary for file playback.
-
+is used after checkout; `websockets` is unnecessary for file playback. In this
+static offline mode, the prompt composer reports that the local model proxy is
+unavailable (static-page mode), while file playback and graph navigation operate
+normally.
 The reference's adjacent
 [`metadata`](recordings/reference.ndjson.metadata.json) identifies its real model,
 wiring, generation settings and recording digest. It contains **two mappings and
@@ -179,7 +181,104 @@ storage falls behind, producing valid `t` gaps rather than blocking the model.
 This workflow requires a zero-drop run and fails if any were lost; a successful
 metadata file records zero drops. See the terminal summary for the actual run.
 
-## 5. Existing checkpoints and visualization configuration
+## 5. Run the integrated browser workspace (prompting + graph visualization)
+
+The integrated browser workspace connects live model prompting and WebGPU activity
+inspection through a two-terminal loopback setup. The architecture uses clean public
+mount functions (`mountPrompt`, `mountInspector`) that return disposers, backed by
+DOM-free inference and topology controllers without provisional aliases (`.controller`,
+`.CLASSES`). Existing visualization sources and receivers are unaffected and operate
+normally even when the model API is missing or unstarted.
+
+Checkpoints are gitignored and not bundled; initialize an untrained scratch checkpoint
+first (default `model.init_model` writes `model/checkpoints/<impl>.pt`, e.g. `vibe.pt`,
+not `init.pt`; do not overwrite private trained checkpoints):
+
+```console
+# Step 1: Initialize an untrained checkpoint (vibe or vibe2) to a new path
+python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt
+
+# Terminal 1: Model server (HTTP API on 8771, visualization stream on 8767)
+python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767
+
+# Terminal 2: App server (serves /app/ and proxies /health + /v1 on 8772 to 8771)
+python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
+```
+
+Open **http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream** in a WebGPU-capable
+Chrome or Edge browser.
+
+### Architecture and port safety
+
+- **Port 8772 (App server)**: Serves `/app/` static assets from `harness/` and provides
+  a same-origin reverse proxy for `/health` and `/v1` endpoints (defaulting 8772 -> 8771).
+  This avoids browser CORS restrictions while accessing the model API.
+- **Port 8771 (Model HTTP API)**: Serves model completions via standard HTTP/SSE.
+- **Port 8767 (Visualization WebSocket)**: Serves the graph stream (`/stream`).
+- **Same-origin reverse proxy**: The app server reverse proxy is a local loopback
+  convenience for development, not public secure hosting. `model/serve/serve.py`
+  remains completely frozen and untouched.
+- **Model implementation selection**: Models (`vibe` vs `vibe2`) are chosen when
+  initializing the checkpoint (default `init_model` writes `model/checkpoints/<impl>.pt`,
+  e.g. `vibe.pt`, not `init.pt`; see [model initialization](../model/README.md)), not via
+  a serving dropdown in the UI. Do not overwrite private trained checkpoints. Serving
+  defaults to `model/checkpoints/init.pt`, so explicitly pass `--ckpt` pointing to your
+  scratch checkpoint. Serving loads whichever implementation is recorded in the checkpoint.
+
+### Prompt Composer in the workspace
+
+- **Submit**: Type a nonblank prompt and click **Generate** or press `Ctrl+Enter` /
+  `Cmd+Enter` (ordinary newlines and IME composition are preserved).
+- **Cancel**: Clicking **Cancel** triggers `AbortController.abort()`. The app server
+  detects the client disconnect and closes the upstream connection. The model server
+  discovers the severed connection on its next token write and stops generation (best
+  effort, no authoritative cancel acknowledgment). Any already-streamed partial text
+  is preserved in the output display.
+- **Clear & Copy**: **Clear** resets both the prompt and output (available when inactive /
+  idle); **Copy** copies the generated output text only, preserving Unicode whitespace,
+  rendered into the DOM strictly via `textContent`.
+- **Settings validation**: Parameters validate and reject invalid values: integer
+  `max_tokens` (1..128; upstream server cap is separate), finite `temperature` (0.0..2.0),
+  integer `top_k` (1..50257). Optional memory-only API key is normalized (whitespace trimmed,
+  empty string to null), retained only in memory, and synced across both completion
+  requests and `/health` readiness checks as `Authorization: Bearer <key>`.
+- **Readiness retry**: The interface queries same-origin `/health` on mount, displaying
+  model ID and the untrained model notice. Click **Retry** if the model server is started
+  after the app server. In static `http.server` mode, the prompt composer reports
+  that the model proxy is unavailable (static mode) without breaking graph playback.
+- **Separate transports**: The visualization WebSocket connects separately
+  (`/?ws=ws://127.0.0.1:8767/stream`). Tokens and graph fires stream over independent
+  transports; never claim fire/token alignment, synced tokens, or known checkpoint revision /
+  loading status.
+
+### Neuron Inspector in the workspace
+
+- **Click vs pan picking**: Click a node to pick it. Dragging (movement above the
+  threshold) pans the camera without picking nodes. Clicking empty background clears
+  the selection.
+- **Overlay highlighting**: The selected node is encircled with a highlight ring, and
+  its incident incoming and outgoing directed edges brighten without per-frame geometry
+  allocations or static buffer rebuilds.
+- **ID lookup**: Enter any sparse node ID in the inspector form to select and navigate
+  to that neuron.
+- **Node role**: Role displays the declared mapping group (e.g. `Sensory`, `Expansion_0`,
+  `Output`), never speculative biological anatomy.
+- **Neighbor navigation**: Displays in-degree and out-degree, and navigable neighbor
+  lists with pagination (`Prev` and `Next`, 10 per page) to prevent truncation of
+  high-degree nodes. Clicking any neighbor button immediately selects that neighbor.
+- **Observed fire history**: Displays recent observed fire steps for the selected node,
+  capped to a maximum capacity of 32 steps (`MAX_RECENT_STEPS`) within the current epoch.
+- **Missing-data caveat**: "No observed fire does not mean inactive; fire means positive
+  KC code, not biological spikes." Steps may also be omitted or dropped by bounded queues
+  under load.
+- **Explicit missing body IDs**: Body IDs are not exported in standard mappings and are
+  explicitly reported as unavailable (`Body ID: not exported`), never inferred or
+  fabricated.
+- **Epoch reset**: Mapping replacements or disconnects reset selections and clear
+  observed activity histories.
+- **Future timeline and memory panels**: Timeline and memory backend integration issues
+  will be linked in a follow-up PR later (no placeholder doc links are created).
+## 6. Existing checkpoints and visualization configuration
 
 Existing applications can continue using the frozen entry points in
 [`../model/serve/README.md`](../model/serve/README.md). Create a trusted scratch
@@ -192,6 +291,7 @@ build-selection environment variable. Legacy checkpoints without `impl` load as
 
 | Entry point | Visualization configuration |
 |---|---|
+| `harness.app_server` | `--port 8772` HTTP server for `/app/` static assets and `/health` + `/v1` reverse proxy. `--api-url http://127.0.0.1:8771` points to upstream model server. Loopback only. |
 | `harness.workflow` | `--impl` / `FLYBRAIN_IMPL` select a fresh implementation; default `vibe`. Loopback only; `--port 0` selects a free port; `--path /stream` or another absolute path. `--serve` keeps inference running; omit it for the finite smoke. `--record PATH` is optional. |
 | `model.serve.ask` | `--host 127.0.0.1 --port 8767 --path /stream --block 0`; `--port 0` chooses a free port. Visualization is enabled; there is **no `--no-viz` flag**. |
 | `model.serve.serve` | `--port 8771` is the HTTP API port; `--viz-port 8767` is the separate stream port. Stream path is `/stream`. `--no-viz` disables the stream/recorder without disabling requests. |
@@ -213,10 +313,14 @@ Visualization listeners are loopback-only. Page, API and stream ports are
 separate. Do not stop someone else's process to free a port; leave existing
 services on defaults 8765 and 8000 alone. Ctrl-C stops each server you started.
 
-## Troubleshooting and measured limits
+## 7. Troubleshooting and measured limits
 
 | Symptom | Check |
 |---|---|
+| Prompt proxy unavailable / 503 | Ensure `harness.app_server` is running on 8772 and the model server is running on 8771. Bare `http.server` does not proxy model requests (static-page mode). Click Retry on the health indicator after starting upstream. |
+| Stream cancellation behavior | Cancellation aborts the client request, causing `app_server` to close upstream. Upstream model server stops on its next token write; cancellation is best-effort with no wire cancel frame. |
+| Inspector shows "no observed fire" | "No observed fire does not mean inactive; fire means positive KC code, not biological spikes." Fire indicates positive KC activation in the visualized block, not biological spikes or biological inactivity. |
+| Body ID not exported | Standard model mappings do not include FlyWire/hemibrain body IDs. The inspector displays them explicitly as unavailable / not exported, never inferred. |
 | Unsupported mapping version | The receiver stops the source and reports logical code 1003. Browser JavaScript sends wire code **4001**, reason `Unsupported protocol version`, because it cannot call `close(1003)`. Choose a compatible source; automatic retries stop. |
 | WebGPU unavailable | Use capable Chrome/Edge with an enabled adapter/driver, and serve on secure loopback `http://127.0.0.1`. Read the GPU status. Protocol/file inspection works without drawing; tests cannot establish hardware support. |
 | Repeated connection failure | Keep both processes running. Use the exact printed port **and path**. Wrong paths close with 1008. Choose a free port for conflicts. HTTP page URLs and WebSocket source URLs differ. |
@@ -235,7 +339,7 @@ per installed mapping on the measured machine. Browser-native buffers during
 blocked JavaScript remain outside application control. No multi-day wall-clock
 soak, CUDA extraction or hardware sleep/resume check has been performed.
 
-## Target-machine verification
+## 8. Target-machine verification
 
 Registry integration was checked on 2026-10-21 on the Windows/Radeon machine
 with both `--impl vibe --path /vibe` and `--impl vibe2 --path /vibe2`. Each ran
@@ -274,12 +378,20 @@ model stopped, the checked-in file completed at epoch 1, step 10 and 11 fires,
 and Restart returned to epoch 0. A scratch untrained checkpoint also served a
 real HTTP completion with `--no-viz`; its only listener was the HTTP API.
 
+### Verification commands
+
 With test dependencies installed, run from the repository root:
 
 ```console
 python -m pytest -q
+python -m pytest test/test_app_server.py
 npm --prefix harness/app test
 ```
 
-The headless smoke complements these tests; browser checks exercise actual
-WebGPU and user controls rather than treating protocol tests as rendering proof.
+These commands exercise:
+- Python model, serve, stream, and app server reverse proxy tests (including 10 observed tests in `test/test_app_server.py`).
+- Browser harness tests (`harness/app/test/`) covering `generation.test.js`, `prompt-view.test.js`,
+  `inspector.test.js`, GPU picking, and v1 protocol conformance.
+Follow the [app guide](app/README.md#manual-verification-instructions) for manual two-terminal
+browser checks with a live model server. Browser checks exercise actual WebGPU and user
+controls rather than treating protocol tests as rendering proof.

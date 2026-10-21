@@ -1,4 +1,5 @@
 import { ACTIVITY_DURATION, EdgeActivity } from './activity.js';
+import { buildSelectionGeometry } from './layout.js';
 
 const shader = `
 struct Camera {
@@ -55,6 +56,10 @@ export function createRenderer(device, format) {
   let bindGroup;
   let activity = null;
   let activityBuffer;
+  let currentGraph = null;
+  let selectedNodeId = null;
+  let overlayBuffer = null;
+  let overlayCount = 0;
   let current = [];
   let currentBuffers = [];
   let uploadedVersion = -1;
@@ -81,6 +86,8 @@ export function createRenderer(device, format) {
       const nextBuffers = [];
       let nextActivityBuffer;
       let nextBindGroup;
+      let nextOverlayBuffer = null;
+      let nextOverlayCount = 0;
       try {
         for (const data of arrays) {
           if (!data.length) continue;
@@ -102,18 +109,40 @@ export function createRenderer(device, format) {
             ],
           });
         }
+        if (selectedNodeId !== null && graph?.positions?.has(selectedNodeId)) {
+          const data = buildSelectionGeometry(graph, selectedNodeId);
+          if (data.length) {
+            if (data.byteLength > device.limits.maxBufferSize) {
+              throw new Error('Selection geometry exceeds the GPU buffer size limit');
+            }
+            nextOverlayBuffer = device.createBuffer({
+              size: data.byteLength,
+              usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            });
+            device.queue.writeBuffer(nextOverlayBuffer, 0, data);
+            nextOverlayCount = data.length / 7;
+          }
+        }
       } catch (error) {
         release(nextBuffers);
+        if (nextOverlayBuffer) nextOverlayBuffer.destroy();
         throw error;
       }
       // WebGPU keeps previously submitted uses alive after destroy().
       release(currentBuffers);
+      if (overlayBuffer) overlayBuffer.destroy();
       current = next;
       currentBuffers = nextBuffers;
       activity = nextActivity;
       activityBuffer = nextActivityBuffer;
       bindGroup = nextBindGroup;
       uploadedVersion = activity?.version ?? -1;
+      currentGraph = graph;
+      overlayBuffer = nextOverlayBuffer;
+      overlayCount = nextOverlayCount;
+      if (selectedNodeId !== null && !graph?.positions?.has(selectedNodeId)) {
+        selectedNodeId = null;
+      }
     },
     fire(pairs, now) {
       if (disposed || !activity?.fire(pairs, now)) return false;
@@ -121,6 +150,56 @@ export function createRenderer(device, format) {
     },
     isActive(now) {
       return !disposed && Boolean(activity?.active(now));
+    },
+    setSelectedNode(id, graph = currentGraph) {
+      if (disposed) return;
+      const targetGraph = graph !== undefined ? graph : currentGraph;
+      const targetId = id ?? null;
+      if (targetId === selectedNodeId && targetGraph === currentGraph && (overlayBuffer || targetId === null)) {
+        return;
+      }
+      if (targetId === null || !targetGraph?.positions?.has(targetId)) {
+        if (overlayBuffer) {
+          overlayBuffer.destroy();
+          overlayBuffer = null;
+          overlayCount = 0;
+        }
+        selectedNodeId = null;
+        currentGraph = targetGraph;
+        return;
+      }
+      const data = buildSelectionGeometry(targetGraph, targetId);
+      if (!data.length) {
+        if (overlayBuffer) {
+          overlayBuffer.destroy();
+          overlayBuffer = null;
+          overlayCount = 0;
+        }
+        selectedNodeId = targetId;
+        currentGraph = targetGraph;
+        return;
+      }
+      if (data.byteLength > device.limits.maxBufferSize) {
+        throw new Error('Selection geometry exceeds the GPU buffer size limit');
+      }
+      let nextBuffer = null;
+      try {
+        nextBuffer = device.createBuffer({
+          size: data.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(nextBuffer, 0, data);
+      } catch (error) {
+        if (nextBuffer) nextBuffer.destroy();
+        throw error;
+      }
+      if (overlayBuffer) {
+        overlayBuffer.destroy();
+      }
+      overlayBuffer = nextBuffer;
+      overlayCount = data.length / 7;
+      selectedNodeId = targetId;
+      currentGraph = targetGraph;
     },
     draw(pass, camera, now = performance.now(), reducedMotion = false) {
       if (disposed || !current.length) return;
@@ -143,6 +222,10 @@ export function createRenderer(device, format) {
         pass.setVertexBuffer(0, buffer);
         pass.draw(count);
       }
+      if (overlayBuffer && overlayCount > 0) {
+        pass.setVertexBuffer(0, overlayBuffer);
+        pass.draw(overlayCount);
+      }
     },
     destroy() {
       if (disposed) return;
@@ -150,6 +233,13 @@ export function createRenderer(device, format) {
       release(currentBuffers);
       current = [];
       currentBuffers = [];
+      if (overlayBuffer) {
+        overlayBuffer.destroy();
+        overlayBuffer = null;
+        overlayCount = 0;
+      }
+      currentGraph = null;
+      selectedNodeId = null;
       activity = null;
       uniform.destroy();
     },

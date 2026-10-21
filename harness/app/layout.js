@@ -3,7 +3,7 @@ const COLORS = [
   [0.82, 0.57, 1], [1, 0.49, 0.62], [0.35, 0.87, 0.79],
 ];
 const SPACING = 20;
-const RADIUS = 3;
+export const RADIUS = 3;
 const CIRCLE_SEGMENTS = 12;
 
 export function buildGraph(mapping) {
@@ -118,5 +118,115 @@ export function buildGraph(mapping) {
   return {
     nodes: new Float32Array(nodes), edges: new Float32Array(edges), labels, bounds,
     nodeCount: mapping.nodes.length, edgeCount: mapping.edges.length, edgePairs: mapping.edges,
+    positions,
   };
+}
+
+export function buildSelectionGeometry(graph, selectedId) {
+  if (!graph?.positions?.has(selectedId)) return new Float32Array(0);
+  const node = graph.positions.get(selectedId);
+  const vertices = [];
+
+  function triangle(target, a, b, c, color, alpha) {
+    for (const [x, y] of [a, b, c]) {
+      target.push(x, y, ...color, alpha, -1);
+    }
+  }
+
+  function segment(target, a, b, color, alpha, width = 1.4) {
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const length = Math.hypot(dx, dy);
+    if (length === 0) return;
+    const ux = -dy / length * width;
+    const uy = dx / length * width;
+    triangle(target, [a[0] - ux, a[1] - uy], [a[0] + ux, a[1] + uy], [b[0] + ux, b[1] + uy], color, alpha);
+    triangle(target, [a[0] - ux, a[1] - uy], [b[0] + ux, b[1] + uy], [b[0] - ux, b[1] - uy], color, alpha);
+  }
+
+  function arrow(target, tip, direction, color, alpha, scale = 1.3) {
+    const length = Math.hypot(...direction);
+    if (length === 0) return;
+    const ux = direction[0] / length;
+    const uy = direction[1] / length;
+    triangle(target, tip,
+      [tip[0] - (ux * 5 + uy * 2.3) * scale, tip[1] - (uy * 5 - ux * 2.3) * scale],
+      [tip[0] - (ux * 5 - uy * 2.3) * scale, tip[1] - (uy * 5 + ux * 2.3) * scale],
+      color, alpha);
+  }
+
+  function ring(target, center, innerR, outerR, color, alpha, segments = 24) {
+    for (let j = 0; j < segments; j++) {
+      const a = j * 2 * Math.PI / segments;
+      const b = (j + 1) * 2 * Math.PI / segments;
+      const cosA = Math.cos(a), sinA = Math.sin(a);
+      const cosB = Math.cos(b), sinB = Math.sin(b);
+      const p1 = [center.x + cosA * innerR, center.y + sinA * innerR];
+      const p2 = [center.x + cosA * outerR, center.y + sinA * outerR];
+      const p3 = [center.x + cosB * outerR, center.y + sinB * outerR];
+      const p4 = [center.x + cosB * innerR, center.y + sinB * innerR];
+      triangle(target, p1, p2, p3, color, alpha);
+      triangle(target, p1, p3, p4, color, alpha);
+    }
+  }
+
+  // 1. Ring around selected node
+  ring(vertices, node, RADIUS + 1.2, RADIUS + 3.8, [1, 1, 1], 0.95, 24);
+
+  // 2. Incident edges and neighbor nodes
+  const edgePairs = graph.edgePairs ?? [];
+  const neighbors = new Set();
+  const outgoingColor = [1, 0.85, 0.35];
+  const incomingColor = [0.35, 0.85, 1];
+  const selfColor = [1, 0.95, 0.5];
+  for (const [source, destination] of edgePairs) {
+    const isOut = (source === selectedId);
+    const isIn = (destination === selectedId);
+    if (!isOut && !isIn) continue;
+
+    const a = graph.positions.get(source);
+    const b = graph.positions.get(destination);
+    if (!a || !b) continue;
+
+    if (isOut && destination !== selectedId) neighbors.add(destination);
+    if (isIn && source !== selectedId) neighbors.add(source);
+
+    if (source === destination) {
+      let previous = [a.x - 2, a.y - 2];
+      for (let i = 1; i <= 16; i++) {
+        const t = i / 16;
+        const u = 1 - t;
+        const point = [
+          u ** 3 * (a.x - 2) + 3 * u * u * t * (a.x - 20)
+            + 3 * u * t * t * (a.x + 20) + t ** 3 * (a.x + 2),
+          u ** 3 * (a.y - 2) + 3 * u * u * t * (a.y - 24)
+            + 3 * u * t * t * (a.y - 24) + t ** 3 * (a.y - 2),
+        ];
+        segment(vertices, previous, point, selfColor, 0.95, 1.4);
+        if (i === 16) arrow(vertices, point, [point[0] - previous[0], point[1] - previous[1]], selfColor, 0.95, 1.4);
+        previous = point;
+      }
+    } else {
+      const color = isOut ? outgoingColor : incomingColor;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy);
+      if (length > 0) {
+        const start = [a.x + dx / length * RADIUS, a.y + dy / length * RADIUS];
+        const end = [b.x - dx / length * RADIUS, b.y - dy / length * RADIUS];
+        segment(vertices, start, end, color, 0.9, 1.4);
+        arrow(vertices, end, [dx, dy], color, 0.9, 1.4);
+      }
+    }
+  }
+
+  // 3. Highlight neighbor nodes
+  for (const neighborId of neighbors) {
+    const neighborPos = graph.positions.get(neighborId);
+    if (neighborPos) {
+      ring(vertices, neighborPos, RADIUS + 0.6, RADIUS + 2.0, [0.9, 0.9, 0.9], 0.7, 16);
+    }
+  }
+
+  return new Float32Array(vertices);
 }

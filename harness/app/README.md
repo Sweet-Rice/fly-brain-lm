@@ -1,15 +1,58 @@
-# Standalone visualization harness
+# Integrated browser workspace
 
-This standalone WebGPU viewer accepts a configurable live WebSocket source or a
-local NDJSON recording through one v1 receiver. It draws every declared node and
-directed edge in groups derived from the mapping and highlights accepted fire
-events, with play, pause, restart and speed controls for recordings. The existing
-`harness/example/` Canvas demo is unchanged.
+This browser workspace pairs a WebGPU graph activity viewer with an integrated
+prompt composer and neuron inspector. Built with no-build vanilla ES modules, the
+public mount functions (`mountPrompt`, `mountInspector`) return disposers, while the
+core inference controller (`generation.js`), neuron index (`inspector.js`), and protocol
+parsers (`protocol.js`) contain DOM-free logic so that a future React or other UI
+port can import and reuse the same state machines and indexing without DOM coupling
+or provisional aliases (`.controller`, `.CLASSES`). Existing visualization sources
+and receivers are unaffected and operate normally even when the model API is missing
+or unstarted. The existing `harness/example/` Canvas demo is unchanged.
 
-For the canonical real-model reference, clean-checkout setup and all five
-integration scenarios, use the [end-to-end workflow](../WORKFLOW.md).
+For the canonical real-model reference, clean-checkout setup and all integration
+scenarios, use the [end-to-end workflow](../WORKFLOW.md).
+## Run the live workspace (real model + app server)
 
-## Run from a fresh checkout
+To run the full integrated workspace with live model prompting and visualization,
+initialize an untrained scratch checkpoint and use the two-terminal setup from
+the repository root (default `model.init_model` writes `model/checkpoints/<impl>.pt`,
+e.g. `vibe.pt`, not `init.pt`; do not overwrite private trained checkpoints):
+
+```console
+# Step 1: Initialize an untrained checkpoint (vibe or vibe2) to a new path
+python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt
+
+# Terminal 1: Real model server (HTTP API on 8771, visualization stream on 8767)
+python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767
+
+# Terminal 2: App server (serves /app/ and proxies /health + /v1 on 8772 to 8771)
+python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
+```
+
+Open **http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream** in a WebGPU-capable
+Chrome or Edge browser.
+- **Port safety**: Port **8772** serves the application and provides a same-origin stdlib
+  reverse proxy for `/health` and `/v1` endpoints (defaulting 8772 -> 8771); this same-origin
+  proxy avoids browser CORS restrictions. Port **8767** hosts the model visualization
+  WebSocket stream (`/stream`). Run one service per port; leave program defaults 8765 and
+  8000 alone.
+- **Local development proxy**: The app server reverse proxy is a local loopback
+  convenience, not public secure hosting. Upstream `model/serve/serve.py` remains
+  frozen and untouched.
+- **Implementation selection**: Model architectures (`vibe` vs `vibe2`) are chosen
+  when creating the checkpoint (default `model.init_model` writes `model/checkpoints/vibe.pt`,
+  not `init.pt`; do not overwrite private trained checkpoints; see
+  [model initialization](../../model/README.md)), not through a runtime serving dropdown.
+  Serving defaults to `model/checkpoints/init.pt`, so explicitly pass `--ckpt` pointing to
+  your scratch checkpoint. `model.serve.serve` loads whichever implementation is recorded
+  in the checkpoint metadata.
+- **Separate transports**: The visualization WebSocket is configured separately
+  (via `?ws=ws://127.0.0.1:8767/stream` or the UI field); text completions use
+  same-origin HTTP/SSE. Tokens and graph fires stream over separate transports;
+  never claim fire/token alignment, synced tokens, or known checkpoint revision /
+  loading status.
+## Run from a fresh checkout (offline review)
 
 Python 3 serves the static application; there are no frontend dependencies, build
 step, npm install or model requirements. From the repository root:
@@ -22,7 +65,10 @@ Open **http://127.0.0.1:8772/app/** in a WebGPU-capable Chrome or Edge browser.
 The page should show `WebGPU ready. Waiting for a mapping.` If an adapter is
 unavailable, it shows an actionable message and protocol inspection still works.
 Do not open the HTML with `file://`.
-
+In this static offline mode, the prompt composer detects that the model reverse
+proxy is unavailable (static-page mode) and displays a retryable notice, while
+offline recording playback, graph navigation, and independent WebSocket
+connections continue to work normally.
 Choose **Open a recording** and select
 `harness/protocol/v1/fixtures/reference.ndjson` or the real capture at
 `harness/example/once_upon_a_time.ndjson`. This needs no network service, PyTorch,
@@ -66,19 +112,104 @@ the mapping's array order; arrowheads point to the destination, including on
 self-connections and reverse connections. Group names also appear in the table
 below the graph. This is a schematic, not an anatomical reconstruction.
 
-### Inspect the graph
+### Inspect the graph and select neurons
 
 - Drag within the graph to pan; scroll to zoom around the pointer.
 - Use **Zoom in (+)**, **Zoom out (−)** and **Fit graph** without a mouse wheel.
 - Focus the graph with Tab: arrow keys pan, +/− zoom, and 0 or Home fits the graph.
 - Resizing preserves the current view; use Fit graph to show the whole network
   after changing window size. Dense graphs need zoom to inspect individual edges.
+- **Click vs pan picking**: Click directly on a node to select it. Dragging (pointer
+  movement exceeding a small movement threshold) pans the camera without selecting
+  nodes. Clicking empty background clears the active selection.
+- **Selection overlay**: Selecting a node highlights it with an overlay ring and
+  brightens its incident incoming and outgoing directed edges clearly. This overlay
+  is rendered dynamically without rebuilding static graph topology or reallocating
+  rendering pipelines.
+- Selection events (`node-select` and `select-node`) work even before GPU initialization
+  completes, or when WebGPU is unavailable.
 
 Layout is deterministic: each group gets a grid, with members sorted by numeric
 node id. Empty groups keep their place, isolated nodes remain visible and sparse
 ids do not allocate arrays sized by the largest id. Positions are computed locally;
 no coordinates or floating-point fields are added to the protocol.
 
+### Neuron inspector panel
+
+The neuron inspector (`inspector.js`) is backed by a DOM-free topology index (`NeuronIndex`)
+that manages sparse node IDs, adjacency lists, and per-node observed activity:
+
+- **ID selection form**: Enter any numeric sparse node ID (`#inspector-node-input`) and
+  click Inspect (`#inspector-select-btn`) or press Enter to inspect that node.
+- **Node attributes**: Displays the selected node ID and its declared group / model role
+  label (e.g. `Sensory`, `Expansion_0`, `Output`). Group names reflect actual mapping
+  declarations; no speculative biological anatomy is invented.
+- **Missing body IDs**: FlyWire/hemibrain body IDs are not present in exported model
+  mappings. The panel explicitly displays body IDs as unavailable / not exported
+  (`Body ID: not exported`), rather than inferring or hallucinating them.
+- **Topological neighbor navigation**: Shows exact in-degree and out-degree. Full lists
+  of upstream (incoming) and downstream (outgoing) neighbor node IDs are displayed with
+  pagination controls (`Prev` and `Next`, 10 per page) so high-degree nodes are never
+  silently truncated. Clicking any neighbor button immediately selects that node and
+  dispatches `select-node`.
+- **Observed fire history**: Displays the most recent observed fire steps for the
+  selected node, bounded to a maximum capacity of 32 steps (`MAX_RECENT_STEPS`) within
+  the current epoch. Memory usage is strictly bounded ($O(\text{nodes} + \text{edges} + \text{nodes}\times\text{history})$);
+  the inspector never accumulates an unbounded event stream.
+- **Missing-data caveat**: "No observed fire does not mean inactive; fire means positive
+  KC code, not biological spikes." Steps may also be omitted or dropped by bounded queues
+  under load.
+- **Epoch reset**: When a mapping replacement arrives or the connection resets, previous
+  selections and observed fire histories are cleared to prevent stale state from leaking
+  across epochs.
+
+### Prompt composer
+
+The prompt composer (`prompt-view.js` and `generation.js`) provides an in-browser
+interface for submitting generation requests to the local model reverse proxy:
+
+- **Prompt input**: Multiline, nonblank text area (`#prompt-input`). Submitting an
+  empty or whitespace-only prompt displays an inline validation error.
+- **Keyboard shortcut**: `Ctrl+Enter` or `Cmd+Enter` submits generation immediately,
+  without intercepting ordinary newlines or interfering with IME composition.
+- **Controls**:
+  - **Generate** (`#prompt-generate-btn`): Validates settings and initiates SSE streaming.
+    Disabled while an active request is in flight or when model readiness is not ready.
+  - **Cancel** (`#prompt-cancel-btn`): Aborts the active generation via `AbortController`.
+    The app server detects client disconnect and closes the upstream socket; the upstream
+    model server discovers the severed connection on its next token write and terminates
+    generation (best effort, no wire cancel acknowledgment). Any partial text already
+    received is preserved in the output display.
+  - **Clear** (`#prompt-clear-btn`): Clears both prompt input and output text; enabled only
+    when generation is inactive (idle).
+  - **Copy** (`#prompt-copy-btn`): Copies generated text only to the system clipboard,
+    preserving Unicode whitespace. Text is inserted into the DOM strictly via `textContent`,
+    preventing HTML injection. Rapid repeat clicks reset the copied feedback timer.
+- **Inference settings**:
+  - `max_tokens` (`#prompt-max-tokens`): Integer between 1 and 128 (validated and rejected
+    if out of bounds; upstream server cap is separate).
+  - `temperature` (`#prompt-temperature`): Finite float between 0.0 and 2.0 (validated and
+    rejected if out of bounds).
+  - `top_k` (`#prompt-top-k`): Integer between 1 and 50257 (validated and rejected if out of bounds).
+  - Optional API key (`#prompt-api-key`): Memory-only authorization field passed in the
+    `Authorization: Bearer <key>` header to upstream. It is normalized (whitespace trimmed,
+    empty string to null), retained only in JavaScript memory for the active session (never
+    persisted to localStorage, cookies, or disk), and synced to `/health` readiness checks as well.
+- **Model readiness and health**:
+  - Queries same-origin `GET /health` to confirm the model server is reachable.
+  - Displays model status, model ID (`flybrain-untrained`), and the untrained model note.
+    No checkpoint revisions or loading statuses are reported.
+  - Includes a manual retry button (`#prompt-health-retry-btn`) to recheck availability.
+  - In static offline mode (`http.server`), reports that the model proxy is unavailable
+    (static-page mode) with clear guidance rather than crashing.
+- **State machine and announcements**:
+  - Strict states: `idle`, `validating`, `submitting`, `streaming`, `cancelling`,
+    `completed`, `cancelled`, and `failed`.
+  - Accessible announcements (`#prompt-announcement`) announce terminal completion or
+    errors without flooding screen readers on every token chunk.
+- **Future timeline and memory panels**:
+  - Timeline and memory backend integration issues will be linked in a follow-up PR later
+    (no placeholder doc links are created).
 ### Activity highlights
 
 Every accepted source-to-destination pair brightens its entire directed edge,
@@ -185,10 +316,95 @@ sends **4001** with reason `Unsupported protocol version`, reports protocol code
 adaptation; the actual wire close code is 4001. Other protocol behavior follows
 the checked-in contract.
 
+## Versioned inference contract
+
+The workspace communicates with the local model via same-origin reverse-proxy routes
+provided by `harness.app_server`. Note that no OpenAPI specifications or TypeScript
+type definitions exist; this is a minimal HTTP/1.1 and Server-Sent Events contract
+implemented using Python stdlib and vanilla ES modules.
+
+### Endpoints
+
+- **`GET /health`**:
+  - **Response (200 OK)**:
+    ```json
+    {"status": "ok", "model": "flybrain-untrained", "note": "TEMPORARY, untrained"}
+    ```
+  - **Upstream unavailable (503 Service Unavailable)**:
+    ```json
+    {"error": {"message": "upstream model server unavailable", "type": "server_error"}}
+    ```
+- **`GET /v1/models`**:
+  - **Response (200 OK)**:
+    ```json
+    {"object": "list", "data": [{"id": "flybrain-untrained", "object": "model", "created": 0, "owned_by": "flybrainlm"}]}
+    ```
+- **`POST /v1/completions`**:
+  - **Request Body (JSON)**:
+    ```json
+    {
+      "prompt": "Once upon a time",
+      "max_tokens": 64,
+      "temperature": 1.0,
+      "top_k": 50,
+      "stream": true,
+      "stream_options": {"include_usage": true}
+    }
+    ```
+  - **Settings**: `prompt` must be a non-empty string; `max_tokens` must be an integer
+    in 1..128 (validated and rejected if out of bounds; upstream server cap is separate,
+    default cap 128); `temperature` is a finite float in 0.0..2.0; `top_k` is an integer
+    in 1..50257 (defaults to 50).
+  - **Non-streaming (`stream: false`)**:
+    Returns HTTP 200 JSON with `object: "text_completion"`, `choices: [{"text": "...", "index": 0, "finish_reason": "length"|"stop"}]`,
+    and `usage: {"prompt_tokens": N, "completion_tokens": M, "total_tokens": N+M}`.
+  - **Streaming (`stream: true`)**:
+    Returns HTTP 200 with `Content-Type: text/event-stream`, `Cache-Control: no-cache`,
+    `Connection: close`.
+
+### SSE chunk sequence and delimiter
+
+When `stream: true`, the server emits a sequence of SSE data frames formatted as
+`data: <JSON>\n\n`:
+
+1. **Text chunks**: Emitted as tokens are decoded:
+   ```
+   data: {"id": "cmpl-...", "created": 1700000000, "model": "flybrain-untrained", "object": "text_completion", "choices": [{"index": 0, "text": " token", "logprobs": null, "finish_reason": null}]}
+
+   ```
+2. **Terminal finish chunk**: Empty text with a finish reason (`length` or `stop`):
+   ```
+   data: {"id": "cmpl-...", "created": 1700000000, "model": "flybrain-untrained", "object": "text_completion", "choices": [{"index": 0, "text": "", "logprobs": null, "finish_reason": "length"}]}
+
+   ```
+3. **Optional usage chunk** (if `stream_options.include_usage` was requested):
+   ```
+   data: {"id": "cmpl-...", "created": 1700000000, "model": "flybrain-untrained", "object": "text_completion", "choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 16, "total_tokens": 20}}
+
+   ```
+4. **Terminal stream delimiter**:
+   ```
+   data: [DONE]
+
+   ```
+
+### Disconnect and cancellation limits
+
+- When the user cancels generation via **Cancel**, the browser's `AbortController`
+  aborts the fetch request, closing the client HTTP socket.
+- `harness.app_server` detects the closed socket during SSE forwarding and immediately
+  closes its upstream HTTP connection to `model.serve.serve`.
+- Upstream `model.serve.serve` executes generation synchronously in a generator loop.
+  It discovers the severed connection on its next `wfile.write()` attempt when
+  `BrokenPipeError` or `ConnectionResetError` is raised. The generator loop terminates,
+  `pieces.close()` runs in a `finally` block, and the engine generation lock is released.
+- **Cancellation is best-effort at the next token write**: Upstream does not poll
+  for socket disconnect mid-compute, and there is no out-of-band wire cancel frame
+  or authoritative cancellation acknowledgment.
+
 ## Verify
 
-Node.js 22+ runs the protocol/source/renderer tests without installing
-anything. From this folder:
+Node.js 22+ runs the frontend tests without installing npm dependencies. From this folder:
 
 ```console
 npm test
@@ -200,37 +416,89 @@ Or from the repository root:
 npm --prefix harness/app test
 ```
 
-CI runs this suite independently of the Python jobs. Tests exercise every valid
-and invalid #14 fixture against the actual JS receiver, real capture validation,
-live/file parity, cancellation, stale sockets, reconnect/reset and unsupported
-version shutdown. They also cover deterministic layout, sparse ids, self-loops,
-buffer replacement/release, camera navigation, GPU initialization races,
-deterministic activity expiry/restarts, burst buffer reuse and reduced motion.
-Recording tests cover play/pause, speed changes, restart, stream order and gaps,
-replacement mappings, invalid lines, unusable files and unsupported-version stops.
-Python's contract-artifact tests remain independent.
+To verify the app server reverse proxy, run pytest from the repository root:
 
-For a browser check, open the real capture with no model or replay running and
-confirm that its graph renders and edges brighten as playback advances. Pause
-midway and confirm that the accepted step stays fixed after existing highlights
-expire. Resume, try each speed, then restart: the first mapping must return to
-epoch 0 and the fire counters must start over. Use a recording with a malformed
-line followed by valid fires, a gap in `t` and a replacement mapping to check
-that playback continues in recorded order. Empty files and unsupported versions
-should show clear errors; switching to live input must stop recording delivery.
+```console
+python -m pytest test/test_app_server.py
+```
 
-Connect to the replay, stop and
-restart that replay, and confirm mapping-first recovery and cleared counters.
-Active edges and their arrowheads should brighten during fires and settle back
-after 600 ms without activity. Check a stream with gaps in `t` and repeated pairs;
-the former must not delay a highlight and the latter must restart its duration.
-Replace the mapping or reconnect during a highlight to confirm no activity leaks
-into the new graph. Enable the system's reduced-motion preference and confirm
-highlights hold steady before disappearing.
-Verify that the reference recording replaces its first graph with only Sensory
-and Output groups, 3 nodes and 2 edges. Load the real capture and inspect all
-five groups, 1,958 nodes and 19,037 directed edges. Test dragging, wheel/button
-zoom, keyboard panning and Fit; resize to a narrow window and repeat. In an unsupported-WebGPU browser,
-confirm that the status explains the problem while both stream sources remain
-usable. WebGPU uses the local machine's adapter; passing protocol tests alone
-does not prove hardware support.
+### Test coverage
+
+- **`test/test_app_server.py`**: Loopback-only binding, static asset confinement under `harness/`,
+  rejection of parent directory traversal (`..`) and hidden files/repo secrets, root `/` redirect
+  to `/app/`, proxy route whitelist (`GET /health`, `GET /v1/models`, `POST /v1/completions`,
+  `POST /v1/chat/completions`), structured JSON 503 when upstream is down, incremental SSE
+  streaming without buffering the full response, closing of upstream socket on client abort,
+  and memory-only `Authorization` header pass-through (10 observed tests).
+- **`generation.test.js`**: Parameter validation and rejection (empty/whitespace rejection,
+  bounds validation for `max_tokens` [1..128], `temperature` [0..2], and `top_k` [1..50257];
+  upstream server cap is separate), inference state machine transitions (`idle`, `validating`,
+  `submitting`, `streaming`, `cancelling`, `completed`, `cancelled`, `failed`), SSE line and
+  JSON chunk parser, usage chunk handling, terminal `[DONE]` detection, UTF-8 multi-byte split
+  handling across chunk boundaries, malformed/truncated stream error recovery with preserved partial
+  text, cancellation abort signal handling, reader lock release on terminal `[DONE]` or cancellation,
+  health readiness checks and retry, normalized API key header sync, actionable proxy errors
+  (501/405/503), traceback sanitization, and terminal accessibility announcements.
+- **`prompt-view.test.js`**: DOM rendering with stable `prompt-*` IDs and accessible announcements,
+  keyboard shortcut `Ctrl+Enter` / `Cmd+Enter` (ignores repeat keydown, preserves newlines and
+  IME composition), Generate, Cancel, Clear, and Copy buttons lifecycle, Copy button clipboard
+  interaction via `navigator.clipboard.writeText` with rapid feedback timer reset, Clear action
+  resetting prompt input and output when idle (disabled during generation), readiness gating of
+  submission, manual health retry button with typed API key sync and clearing, error banner display,
+  terminal status announcements with accurate Unicode codepoint counting, and safe disposer cleanup.
+- **`inspector.test.js`**: DOM-free `NeuronIndex` (sparse node ID indexing, integer ID parsing,
+  incoming/outgoing degree and neighbor list computation, self-loop activity deduplication per
+  step, per-node recent observed fire history capped at `MAX_RECENT_STEPS` [32 steps] within current
+  epoch, epoch reset and mapping replacement clearing stale state), `mountInspector` DOM rendering
+  with stable `inspector-*` IDs, selected node role (declared group name), explicit `Body ID: not exported`
+  status, keyboard selection form, custom event dispatch (`select-node` and `node-select` without
+  echo loops), paginated neighbor navigation (`Prev`/`Next`, 10 per page) without truncation,
+  plain-words missing-data caveat ("No observed fire does not mean inactive; fire means positive KC code, not biological spikes"),
+  canvas-null tolerance, and disposer cleanup.
+- **`gpu.test.js` and `layout.test.js`**: Node picking under camera pan/zoom transformations,
+  drag vs click threshold differentiation, background click clearing selection, dynamic
+  selection ring and incident edge overlay rendering without per-frame allocations, and
+  selection events prior to GPU readiness.
+- **Existing protocol and rendering suites**: `protocol.test.js`, `sources.test.js`,
+  `playback.test.js`, `activity.test.js`, `camera.test.js`, `renderer.test.js`,
+  `main.test.js`, and `workflow.test.js` continue to verify normative v1 contract fixtures,
+  real capture validation, live/file parity, reconnect/reset, deterministic layout,
+  sparse IDs, buffer release, and reduced motion.
+### Manual verification instructions
+
+1. **Offline recording check**:
+   Start `python -m http.server 8772 --bind 127.0.0.1 --directory harness`.
+   Open `http://127.0.0.1:8772/app/`. Verify that the prompt composer displays a
+   notice that the local model proxy is unavailable (static mode) with a retry button.
+   Open `recordings/reference.ndjson`; verify graph renders, play/pause/restart/speed
+   controls work, and edges highlight on accepted fires.
+2. **Live two-terminal workspace check**:
+   Initialize an untrained scratch checkpoint (default `model.init_model` writes `model/checkpoints/<impl>.pt`,
+   e.g. `vibe.pt`, not `init.pt`; do not overwrite private trained checkpoints: `python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt`).
+   Start `python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767`
+   in Terminal 1, and `python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771`
+   in Terminal 2. Open `http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream`.
+   - Verify `#prompt-health-status` reports the configured model ID and note, and enables Generate.
+   - Enter a prompt, press `Ctrl+Enter` or click **Generate**; verify incremental text
+     appears in `#prompt-output` and the finish reason is reported.
+   - Start a longer generation and click **Cancel**; verify generation stops, already
+     received partial text remains displayed, and upstream disconnects.
+   - Click **Copy**; verify the copied clipboard contents match the generated output.
+   - Click a node in the graph; verify the node is highlighted with a ring, incident
+     edges highlight, and the inspector displays its sparse ID, role label, degree,
+     paginated neighbors, and `Body ID: not exported`.
+   - Click a neighbor button in the inspector; verify selection jumps to that neighbor.
+   - Drag across the graph; verify camera pans without picking nodes. Click background
+     to clear selection.
+   - Stop Terminal 1 and click Retry on the health indicator; verify an actionable 503
+     unavailable notice is shown.
+
+### Observed workspace smoke
+
+Checked with a fresh, untrained full `vibe2` checkpoint, the unchanged Python model
+server, and the same-origin app server in headless Chromium using SwiftShader WebGPU.
+Observed real SSE output and graph fires, cancel/resubmit, exact clipboard copying
+with browser permission, invalid-input rejection, API-down offline inspection, and
+API-key rejection/recovery. Node picking, neighbor focus, recording restart and
+recorded-to-live switching worked. Layout stayed within the viewport at 360 px and
+with CSS zoom set to 200%. This is software-GPU evidence, not native-device benchmarking.
