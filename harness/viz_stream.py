@@ -362,9 +362,13 @@ def attach(model, stream, graph, block=0):
     """Fire one step per token that passes through `block`'s address code. Returns the hook handle
     (call .remove() to detach). Uses batch element 0."""
     def hook(module, inputs, code):                          # code: (B, T, K)
+        positive = None
         for t in range(code.shape[1]):
             if stream.listening:
-                active = (code[0, t].detach() > 0).nonzero().flatten().tolist()
+                if positive is None:
+                    # One host transfer per address output; avoid CUDA nonzero's per-token synchronization.
+                    positive = (code[0].detach() > 0).cpu()
+                active = positive[t].nonzero().flatten().tolist()
                 stream.fire(graph.fire_pairs(active))
             else:
                 stream.skip()
