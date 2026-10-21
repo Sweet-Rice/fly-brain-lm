@@ -24,6 +24,8 @@ download unless that data is cached.
 | `test/test_serve.py` | Model listing, completions, chat, SSE output, and request errors against a real local HTTP server |
 | `test/test_viz_stream.py` | Exact model-block topology and active-KC routing, schema-valid deterministic export across checkpoint round trips, invalid topology rejection, live streaming and recording, joins/reconnects, refreshed topology epochs, empty steps, and deterministic backpressure/drop recovery |
 | `test/test_protocol_contract.py` | Portable v1 JSON Schemas, valid lifecycle fixture, invalid receiver cases, mapping epochs, and semantic id/reference constraints |
+| `test/test_workflow.py` | Full real-wiring CPU inference over real sockets, reconnects, replacement epochs, disabled-hook token equality, recording provenance, and overwrite protection |
+| `test/test_workflow_reference.py` | Checked-in real-model workflow recording, provenance digest, schemas, declared edges, and restarted step ordering across replacement mappings; no model import required |
 
 ## Continuous integration
 
@@ -37,7 +39,7 @@ the separate browser-harness check uses Node.js without model dependencies:
 | Model/core | All tests under `test/` except the dedicated data, HTTP API, and graph/WebSocket suites; new model modules are included automatically |
 | HTTP API | `test/test_serve.py` |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
-| Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, then inspect the NDJSON recording |
+| Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, inspect the NDJSON recording, and run the finite end-to-end workflow with a replacement mapping and provenance metadata |
 | Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers and device lifecycle; see [`harness/app/README.md`](../harness/app/README.md) |
 
 The jobs have no dependency edges. A failed suite does not cancel the other
@@ -45,7 +47,8 @@ suites or skip the smoke check. Each test job prints individual cases and adds
 their results, timings, and failure details to the run's **Summary** page;
 downloadable `junit-*` artifacts contain the machine-readable reports.
 `smoke-outputs` contains the standalone mapping, prompt output, recording, and viewer
-output, not the checkpoint. Reports are uploaded even when a check fails.
+output, plus the workflow recording, run log, and provenance/SHA-256 metadata.
+The checkpoint is not uploaded. Reports are uploaded even when a check fails.
 
 The backpressure test deliberately holds one client's server-side WebSocket
 send, fills its bounded queue, and verifies drops, producer progress, unaffected

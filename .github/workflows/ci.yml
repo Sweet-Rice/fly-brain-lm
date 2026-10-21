@@ -124,6 +124,8 @@ jobs:
               echo "- Mapping: $(grep -m 1 'nodes,' "$d/watch.txt" || true)"
               echo "- Fire steps: $(grep -c '^FIRE ' "$d/watch.txt" || true)"
             fi
+            if [ -s "$d/workflow.ndjson" ]; then echo "- End-to-end workflow recording: $(stat -c %s "$d/workflow.ndjson") bytes"; fi
+            if [ -s "$d/workflow.ndjson.metadata.json" ]; then echo "- Workflow provenance and SHA-256: workflow.ndjson.metadata.json (see smoke-outputs)"; fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload smoke outputs
         if: always()
@@ -135,4 +137,7 @@ jobs:
             ${{ runner.temp }}/flybrain-smoke/watch.txt
             ${{ runner.temp }}/flybrain-smoke/ci.ndjson
             ${{ runner.temp }}/flybrain-smoke/mapping.ndjson
+            ${{ runner.temp }}/flybrain-smoke/workflow.txt
+            ${{ runner.temp }}/flybrain-smoke/workflow.ndjson
+            ${{ runner.temp }}/flybrain-smoke/workflow.ndjson.metadata.json
           if-no-files-found: warn
