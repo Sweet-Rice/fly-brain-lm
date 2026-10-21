@@ -195,6 +195,7 @@ class VizStream:
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
         if not self._ready.wait(10) or self._error:
+            self.close()
             raise RuntimeError(f"visualization stream could not start on {self.host}:{self.port}: "
                                f"{self._error or 'timed out'}")
         return self
@@ -245,10 +246,12 @@ class VizStream:
         if self._closed:
             return
         self._closed = True
-        if self._loop:
-            asyncio.run_coroutine_threadsafe(self._shutdown(drain_timeout), self._loop).result(drain_timeout + 5)
-        if self._recorder:
-            self._recorder.close(drain_timeout)
+        try:
+            if self._loop and self._loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._shutdown(drain_timeout), self._loop).result(drain_timeout + 5)
+        finally:
+            if self._recorder:
+                self._recorder.close(drain_timeout)
 
     def _record(self, msg, mapping=False):
         if self._recorder:

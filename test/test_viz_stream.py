@@ -4,6 +4,7 @@ import itertools
 from contextlib import ExitStack
 import json
 from pathlib import Path
+import socket
 import threading
 import time
 
@@ -174,6 +175,27 @@ TINY_KC_PAIRS = [
 def test_stream_rejects_non_ipv4_loopback_bind(host):
     with pytest.raises(ValueError, match="loopback-only"):
         VizStream(host=host)
+
+
+def test_occupied_port_cleans_up_recording_and_allows_repeated_close(tmp_path, recwarn):
+    recording = tmp_path / "failed-start.ndjson"
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        stream = VizStream(port=occupied.getsockname()[1], record=str(recording))
+        stream.set_mapping({"type": "mapping", "version": 1, "groups": [], "nodes": [], "edges": []})
+        with pytest.raises(RuntimeError, match="visualization stream could not start"):
+            stream.start()
+        assert isinstance(stream._error, OSError)
+        assert stream._closed and stream._loop.is_closed()
+        assert stream._recorder._done.is_set()
+        stream._recorder._thread.join(TIMEOUT)
+        assert not stream._recorder._thread.is_alive()
+        stream.close()
+        stream.close()
+    assert stream.recording_error is None
+    assert json.loads(recording.read_text())["type"] == "mapping"
+    assert not recwarn.list
 
 
 def test_mapping_shape(setup):
