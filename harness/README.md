@@ -4,10 +4,17 @@ The model streams its activity over WebSocket (`ws://127.0.0.1:<port>/stream`): 
 
 All commands run from the repo root (`fly-brain-lm/`) with the project venv: `.venv/bin/python -m …`. Stop each long-running command with Ctrl-C.
 
+Start with the [end-to-end workflow](WORKFLOW.md): it covers the standalone
+WebGPU harness, a real-model smoke command, live reconnect/mapping replacement,
+and the checked-in reference recording. Offline file playback needs only a
+Python static server and a capable browser; it does not require `websockets`.
+
 | Path | Role |
 |---|---|
 | `viz_stream.py` | Stream server used by `model.serve.ask` and `model.serve.serve`. |
 | `export_mapping.py` | Exports one checkpoint's actual model topology without opening a stream or browser. |
+| `workflow.py` | Full-model integration smoke, continuous real inference, and recording with provenance; see [`WORKFLOW.md`](WORKFLOW.md). |
+| `recordings/` | Submission reference NDJSON and adjacent provenance metadata. |
 | `replay_prompt.py` | Replays the bundled "Once upon a time" recording. Does not load a model. |
 | `stress.py` | Profiles the actual topology and provides a finite synthetic live load. See [`PERFORMANCE.md`](PERFORMANCE.md). |
 | `watch_stream.py` | Terminal viewer for a live stream or an NDJSON recording. |
@@ -20,7 +27,7 @@ Demo ports used across these docs: page 8770, replay 8768, live chat 8767, live 
 
 ## Fixed-prompt replay (no model needed)
 
-`replay_prompt.py` serves a recorded stream of the real model processing "Once upon a time". It needs only Python and `websockets`; install it using the [root setup guide](../README.md#start-with-the-recorded-example). No model, checkpoint, PyTorch, or tiktoken is needed.
+`replay_prompt.py` serves a recorded stream of the real model processing "Once upon a time". It needs only Python and `websockets` (`python -m pip install websockets`). No model, checkpoint, PyTorch, or tiktoken is needed. This is the legacy WebSocket replay; the [canonical offline workflow](WORKFLOW.md#1-offline-review-from-a-clean-checkout) opens the new reference directly in the standalone harness without a stream process.
 
 The bundled recording is `harness/example/once_upon_a_time.ndjson`: one v1 mapping (1958 nodes, 19037 edges) followed by 11 fires with `t` = 0..10. It is a permanent development fixture. Do not overwrite or delete it.
 

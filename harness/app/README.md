@@ -6,6 +6,9 @@ directed edge in groups derived from the mapping and highlights accepted fire
 events, with play, pause, restart and speed controls for recordings. The existing
 `harness/example/` Canvas demo is unchanged.
 
+For the canonical real-model reference, clean-checkout setup and all five
+integration scenarios, use the [end-to-end workflow](../WORKFLOW.md).
+
 ## Run from a fresh checkout
 
 Python 3 serves the static application; there are no frontend dependencies, build

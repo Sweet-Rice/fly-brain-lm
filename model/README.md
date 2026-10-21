@@ -14,6 +14,9 @@ final (see the docstring in `model.py`).
 Run everything from the repo root with the venv interpreter, `.venv/bin/python -m <module>`. Root setup
 is in [../README.md](../README.md).
 
+For a checkpoint-free full-model smoke and a real model-to-WebGPU demonstration,
+see the [end-to-end visualization workflow](../harness/WORKFLOW.md).
+
 ## Prerequisites
 
 - Python packages imported by these files: `torch`, `numpy`, `pandas` (imported by `data/build_wiring.py`),
