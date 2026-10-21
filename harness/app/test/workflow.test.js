@@ -13,6 +13,9 @@ test("real-model workflow reaches the shipped playback, layout and edge activity
     || fileURLToPath(new URL("../../recordings/reference.ndjson", import.meta.url));
   const bytes = await readFile(path);
   const metadata = JSON.parse(await readFile(`${path}.metadata.json`, "utf8"));
+  if (process.env.FLYBRAIN_WORKFLOW_RECORDING && process.env.FLYBRAIN_IMPL) {
+    assert.equal(metadata.impl, process.env.FLYBRAIN_IMPL);
+  }
   assert.equal(createHash("sha256").update(bytes).digest("hex"), metadata.recording_sha256);
   assert.equal(metadata.mode, "smoke");
   assert.equal(metadata.visualization_disabled_identical, true);
@@ -52,7 +55,11 @@ test("real-model workflow reaches the shipped playback, layout and edge activity
   source.setSpeed(1000);
   await source.load(new Blob([bytes]));
   assert.equal(source.state, "finished", status?.message);
-  assert.deepEqual(epochs, [Array.from({ length: 33 }, (_, t) => t), Array.from({ length: 11 }, (_, t) => t)]);
+  const stepsPerRound = metadata.prompt_ids.length + metadata.generated_ids.length - 1;
+  assert.equal(metadata.rounds, 4);
+  assert.ok(stepsPerRound > 0);
+  assert.deepEqual(epochs, [Array.from({ length: 3 * stepsPerRound }, (_, t) => t),
+    Array.from({ length: stepsPerRound }, (_, t) => t)]);
   assert.equal(epochs.length, metadata.epochs);
   assert.equal(epochs.flat().length, metadata.steps);
   assert.equal(receiver.epoch, metadata.epochs - 1);

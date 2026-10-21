@@ -83,9 +83,15 @@ jobs:
           if-no-files-found: warn
 
   smoke:
-    name: Smoke (checkpoint, serve, record)
+    name: Smoke (${{ matrix.impl }} checkpoint, serve, record)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        impl: [vibe, vibe2]
+    env:
+      FLYBRAIN_IMPL: ${{ matrix.impl }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -127,6 +133,7 @@ jobs:
           {
             echo "## Smoke: checkpoint, serve, record: $status"
             echo
+            echo "- Model implementation: $FLYBRAIN_IMPL"
             echo "- Fresh recording through JavaScript playback, layout and activity: $HARNESS_OUTCOME"
             if [ -s "$d/ci.pt" ]; then echo "- Checkpoint built: $(stat -c %s "$d/ci.pt") bytes (not uploaded)"; fi
             if [ -s "$d/mapping.ndjson" ]; then echo "- Standalone mapping exported: $(stat -c %s "$d/mapping.ndjson") bytes"; fi
@@ -142,7 +149,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: smoke-outputs
+          name: smoke-outputs-${{ matrix.impl }}
           path: |
             ${{ runner.temp }}/flybrain-smoke/ask.txt
             ${{ runner.temp }}/flybrain-smoke/watch.txt

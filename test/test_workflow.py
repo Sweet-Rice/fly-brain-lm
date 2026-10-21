@@ -17,6 +17,7 @@ def capture(tmp_path_factory, request):
     old_threads = torch.get_num_threads()
     try:
         metadata = run_workflow(path, impl=request.param, path="/actual-model")
+        assert metadata["impl"] == request.param
     finally:
         torch.set_num_threads(old_threads)
     return path, metadata
