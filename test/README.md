@@ -10,9 +10,11 @@ dependencies described in the [root setup guide](../README.md#run-the-real-model
 ```
 
 To select a subset, pass one of the test file paths below instead of `test`.
-No saved checkpoint, real connectome files, prepared `train.bin`/`val.bin`, GPU,
-or running model/API server is required. The tests build CPU models with
-`Wiring.random()` and use temporary paths for recordings and checkpoints.
+No saved checkpoint, external connectome download, prepared `train.bin`/`val.bin`,
+GPU, or pre-existing model/API server is required. Tests build CPU models with
+`Wiring.random()` or the bundled `data/connectome/wiring.npz`, and use temporary
+paths for recordings and checkpoints. The workflow tests require that bundled
+wiring file.
 Contract tests use `jsonschema` against the checked-in Draft 2020-12 schemas and
 fixtures. `tiktoken` loads GPT-2 encoding data, so its first use may require a
 download unless that data is cached.
@@ -39,7 +41,7 @@ the separate browser-harness check uses Node.js without model dependencies:
 | Model/core | All tests under `test/` except the dedicated data, HTTP API, and graph/WebSocket suites; new model modules are included automatically |
 | HTTP API | `test/test_serve.py` |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
-| Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, inspect the NDJSON recording, and run the finite end-to-end workflow with a replacement mapping and provenance metadata |
+| Smoke (checkpoint, serve, record) | Build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, run the finite workflow, then feed its fresh recording through the shipped JavaScript playback, receiver, graph layout and edge activity |
 | Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers and device lifecycle; see [`harness/app/README.md`](../harness/app/README.md) |
 
 The jobs have no dependency edges. A failed suite does not cancel the other
@@ -47,7 +49,8 @@ suites or skip the smoke check. Each test job prints individual cases and adds
 their results, timings, and failure details to the run's **Summary** page;
 downloadable `junit-*` artifacts contain the machine-readable reports.
 `smoke-outputs` contains the standalone mapping, prompt output, recording, and viewer
-output, plus the workflow recording, run log, and provenance/SHA-256 metadata.
+output, plus the workflow recording, Python and JavaScript run logs, and
+provenance/SHA-256 metadata.
 The checkpoint is not uploaded. Reports are uploaded even when a check fails.
 
 The backpressure test deliberately holds one client's server-side WebSocket
@@ -67,8 +70,8 @@ The HTTP and WebSocket tests bind loopback on automatically assigned ports
 The environment must allow local socket binding.
 
 The suite uses a Python WebSocket client; it does **not** prove that a browser
-page renders correctly. Follow the [browser example guide](../harness/example/README.md)
-for a visual smoke check, and the [stream API verification instructions](../harness/API.md#84-verification-after-any-model-change)
+page renders correctly. Follow the [standalone WebGPU workflow](../harness/WORKFLOW.md#4-exercise-the-live-browser-workflow)
+for live and offline visual checks, and the [stream API verification instructions](../harness/API.md#84-verification-after-any-model-change)
 when changing the model/stream adapter.
 
 Before running API §8.4's V2 check, stop the recorded replay if it is using 8768:

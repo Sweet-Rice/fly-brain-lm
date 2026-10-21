@@ -60,6 +60,9 @@ The normative wire contract, portable schemas and conformance fixtures are in
 [`harness/protocol/v1/`](harness/protocol/v1/). Model integration and migration
 policy are in [`harness/API.md`](harness/API.md).
 
+The [visualization epic acceptance guide](harness/ACCEPTANCE.md) maps issue #23's
+criteria to implementation, tests, browser evidence and pending child PRs.
+
 <a id="ports-in-these-guides"></a>
 
 ## Ports in the guides
