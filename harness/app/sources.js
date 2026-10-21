@@ -7,6 +7,19 @@ export class LiveSource {
     this.socket = null;
     this.retryTimer = null;
     this.url = null;
+    this.document = globalThis.document;
+    this.onVisibilityChange = () => {
+      if (!this.url) return;
+      if (this.document.hidden) {
+        const url = this.url;
+        this.disconnect();
+        this.url = url;
+        this.onStatus({ state: "background", message: "Live source paused while this tab is hidden." });
+      } else if (!this.socket && this.retryTimer === null) {
+        this.open();
+      }
+    };
+    this.document?.addEventListener?.("visibilitychange", this.onVisibilityChange);
   }
 
   connect(url) {
@@ -17,6 +30,10 @@ export class LiveSource {
 
   open() {
     this.receiver.reset();
+    if (this.document?.hidden) {
+      this.onStatus({ state: "background", message: "Live source paused while this tab is hidden." });
+      return;
+    }
     this.onStatus({ state: "connecting", message: `Connecting to ${this.url}` });
     let socket;
     try {
@@ -66,6 +83,11 @@ export class LiveSource {
     this.receiver.reset();
     if (socket) socket.close();
     this.onStatus({ state: "disconnected", message: "Disconnected" });
+  }
+
+  dispose() {
+    this.document?.removeEventListener?.("visibilitychange", this.onVisibilityChange);
+    this.disconnect();
   }
 }
 

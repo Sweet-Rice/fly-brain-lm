@@ -126,6 +126,86 @@ test("a constructor failure is visible and leaves a clean receiver", () => {
   assert.equal(receiver.mapping, null);
 });
 
+function visibilityDocument(t, hidden = false) {
+  const document = new EventTarget();
+  document.hidden = hidden;
+  const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", { configurable: true, value: document });
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, "document", original);
+    else delete globalThis.document;
+  });
+  return visible => {
+    document.hidden = !visible;
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+}
+
+test("hidden live tabs disconnect and resume with a fresh mapping, ignoring stale callbacks", t => {
+  const visibility = visibilityDocument(t);
+  const { source, receiver, sockets, events, statuses } = liveHarness();
+  source.connect("ws://localhost/stream");
+  const old = sockets[0];
+  old.message(mapping);
+  old.message(fire(99));
+  visibility(false);
+  assert.equal(old.closes.length, 1);
+  assert.equal(source.url, "ws://localhost/stream");
+  assert.equal(source.socket, null);
+  assert.equal(receiver.mapping, null);
+  assert.equal(statuses.at(-1).state, "background");
+  const count = events.length;
+  old.message(mapping);
+  old.onopen();
+  old.onerror();
+  old.onclose({ code: 1006 });
+  assert.equal(events.length, count);
+  assert.equal(statuses.at(-1).state, "background");
+  visibility(true);
+  assert.equal(sockets.length, 2);
+  sockets[1].message(fire(100));
+  assert.equal(events.at(-1).action, "drop_message");
+  sockets[1].message(mapping);
+  sockets[1].message(fire(0));
+  assert.equal(receiver.lastT, 0);
+  source.dispose();
+});
+
+test("connecting while hidden waits for visibility and manual disconnect cancels resumption", t => {
+  const visibility = visibilityDocument(t, true);
+  const { source, sockets, statuses } = liveHarness();
+  source.connect("ws://localhost/stream");
+  assert.equal(sockets.length, 0);
+  assert.equal(statuses.at(-1).state, "background");
+  visibility(true);
+  assert.equal(sockets.length, 1);
+  visibility(false);
+  source.disconnect();
+  visibility(true);
+  assert.equal(sockets.length, 1);
+  source.dispose();
+});
+
+test("hiding cancels pending retries and disposal removes the visibility listener", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const visibility = visibilityDocument(t);
+  const { source, sockets } = liveHarness();
+  source.connect("ws://localhost/stream");
+  sockets[0].onclose({ code: 1006 });
+  visibility(false);
+  t.mock.timers.tick(5000);
+  assert.equal(sockets.length, 1);
+  visibility(true);
+  assert.equal(sockets.length, 2);
+  source.dispose();
+  const url = "ws://localhost/unused";
+  source.url = url;
+  visibility(false);
+  visibility(true);
+  assert.equal(sockets.length, 2);
+  assert.equal(source.url, url);
+});
+
 test("the checked-in recording produces the same receiver events from live and file inputs", async () => {
   const content = await readFile(new URL("../../protocol/v1/fixtures/reference.ndjson", import.meta.url), "utf8");
   const expected = JSON.parse(await readFile(new URL("../../protocol/v1/fixtures/reference.expected.json", import.meta.url), "utf8"));

@@ -75,7 +75,7 @@ const live = new LiveSource(receiver, {
   onEvent,
   onStatus({ state, message }) {
     element("source-status").textContent = message;
-    if (["connecting", "reconnecting", "disconnected"].includes(state)) clearDisplay();
+    if (["connecting", "reconnecting", "disconnected", "background"].includes(state)) clearDisplay();
     if (state === "unsupported") {
       renderMapping();
       renderCounters();
@@ -127,7 +127,7 @@ element("zoom-in").addEventListener("click", () => canvas.dispatchEvent(new Cust
 element("zoom-out").addEventListener("click", () => canvas.dispatchEvent(new CustomEvent("zoom", { detail: 0.8 })));
 window.addEventListener("pagehide", () => {
   recording.disconnect();
-  live.disconnect();
+  live.dispose();
   gpuReady.then((dispose) => dispose());
 });
 if (new URLSearchParams(location.search).has("ws")) live.connect(element("endpoint").value);
