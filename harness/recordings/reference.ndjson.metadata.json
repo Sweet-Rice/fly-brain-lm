@@ -61,7 +61,7 @@
   "wiring_sha256": "a4d3f54f8d7df9c24e215d167978c456a7d9c0b639e429904b2d09dfcd202843",
   "source_hash_newlines": "lf",
   "source_sha256": {
-    "harness/workflow.py": "3e62b51054db72f1b8d5750b2b801797f6373eec7043c8b7d7f3dd6b6a969f72",
+    "harness/workflow.py": "609b26cbd6d61ae5d86defa5edc4783de7f4324dd73f3454a862e864058f7f39",
     "harness/viz_stream.py": "86d4489357083ea34878dbf4ec620fa08e7ac0964344468605150263b4eb16a7",
     "model/model.py": "4d9e8d0af6859e56076958933753487f73d53408d9161c243a5cf68de72a3096",
     "data/build_wiring.py": "992e793d90eac4b34802bc5f9db5a566e9403f61d72e14fb37d1e62385e9b895"

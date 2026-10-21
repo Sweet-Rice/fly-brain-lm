@@ -24,7 +24,8 @@ TIMEOUT = 5
 
 
 def _sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
 
 
 def _receive_mapping(ws, expected):
