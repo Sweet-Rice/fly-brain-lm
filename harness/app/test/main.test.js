@@ -34,8 +34,9 @@ test("recording controls reset the graph and switch cleanly between files and li
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  t.after(() => {
+  t.after(async () => {
     window.dispatchEvent(new Event("pagehide"));
+    await new Promise(setImmediate);
     for (const [key, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else delete globalThis[key];

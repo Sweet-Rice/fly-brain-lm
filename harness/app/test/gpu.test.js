@@ -79,7 +79,7 @@ function platform(t, gpu = {}) {
     GPUBufferUsage: { UNIFORM: 1, VERTEX: 2, COPY_DST: 4, STORAGE: 8 },
     requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; },
     cancelAnimationFrame(id) { frames.delete(id); },
-    document: { createElement: () => ({ style: {} }) },
+    document: Object.assign(new EventTarget(), { visibilityState: "visible", createElement: () => ({ style: {} }) }),
     ResizeObserver: class {
       constructor(callback) { resize = callback; }
       observe(target) { calls.observed = target; }
@@ -101,11 +101,12 @@ function platform(t, gpu = {}) {
     status: value => statuses.push(value), resize: () => resize(), loseDevice,
     advance(milliseconds) { now += milliseconds; },
     emit(type, properties = {}) { canvas.dispatchEvent(Object.assign(new Event(type, { cancelable: true }), properties)); },
-    flush(at = now) {
+    async flush(at = now) {
       now = at;
       const pending = [...frames.values()];
       frames.clear();
       for (const callback of pending) callback(now);
+      await Promise.resolve();
     },
   };
 }
@@ -119,6 +120,7 @@ test("unsupported browsers keep stream inspection available without GPU setup", 
   const mock = platform(t, { requestAdapter: () => assert.fail("must not request a device") });
   globalThis.isSecureContext = false;
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   assert.match(mock.statuses.at(-1), /WebGPU unavailable.*stream inspection still works/);
   assert.equal(mock.calls.submissions, 0);
   dispose();
@@ -132,6 +134,7 @@ test("missing adapters and device failures produce usable fallback status", asyn
     await t.test(name, async t => {
       const mock = platform(t, { requestAdapter });
       const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
       assert.match(mock.statuses.at(-1), expected);
       assert.match(mock.statuses.at(-1), /Stream inspection still works/);
       assert.equal(mock.calls.submissions, 0);
@@ -143,6 +146,7 @@ test("missing adapters and device failures produce usable fallback status", asyn
 test("viewport configures, draws and resizes within device limits, then disposes", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   assert.equal(mock.calls.configuration.device, mock.device);
   assert.equal(mock.calls.configuration.format, "bgra8unorm");
   assert.equal(mock.calls.observed, mock.canvas);
@@ -153,10 +157,12 @@ test("viewport configures, draws and resizes within device limits, then disposes
   mock.canvas.clientWidth = 10000;
   mock.canvas.clientHeight = 5000;
   mock.resize();
+  await mock.flush();
   assert.equal(mock.canvas.width, 2048);
   assert.equal(mock.canvas.height, 1024);
   mock.canvas.clientWidth = mock.canvas.clientHeight = 0;
   mock.resize();
+  await mock.flush();
   assert.equal(mock.canvas.width, 1);
   assert.equal(mock.canvas.height, 1);
   assert.equal(mock.calls.submissions, 3);
@@ -167,6 +173,7 @@ test("viewport configures, draws and resizes within device limits, then disposes
   assert.equal(mock.calls.unconfigured, true);
   assert.ok(mock.calls.buffers.every(buffer => buffer.destroys === 1));
   mock.resize();
+  await mock.flush();
   assert.equal(mock.calls.submissions, 3);
   assert.equal(mock.calls.disconnects, 1);
   assert.equal(mock.calls.destroys, 1);
@@ -179,6 +186,7 @@ test("viewport configures, draws and resizes within device limits, then disposes
 test("device loss disconnects resizing and reports recovery without more draws", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   mock.loseDevice();
   await Promise.resolve();
   assert.match(mock.statuses.at(-1), /device lost.*stream inspection still works/);
@@ -186,28 +194,34 @@ test("device loss disconnects resizing and reports recovery without more draws",
   assert.equal(mock.calls.listeners.size, 0);
   assert.equal(mock.frames.size, 0);
   mock.resize();
+  await mock.flush();
   assert.equal(mock.calls.submissions, 1);
   dispose();
   assert.equal(mock.calls.destroys, 1);
 });
 
-test("initial drawing failures release the acquired device and resize observer", async t => {
+test("initial frame failures report recovery and keep disposal available", async t => {
   const mock = platform(t);
   mock.context.getCurrentTexture = () => { throw new Error("canvas failed"); };
-  await initializeGPU(mock.canvas, mock.status);
-  assert.match(mock.statuses.at(-1), /canvas failed.*Stream inspection still works/);
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
+  assert.match(mock.statuses.at(-1), /rendering failed.*Reload to retry/);
+  dispose();
   assert.equal(mock.calls.disconnects, 1);
   assert.equal(mock.calls.destroys, 1);
   mock.resize();
+  await mock.flush();
   assert.equal(mock.calls.submissions, 0);
 });
 
 test("resize drawing failures report recovery and keep disposal available", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
-  mock.flush();
+  await mock.flush();
+  await mock.flush();
   mock.context.getCurrentTexture = () => { throw new Error("surface unavailable"); };
   assert.doesNotThrow(() => mock.resize());
+  await mock.flush();
   assert.match(mock.statuses.at(-1), /rendering failed.*Reload to retry/);
   assert.equal(mock.calls.destroys, 0);
   dispose();
@@ -222,7 +236,7 @@ test("mapping received before adapter resolution is retained and drawn with safe
   mock.emit("mapping", { detail: mapping });
   ready({ requestDevice: async () => mock.device });
   const dispose = await initialization;
-  mock.flush();
+  await mock.flush();
   assert.match(mock.statuses.at(-1), /Drawing 2 nodes and 1 directed edges/);
   assert.equal(mock.calls.draws.length, 2);
   assert.deepEqual(mock.labels.children.map(label => label.textContent), ["Left", "Right"]);
@@ -233,14 +247,15 @@ test("mapping received before adapter resolution is retained and drawn with safe
 test("replacement and reset remove the previous geometry and labels", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status, mock.labels);
+  await mock.flush();
   mock.emit("mapping", { detail: mapping });
-  mock.flush();
+  await mock.flush();
   const previous = mock.calls.draws.map(draw => draw.buffer);
   mock.emit("mapping", { detail: {
     groups: [{ id: 70, name: "<script>not HTML</script>" }],
     nodes: [{ id: 400, group: 70 }], edges: [],
   } });
-  mock.flush();
+  await mock.flush();
   await Promise.resolve();
   assert.ok(previous.every(buffer => buffer.destroys === 1));
   assert.equal(mock.calls.draws.length, 3);
@@ -248,7 +263,7 @@ test("replacement and reset remove the previous geometry and labels", async t =>
   assert.deepEqual(mock.labels.children.map(label => label.textContent), ["<script>not HTML</script>"]);
   const drawCount = mock.calls.draws.length;
   mock.emit("reset");
-  mock.flush();
+  await mock.flush();
   await Promise.resolve();
   assert.equal(mock.calls.draws.length, drawCount);
   assert.equal(mock.labels.children.length, 0);
@@ -260,8 +275,9 @@ test("replacement and reset remove the previous geometry and labels", async t =>
 test("pointer, wheel and keyboard navigation update uniforms without geometry uploads", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   mock.emit("mapping", { detail: mapping });
-  mock.flush();
+  await mock.flush();
   const bufferCount = mock.calls.buffers.length;
   const geometryWrites = () => mock.calls.writes.filter(write => write.buffer.usage & GPUBufferUsage.VERTEX).length;
   const initialUploads = geometryWrites();
@@ -270,32 +286,33 @@ test("pointer, wheel and keyboard navigation update uniforms without geometry up
   mock.emit("pointerdown", { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
   mock.emit("pointermove", { pointerId: 1, clientX: 140, clientY: 120 });
   mock.emit("pointerup");
-  mock.flush();
+  await mock.flush();
   assert.equal(mock.calls.focused, true);
   assert.equal(mock.calls.captured, 1);
   assert.ok(uniform()[0] < original[0]);
   assert.ok(uniform()[1] < original[1]);
   const panned = [...uniform()];
   mock.emit("pointermove", { pointerId: 1, clientX: 200, clientY: 200 });
-  mock.flush();
+  await mock.flush();
   assert.deepEqual(uniform(), panned);
   mock.emit("wheel", { deltaY: -100, clientX: 240, clientY: 230 });
-  mock.flush();
+  await mock.flush();
   assert.ok(uniform()[2] > panned[2]);
   mock.emit("keydown", { key: "Home" });
-  mock.flush();
+  await mock.flush();
   assert.deepEqual(uniform(), original);
   mock.emit("keydown", { key: "ArrowRight" });
   mock.emit("zoom", { detail: 1.25 });
-  mock.flush();
+  await mock.flush();
   assert.ok(uniform()[0] > original[0]);
   assert.ok(uniform()[2] > original[2]);
   mock.emit("fit");
-  mock.flush();
+  await mock.flush();
   assert.deepEqual(uniform(), original);
   mock.canvas.clientWidth = 400;
   mock.canvas.clientHeight = 300;
   mock.resize();
+  await mock.flush();
   assert.deepEqual(uniform().slice(0, 3), original.slice(0, 3));
   assert.deepEqual(uniform().slice(4, 6), [400, 300]);
   assert.equal(geometryWrites(), initialUploads);
@@ -305,15 +322,16 @@ test("pointer, wheel and keyboard navigation update uniforms without geometry up
   const writes = mock.calls.writes.length;
   mock.emit("mapping", { detail: mapping });
   mock.emit("zoom", { detail: 2 });
-  mock.flush();
+  await mock.flush();
   assert.equal(mock.calls.writes.length, writes);
 });
 
 test("fires animate immediately across step gaps, stop at expiry and reuse graph buffers", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   mock.emit("mapping", { detail: mapping });
-  mock.flush();
+  await mock.flush();
   assert.equal(mock.frames.size, 0);
   const buffers = mock.calls.buffers.length;
   const geometryWrites = () => mock.calls.writes.filter(write => write.buffer.usage & GPUBufferUsage.VERTEX).length;
@@ -321,14 +339,14 @@ test("fires animate immediately across step gaps, stop at expiry and reuse graph
   mock.emit("fire", { detail: { t: 0, pairs: [[2, 99]] } });
   mock.emit("fire", { detail: { t: 1000000, pairs: [[2, 99]] } });
   assert.equal(mock.frames.size, 1, "bursts share one scheduled frame");
-  mock.flush(1300);
+  await mock.flush(1300);
   const uniform = mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.UNIFORM).data;
   assert.equal(uniform[3], 1300, "local elapsed time, not protocol t, drives the highlight");
   assert.equal(uniform[6], 600);
   assert.equal(mock.frames.size, 1);
-  mock.flush(1599);
+  await mock.flush(1599);
   assert.equal(mock.frames.size, 1);
-  mock.flush(1600);
+  await mock.flush(1600);
   assert.equal(mock.frames.size, 0, "the final frame restores base appearance and stops");
   assert.equal(geometryWrites(), uploads);
   assert.equal(mock.calls.buffers.length, buffers);
@@ -338,19 +356,20 @@ test("fires animate immediately across step gaps, stop at expiry and reuse graph
 test("repeated activity restarts expiry while empty and unknown pairs stay idle", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   mock.emit("mapping", { detail: mapping });
-  mock.flush();
+  await mock.flush();
   mock.emit("fire", { detail: { t: 0, pairs: [] } });
   mock.emit("fire", { detail: { t: 1, pairs: [[99, 2]] } });
   assert.equal(mock.frames.size, 0);
   mock.emit("fire", { detail: { t: 2, pairs: [[2, 99], [99, 2]] } });
-  mock.flush(1500);
+  await mock.flush(1500);
   mock.emit("fire", { detail: { t: 500, pairs: [[2, 99]] } });
-  mock.flush(1600);
+  await mock.flush(1600);
   const activity = mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data;
   assert.equal(activity[0], 1500);
   assert.equal(mock.frames.size, 1);
-  mock.flush(2100);
+  await mock.flush(2100);
   assert.equal(mock.frames.size, 0);
   dispose();
 });
@@ -359,17 +378,18 @@ test("crossing expiry during submission still schedules a frame to clear reduced
   const mock = platform(t);
   mock.motion.matches = true;
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   mock.emit("mapping", { detail: mapping });
-  mock.flush();
+  await mock.flush();
   mock.emit("fire", { detail: { t: 0, pairs: [[2, 99]] } });
   const submit = mock.device.queue.submit;
   mock.device.queue.submit = () => { submit(); mock.advance(2); };
-  mock.flush(1599);
+  await mock.flush(1599);
   const uniform = () => mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.UNIFORM).data;
   assert.equal(uniform()[3], 1599);
   assert.equal(uniform()[7], 1);
   assert.equal(mock.frames.size, 1, "the last active frame must not leave a full highlight on screen");
-  mock.flush(1601);
+  await mock.flush(1601);
   assert.equal(uniform()[3], 1601);
   assert.equal(mock.frames.size, 0);
   dispose();
@@ -378,20 +398,21 @@ test("crossing expiry during submission still schedules a frame to clear reduced
 test("mapping replacement and source reset clear highlights even when ids are reused", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   mock.emit("mapping", { detail: mapping });
   mock.emit("fire", { detail: { t: 0, pairs: [[2, 99]] } });
-  mock.flush(1100);
+  await mock.flush(1100);
   assert.equal(mock.frames.size, 1);
   mock.emit("mapping", { detail: mapping });
-  mock.flush();
+  await mock.flush();
   assert.equal(mock.frames.size, 0);
   const activity = mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data;
   assert.ok(activity[0] < 0, "reused edges have no inherited start time");
   mock.emit("fire", { detail: { t: 0, pairs: [[2, 99]] } });
-  mock.flush(1200);
+  await mock.flush(1200);
   assert.equal(mock.frames.size, 1);
   mock.emit("reset");
-  mock.flush();
+  await mock.flush();
   assert.equal(mock.frames.size, 0);
   assert.match(mock.statuses.at(-1), /Waiting for a mapping/);
   mock.emit("fire", { detail: { t: 1, pairs: [[2, 99]] } });
@@ -408,11 +429,11 @@ test("recent fires received before GPU initialization retain their original star
   mock.emit("fire", { detail: { t: 900, pairs: [[2, 99]] } });
   ready({ requestDevice: async () => mock.device });
   const dispose = await initialization;
-  mock.flush(1100);
+  await mock.flush(1100);
   const activity = mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data;
   assert.equal(activity[0], 1000);
   assert.equal(mock.frames.size, 1);
-  mock.flush(1600);
+  await mock.flush(1600);
   assert.equal(mock.frames.size, 0);
   dispose();
 });
@@ -428,7 +449,7 @@ test("reset before GPU initialization discards pending fires", async t => {
   mock.emit("mapping", { detail: mapping });
   ready({ requestDevice: async () => mock.device });
   const dispose = await initialization;
-  mock.flush();
+  await mock.flush();
   assert.equal(mock.frames.size, 0);
   const activity = mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data;
   assert.ok(activity[0] < 0);
@@ -439,16 +460,17 @@ test("reduced-motion preference reaches drawing and changes during active highli
   const mock = platform(t);
   mock.motion.matches = true;
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   mock.emit("mapping", { detail: mapping });
   mock.emit("fire", { detail: { t: 0, pairs: [[2, 99]] } });
-  mock.flush(1100);
+  await mock.flush(1100);
   const uniform = () => mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.UNIFORM).data;
   assert.equal(uniform()[7], 1);
   mock.motion.matches = false;
   mock.motion.dispatchEvent(new Event("change"));
-  mock.flush(1200);
+  await mock.flush(1200);
   assert.equal(uniform()[7], 0);
-  mock.flush(1600);
+  await mock.flush(1600);
   assert.equal(mock.frames.size, 0);
   mock.motion.matches = true;
   mock.motion.dispatchEvent(new Event("change"));
@@ -463,6 +485,7 @@ test("reduced-motion preference reaches drawing and changes during active highli
 test("reference stream and filtered pairs drive only declared edges across mapping epochs", async t => {
   const mock = platform(t);
   const dispose = await initializeGPU(mock.canvas, mock.status);
+  await mock.flush();
   const receiver = new ProtocolReceiver();
   const reference = readFileSync(new URL("../../protocol/v1/fixtures/reference.ndjson", import.meta.url), "utf8").trim().split("\n");
   const process = raw => {
@@ -473,28 +496,103 @@ test("reference stream and filtered pairs drive only declared edges across mappi
   };
   const activity = () => mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data;
   process(reference[0]);
-  mock.flush();
+  await mock.flush();
   process(reference[1]);
-  mock.flush(1100);
+  await mock.flush(1100);
   assert.deepEqual(activity(), [1000, 1000, -1]);
   process(reference[2]);
-  mock.flush(1200);
+  await mock.flush(1200);
   assert.equal(receiver.lastT, 2);
   assert.deepEqual(activity(), [1000, 1000, 1100]);
   const filtered = process(JSON.stringify({ type: "fire", t: 99, pairs: [[0, 2], [3, 2]] }));
-  mock.flush(1250);
+  await mock.flush(1250);
   assert.deepEqual(filtered.dropped_pairs, [[3, 2]]);
   assert.deepEqual(activity(), [1200, 1000, 1100]);
   process(reference[3]);
-  mock.flush(1300);
+  await mock.flush(1300);
   assert.deepEqual(activity(), [-1, -1]);
   assert.equal(mock.frames.size, 0);
   process(reference[4]);
-  mock.flush(1400);
+  await mock.flush(1400);
   assert.equal(receiver.lastT, 0);
   assert.deepEqual(activity(), [1300, 1300]);
   assert.equal(mock.frames.size, 1);
-  mock.flush(1900);
+  await mock.flush(1900);
   assert.equal(mock.frames.size, 0);
   dispose();
+});
+
+test("stalled GPU work coalesces thousands of fires, mappings, resizes, and camera changes", async t => {
+  const mock = platform(t);
+  const fences = [];
+  mock.device.queue.onSubmittedWorkDone = () => new Promise(resolve => fences.push(resolve));
+  const dispose = await initializeGPU(mock.canvas, mock.status, mock.labels);
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  assert.equal(mock.calls.submissions, 1);
+  const buffers = mock.calls.buffers.length;
+  const writes = mock.calls.writes.length;
+  for (let index = 0; index < 1000; index++) {
+    mock.emit("mapping", { detail: mapping });
+    for (let fire = 0; fire < 10; fire++) mock.emit("fire", { detail: { pairs: [[2, 99]] } });
+    mock.emit("zoom", { detail: 1.01 });
+    mock.canvas.clientWidth = 400;
+    mock.resize();
+  }
+  assert.equal(mock.frames.size, 0);
+  assert.equal(mock.calls.buffers.length, buffers);
+  assert.equal(mock.calls.writes.length, writes);
+  assert.equal(mock.calls.submissions, 1, "one unresolved submission at most");
+  assert.equal(mock.canvas.width, 1600, "surface reconfiguration waits for the frame boundary");
+  fences.shift()();
+  await Promise.resolve();
+  assert.equal(mock.frames.size, 1);
+  await mock.flush(1100);
+  assert.equal(mock.calls.submissions, 2);
+  assert.equal(mock.calls.buffers.length, buffers + 3, "only the latest mapping is built and uploaded");
+  assert.equal(mock.calls.buffers.filter(buffer => !buffer.destroys).length, 4);
+  assert.equal(mock.canvas.width, 800);
+  assert.deepEqual(mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data, [1000]);
+  dispose();
+  fences.shift()();
+  await Promise.resolve();
+  assert.equal(mock.frames.size, 0);
+  assert.ok(mock.calls.buffers.every(buffer => buffer.destroys === 1));
+});
+
+test("hidden documents retain latest state without GPU work and resume without stale highlights", async t => {
+  const mock = platform(t);
+  document.visibilityState = "hidden";
+  const dispose = await initializeGPU(mock.canvas, mock.status, mock.labels);
+  for (let index = 0; index < 1000; index++) {
+    mock.emit("mapping", { detail: mapping });
+    mock.emit("fire", { detail: { pairs: [[2, 99]] } });
+    mock.resize();
+  }
+  await mock.flush(100000);
+  assert.equal(mock.frames.size, 0);
+  assert.equal(mock.calls.submissions, 0);
+  assert.equal(mock.calls.buffers.length, 1, "no geometry is allocated while hidden");
+  assert.equal(mock.calls.writes.length, 0);
+  document.visibilityState = "visible";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await mock.flush();
+  assert.equal(mock.calls.submissions, 1);
+  assert.equal(mock.calls.buffers.length, 4);
+  assert.equal(mock.frames.size, 0, "expired highlights do not replay on returning");
+  assert.deepEqual(mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data, [-1]);
+  mock.emit("fire", { detail: { pairs: [[2, 99]] } });
+  assert.equal(mock.frames.size, 1);
+  document.visibilityState = "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+  assert.equal(mock.frames.size, 0, "visibility transition cancels pending RAF");
+  mock.emit("reset");
+  document.visibilityState = "visible";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await mock.flush();
+  assert.match(mock.statuses.at(-1), /Waiting for a mapping/);
+  assert.equal(mock.labels.children.length, 0);
+  dispose();
+  document.dispatchEvent(new Event("visibilitychange"));
+  assert.equal(mock.frames.size, 0);
 });

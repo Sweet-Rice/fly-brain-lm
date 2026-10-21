@@ -6,6 +6,7 @@ import { EdgeActivity } from "./activity.js";
 export async function initializeGPU(canvas, onStatus, labels = null) {
   let mapping = null, graph = null, activity = null, renderer, device, context, observer;
   let disposed = false, frame = null, drag = null;
+  let busy = false, dirty = false, mappingPending = true, resizePending = true;
   const camera = new Camera(canvas.clientWidth, canvas.clientHeight);
   const listeners = [];
   const motion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -36,13 +37,35 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
   }
 
   function invalidate() {
-    if (disposed || !renderer || frame !== null) return;
+    dirty = true;
+    if (disposed || !renderer || frame !== null || busy || document.visibilityState === "hidden") return;
     frame = requestAnimationFrame(() => {
       frame = null;
+      if (disposed || document.visibilityState === "hidden") return;
+      dirty = false;
       try {
+        if (mappingPending) {
+          mappingPending = false;
+          installMapping();
+        }
+        if (resizePending) {
+          resizePending = false;
+          const scale = Math.min(device.limits.maxTextureDimension2D / Math.max(canvas.clientWidth, canvas.clientHeight, 1), window.devicePixelRatio || 1);
+          canvas.width = Math.max(1, Math.round(canvas.clientWidth * scale));
+          canvas.height = Math.max(1, Math.round(canvas.clientHeight * scale));
+          camera.resize(canvas.clientWidth, canvas.clientHeight);
+        }
         const now = performance.now();
         draw(now);
-        if (renderer.isActive(now)) invalidate();
+        const animate = renderer.isActive(now);
+        busy = true;
+        device.queue.onSubmittedWorkDone().then(() => {
+          busy = false;
+          if (!disposed && (dirty || animate)) invalidate();
+        }, () => {
+          busy = false;
+          if (!disposed) onStatus("WebGPU rendering failed. Reload to retry.");
+        });
       } catch { onStatus("WebGPU rendering failed. Reload to retry."); }
     });
   }
@@ -72,21 +95,29 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
       labels?.replaceChildren();
       onStatus(`Cannot render this mapping: ${error.message}`);
     }
-    invalidate();
   }
 
   // Register before adapter/device awaits so fast file or live input is retained.
   listen("mapping", ({ detail }) => {
     mapping = detail;
     activity = new EdgeActivity(mapping.edges);
-    installMapping();
+    mappingPending = true;
+    invalidate();
   });
-  listen("reset", () => { mapping = activity = null; drag = null; installMapping(); });
+  listen("reset", () => { mapping = activity = null; drag = null; mappingPending = true; invalidate(); });
   listen("fire", ({ detail }) => {
     if (!activity || disposed) return;
     const now = performance.now();
-    if (renderer ? renderer.fire(detail.pairs, now) : activity.fire(detail.pairs, now)) invalidate();
+    if (activity.fire(detail.pairs, now)) invalidate();
   });
+  const visibilityChanged = () => {
+    if (document.visibilityState === "hidden") {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+    } else invalidate();
+  };
+  document.addEventListener?.("visibilitychange", visibilityChanged);
+  listeners.push(() => document.removeEventListener?.("visibilitychange", visibilityChanged));
   const motionChanged = () => invalidate();
   motion?.addEventListener("change", motionChanged);
   listeners.push(() => motion?.removeEventListener("change", motionChanged));
@@ -151,17 +182,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     const format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format, alphaMode: "opaque" });
     renderer = createRenderer(device, format);
-    const resize = () => {
-      if (disposed) return;
-      const scale = Math.min(device.limits.maxTextureDimension2D / Math.max(canvas.clientWidth, canvas.clientHeight, 1), window.devicePixelRatio || 1);
-      canvas.width = Math.max(1, Math.round(canvas.clientWidth * scale));
-      canvas.height = Math.max(1, Math.round(canvas.clientHeight * scale));
-      camera.resize(canvas.clientWidth, canvas.clientHeight);
-      draw();
-    };
-    observer = new ResizeObserver(() => {
-      try { resize(); } catch { onStatus("WebGPU rendering failed. Reload to retry."); }
-    });
+    observer = new ResizeObserver(() => { resizePending = true; invalidate(); });
     observer.observe(canvas);
     device.addEventListener("uncapturederror", () => {
       if (!disposed) onStatus("WebGPU reported an error. Reload to retry.");
@@ -172,8 +193,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
         onStatus("WebGPU device lost. Reload to retry; stream inspection still works.");
       }
     });
-    resize();
-    installMapping();
+    invalidate();
   } catch (error) {
     dispose();
     onStatus(`WebGPU unavailable: ${error.message}. Stream inspection still works.`);
