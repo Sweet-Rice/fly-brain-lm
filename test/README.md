@@ -97,6 +97,8 @@ new-run ownership rather than implementation wiring.
 They also preserve completion/error results when terminal subscribers start a
 new run, and prevent old cancellation callbacks from overwriting a newer
 validation failure.
+A nested notification also supersedes the older snapshot for remaining subscribers,
+so a later-mounted view cannot revert to an earlier attempt's state.
 
 | Suite | Scope covered |
 |---|---|

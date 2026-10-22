@@ -282,6 +282,31 @@ test('a replacement run started by a validation subscriber owns the final state'
   }
 });
 
+test('later subscribers retain the current state after an earlier subscriber replaces the attempt', async () => {
+  const controller = new GenerationController();
+  let replaced = false;
+  let replacement;
+  let latest;
+  controller.subscribe(snapshot => {
+    if (!replaced && snapshot.state === GENERATION_STATES.VALIDATING) {
+      replaced = true;
+      controller.cancel();
+      replacement = controller.submit({ ...fixture.request, prompt: '   ' });
+    }
+  });
+  controller.subscribe(snapshot => { latest = snapshot; });
+  try {
+    const original = await controller.submit(fixture.request);
+    const invalid = await replacement;
+    assert.equal(original.aborted, true);
+    assert.equal(latest.state, GENERATION_STATES.FAILED);
+    assert.equal(latest.state, controller.getState().state);
+    assert.deepEqual(latest.validationErrors, invalid.errors);
+  } finally {
+    controller.dispose();
+  }
+});
+
 test('validation failure cannot be overwritten when an older cancelled request settles', async () => {
   let rejectRequest;
   const request = new Promise((resolve, reject) => { rejectRequest = reject; });

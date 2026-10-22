@@ -360,6 +360,7 @@ export class GenerationController {
 
     /** @type {Set<(snapshot: GenerationClientSnapshot) => void>} */
     this.listeners = new Set();
+    this.notificationRevision = 0;
     /** @type {AbortController | null} */
     this.abortController = null;
     /** @type {AbortController | null} */
@@ -393,8 +394,11 @@ export class GenerationController {
   }
 
   notify() {
+    const revision = ++this.notificationRevision;
     const snapshot = this.getState();
     for (const listener of this.listeners) {
+      // Re-entrant notification makes this snapshot obsolete for remaining listeners.
+      if (revision !== this.notificationRevision) break;
       try {
         listener(snapshot);
       } catch (err) {
