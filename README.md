@@ -61,6 +61,17 @@ python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-po
 python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
 ```
 
+Or start both with one command — the app server launches the model server itself,
+shows `Model loading: …` until the checkpoint loads, then reports the checkpoint name
+and SHA-256 prefix, and stops the model on Ctrl-C:
+
+```console
+python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --model-ckpt /tmp/flybrain-scratch.pt --model-arg=--viz-port --model-arg=8767
+```
+
+See [running the live workspace](harness/app/README.md#run-the-live-workspace-real-model--app-server)
+for prerequisites, URL configuration and common failures.
+
 Open **http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream** in a WebGPU-capable
 Chrome or Edge browser.
 - **Port safety**: Port **8772** serves static assets and provides same-origin reverse
@@ -90,8 +101,8 @@ Chrome or Edge browser.
   authoritative wire cancel acknowledgment).
 - **Separate WebSocket stream**: The visualization WebSocket is configured separately
   (via `/?ws=ws://127.0.0.1:8767/stream` or the UI field). Tokens and graph fires stream
-  over separate transports; never claim fire/token alignment, synced tokens, or known
-  checkpoint revision / loading status.
+  over separate transports; never claim fire/token alignment or synced tokens; loading
+  status and checkpoint identity appear only with the `--model-ckpt` launcher.
 - **Neuron Inspector**: Clicking a node picks it; dragging above the movement threshold
   pans the camera without selecting; clicking the background clears selection. Supports
   sparse ID input lookup, neighbor navigation with pagination for high-degree nodes,

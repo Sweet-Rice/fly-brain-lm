@@ -18,10 +18,39 @@ its data limits follow the
 
 ## Run the live workspace (real model + app server)
 
-To run the full integrated workspace with live model prompting and visualization,
-initialize an untrained scratch checkpoint and use the two-terminal setup from
-the repository root (default `model.init_model` writes `model/checkpoints/<impl>.pt`,
-e.g. `vibe.pt`, not `init.pt`; do not overwrite private trained checkpoints):
+### Prerequisites
+
+- **Python**: Python 3 (3.12 used) with the model packages installed in a virtual
+  environment (see [WORKFLOW §2](../WORKFLOW.md#2-install-the-real-model-dependencies)
+  for creating the venv per shell):
+  ```console
+  python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+  python -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
+  ```
+- **Browser**: A WebGPU-capable Chrome or Edge browser.
+- **Node.js**: Node.js 22 or newer only to run the frontend tests and the optional
+  typecheck (see [Verify](#verify)), not to run the UI; no `npm install` is required for running.
+
+### One command (app server launches the model)
+
+```console
+python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt
+python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --model-ckpt /tmp/flybrain-scratch.pt --model-arg=--viz-port --model-arg=8767
+```
+
+When `--model-ckpt` is given, the app server starts
+`python -m model.serve.serve --ckpt <ckpt> --host 127.0.0.1 --port <port of --api-url> <model args...>`
+as a child process from the repo root. Use the repeatable `--model-arg ARG` option
+(using the `--model-arg=--viz-port --model-arg=8767` form for dash-prefixed values)
+to pass arguments to the model server. The child's logs print in the same terminal;
+Ctrl-C stops both. While loading, the page shows
+`Model loading: the model server is loading its checkpoint. This page is ready; Generate unlocks automatically when the model answers.`
+with Generate disabled until the checkpoint loads, then reports the ready message
+`Model ready: flybrain-untrained (TEMPORARY, untrained) · checkpoint flybrain-scratch.pt sha256:<first 12 hex digits>`
+with checkpoint name and sha256 prefix. Missing checkpoint: exits with
+`Error starting app server: checkpoint not found: <name>`.
+
+### Two terminals (model started separately)
 
 ```console
 # Step 1: Initialize an untrained checkpoint (vibe or vibe2) to a new path
@@ -34,8 +63,14 @@ python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-po
 python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
 ```
 
-Open **http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream** in a WebGPU-capable
-Chrome or Edge browser.
+In this form the page cannot tell a loading model from a stopped one; both show
+`Model service unavailable: the model server is not running or is still starting. This page is ready; it checks again every 10 seconds, or use Retry Health.`
+until the model answers, and the checkpoint is `not reported`.
+
+### Open the workspace
+
+With either form running, open **http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream**
+in a WebGPU-capable Chrome or Edge browser.
 - **Port safety**: Port **8772** serves the application and provides a same-origin stdlib
   reverse proxy for `/health` and `/v1` endpoints (defaulting 8772 -> 8771); this same-origin
   proxy avoids browser CORS restrictions. Port **8767** hosts the model visualization
@@ -54,8 +89,46 @@ Chrome or Edge browser.
 - **Separate transports**: The visualization WebSocket is configured separately
   (via `?ws=ws://127.0.0.1:8767/stream` or the UI field); text completions use
   same-origin HTTP/SSE. Tokens and graph fires stream over separate transports;
-  never claim fire/token alignment, synced tokens, or known checkpoint revision /
-  loading status.
+  never claim fire/token alignment or synced tokens. Loading status and checkpoint
+  identity are shown only when the app server launched the model with `--model-ckpt`.
+
+### Production build
+
+There is no build step: deploy the harness/ directory as static files behind harness.app_server (or any static host for recording-only use).
+
+### Service URLs and contract version
+
+- `--port`: page and same-origin reverse proxy port (default `8772`).
+- `--api-url`: loopback URL of the model HTTP API that same-origin `/health` and
+  `/v1/*` are proxied to (default `http://127.0.0.1:8771`); with `--model-ckpt` its
+  port is also where the launched model listens.
+- `?ws=` query parameter or the page's WebSocket field: visualization stream URL
+  (default `ws://127.0.0.1:8765/stream`; the model serves it on its `--viz-port`).
+- The browser only calls same-origin `/health` and `/v1/completions`, so there is no
+  client-side model URL to configure.
+- **Contract version**: the compatible service contract is
+  [UI inference contract v1](inference-contract/v1/README.md).
+
+### Common connection and loading failures
+
+| What the page shows | Cause | Fix |
+|---|---|---|
+| `Model loading: the model server is loading its checkpoint. This page is ready; Generate unlocks automatically when the model answers.` | App server launched model with `--model-ckpt`, and checkpoint weights are still loading into memory. | Wait for the model server to finish loading; Generate unlocks automatically when ready. |
+| `Model service unavailable: the model server is not running or is still starting. …` (HTTP 503) | Nothing answers at `--api-url`: in the two-terminal form the model server is not started, still loading, or stopped, or `--api-url` does not match its `--port`. | Start or wait for `python -m model.serve.serve`, make `--api-url` match its port, then Retry Health. |
+| `Model stopped: the model server process exited. Restart python -m harness.app_server to relaunch it.` | The `model.serve.serve` child started by `--model-ckpt` exited or crashed (`model_exited`). | Read the model log in the same terminal, fix the cause, and restart `python -m harness.app_server`. |
+| `Model endpoint returned 404 Not Found. In static http.server mode, run python -m harness.app_server to proxy /health and /v1/completions.` (also 405/501) | The page is served by `python -m http.server` (static offline mode), which has no `/health` or `/v1` proxy. | Run `python -m harness.app_server` instead. |
+| `Authentication failed: invalid API key.` (HTTP 401) | The model server requires a key (`--api-key`; with the launcher `--model-arg=--api-key --model-arg=<key>`) and the API key field is empty or wrong. | Enter the key in the API key field, then Retry Health. |
+| `State: failed` with `Stream truncated: connection closed before [DONE]` (partial output kept) | The model server stopped during generation, before the terminal `[DONE]` event. | The partial output stays visible; restart the model (launcher: restart `python -m harness.app_server`) and Generate again. |
+| `Network connection failed. Ensure the model server or app_server proxy is running.` | The app server itself is not reachable. | Restart `python -m harness.app_server` and reload the page. |
+
+### Ownership boundary
+
+This UI workstream owns `harness/app/` (browser workspace) and `harness/app_server.py`
+(static server, same-origin proxy, model launcher). It does not own model training,
+checkpoints/weights, model implementations, the model-side visualization stream
+(`harness/viz_stream.py`, `harness/protocol/v1/`) or `model/serve/` (frozen; the launcher
+only starts it unchanged).
+
 ## Run from a fresh checkout (offline review)
 
 Python 3 serves the static application; there are no frontend dependencies, build
@@ -248,7 +321,10 @@ interface for submitting generation requests to the local model reverse proxy:
 - **Model readiness and health**:
   - Queries same-origin `GET /health` to confirm the model server is reachable.
   - Displays model status, model ID (`flybrain-untrained`), and the untrained model note.
-    No checkpoint revisions or loading statuses are reported.
+    With the `--model-ckpt` launcher it also shows `Model loading: …` while the checkpoint
+    loads and the checkpoint file name plus the first 12 hex digits of its SHA-256 once
+    ready; without the launcher the checkpoint is `not reported` and a loading model looks
+    the same as a stopped one.
   - Includes a manual retry button (`#prompt-health-retry-btn`) to recheck availability.
   - In static offline mode (`http.server`), reports that the model proxy is unavailable
     (static-page mode) with clear guidance rather than crashing.
@@ -382,8 +458,9 @@ subscriptions, validated asynchronous preparation, cancellation, replacement-run
 ownership, and final disposal. No frontend build step is introduced.
 
 The contract distinguishes local run ids from server completion ids, and decoded text
-chunks from model tokens. It does not fabricate loading phases, checkpoint identity,
-cancel acknowledgments, or token/fire alignment. Frozen `model/serve/` code is unchanged.
+chunks from model tokens. Loading phases and checkpoint identity come only from the app
+server's model launcher; the client never fabricates them, cancel acknowledgments, or
+token/fire alignment. Frozen `model/serve/` code is unchanged.
 
 ## Verify
 
@@ -421,7 +498,7 @@ python -m pytest test/test_app_server.py
   to `/app/`, proxy route whitelist (`GET /health`, `GET /v1/models`, `POST /v1/completions`,
   `POST /v1/chat/completions`), structured JSON 503 when upstream is down, incremental SSE
   streaming without buffering the full response, closing of upstream socket on client abort,
-  and memory-only `Authorization` header pass-through (10 observed tests).
+  and memory-only `Authorization` header pass-through.
 - **`generation.test.js`**: Parameter validation and rejection (empty/whitespace rejection,
   bounds validation for `max_tokens` [1..128], `temperature` [0..2], and `top_k` [1..50257];
   upstream server cap is separate), inference state machine transitions (`idle`, `validating`,
@@ -433,15 +510,19 @@ python -m pytest test/test_app_server.py
   (501/405/503), traceback sanitization, and terminal accessibility announcements.
   Regressions also cover late preparation errors after cancellation, disposal and
   replacement during validation, stale cancellation after a newer validation
-  failure, terminal-result preservation during subscriber re-entry, and rejection
-  of disposed-client reuse.
+  failure, terminal-result preservation during subscriber re-entry, rejection
+  of disposed-client reuse, a 128-token stream sliced every 11 bytes reconstructed
+  exactly into multi-thousand-character output, and long output rendered without
+  truncation with one completion announcement.
 - **`prompt-view.test.js`**: DOM rendering with stable `prompt-*` IDs and accessible announcements,
   keyboard shortcut `Ctrl+Enter` / `Cmd+Enter` (ignores repeat keydown, preserves newlines and
   IME composition), Generate, Cancel, Clear, and Copy buttons lifecycle, Copy button clipboard
   interaction via `navigator.clipboard.writeText` with rapid feedback timer reset, Clear action
   resetting prompt input and output when idle (disabled during generation), readiness gating of
   submission, manual health retry button with typed API key sync and clearing, error banner display,
-  terminal status announcements with accurate Unicode codepoint counting, and safe disposer cleanup.
+  terminal status announcements with accurate Unicode codepoint counting, safe disposer cleanup,
+  and a keyboard-only workflow (tab order of every control, Ctrl+Enter submit, Cancel keeping
+  partial output, Clear, exact Copy).
 - **`inspector.test.js`**: DOM-free `NeuronIndex` (sparse node ID indexing, integer ID parsing,
   incoming/outgoing degree and neighbor list computation, self-loop activity deduplication per
   step, per-node recent observed fire history capped at `MAX_RECENT_STEPS` [32 steps] within current
@@ -493,6 +574,14 @@ python -m pytest test/test_app_server.py
      to clear selection.
    - Stop Terminal 1 and click Retry on the health indicator; verify an actionable 503
      unavailable notice is shown.
+3. **One-command launcher check**:
+   Run the one-command start; open the page immediately and see `Model loading:` with
+   Generate disabled; after load see `Model ready: … · checkpoint flybrain-scratch.pt sha256:…`
+   and Generate enabled; using only the keyboard (Tab/Shift+Tab, Ctrl+Enter, Enter/Space on
+   buttons) generate, cancel, clear and copy; start a 128-token generation and end the
+   `model.serve.serve` child process (e.g. Task Manager or `kill <pid>`) while it streams:
+   expect `State: failed`, partial output kept, `Stream truncated: connection closed before [DONE]`,
+   then health `Model stopped: …` with Generate disabled.
 
 ### Observed workspace smoke
 

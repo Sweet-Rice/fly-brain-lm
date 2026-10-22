@@ -1350,3 +1350,190 @@ test('sanitizeSafeMessage redacts Windows and POSIX paths, bearer tokens and api
   assert.ok(result.error.includes('[secret]'));
   assert.ok(result.error.includes('Load failed for'));
 });
+
+function buildLongCompletion({ tokens = 128, sliceBytes = 11 } = {}) {
+  const pieces = [];
+  const events = [];
+  for (let i = 0; i < tokens; i++) {
+    const piece = `token-${String(i).padStart(3, '0')} café lorem ipsum dolor sit\n`;
+    pieces.push(piece);
+    events.push({
+      id: 'cmpl-long',
+      object: 'text_completion',
+      model: 'flybrain-untrained',
+      choices: [{ index: 0, text: piece, logprobs: null, finish_reason: null }],
+    });
+  }
+  events.push({
+    id: 'cmpl-long',
+    object: 'text_completion',
+    model: 'flybrain-untrained',
+    choices: [{ index: 0, text: '', logprobs: null, finish_reason: 'length' }],
+  });
+  events.push({
+    id: 'cmpl-long',
+    object: 'text_completion',
+    model: 'flybrain-untrained',
+    choices: [],
+    usage: { prompt_tokens: 4, completion_tokens: tokens, total_tokens: 4 + tokens },
+  });
+
+  const wire = events.map(e => `data: ${JSON.stringify(e)}\n\n`).join('') + 'data: [DONE]\n\n';
+  const bytes = new TextEncoder().encode(wire);
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += sliceBytes) {
+    chunks.push(bytes.slice(offset, offset + sliceBytes));
+  }
+  const text = pieces.join('');
+  return { text, chunks };
+}
+
+test('GenerationController streams 128 fragmented tokens into multi-thousand character output', async () => {
+  const { text, chunks } = buildLongCompletion();
+  const controller = new GenerationController({
+    fetch: async () => new Response(createMockReadableStream(chunks), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+  });
+
+  const snapshots = [];
+  controller.subscribe(s => snapshots.push(s));
+
+  try {
+    const result = await controller.submit({
+      prompt: 'Long output test',
+      maxTokens: 128,
+      temperature: 1.0,
+      topK: 50,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.text, text);
+    assert.ok(text.length > 4000);
+    assert.equal(result.finishReason, 'length');
+    assert.deepEqual(result.usage, {
+      prompt_tokens: 4,
+      completion_tokens: 128,
+      total_tokens: 132,
+    });
+
+    const finalState = controller.getState();
+    assert.equal(finalState.state, GENERATION_STATES.COMPLETED);
+    assert.equal(finalState.text, text);
+    assert.equal(finalState.modelCompletionId, 'cmpl-long');
+
+    assert.ok(snapshots.length > 100);
+
+    for (let i = 1; i < snapshots.length; i++) {
+      assert.ok(
+        snapshots[i].text.length >= snapshots[i - 1].text.length,
+        `Snapshot text length decreased at index ${i}`
+      );
+    }
+
+    for (const s of snapshots) {
+      assert.ok(text.startsWith(s.text));
+    }
+
+    assert.ok(new Set(snapshots.map(s => s.text.length)).size >= 129);
+  } finally {
+    controller.dispose();
+  }
+});
+
+test('mountPrompt renders long output without truncation and announces once', async () => {
+  const { text, chunks } = buildLongCompletion();
+  const requests = [];
+  const controller = new GenerationController({
+    fetch: async (url, options = {}) => {
+      if (url === '/health') {
+        return new Response(
+          JSON.stringify({
+            status: 'ok',
+            model: 'flybrain-untrained',
+            note: 'TEMPORARY, untrained',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+      requests.push(JSON.parse(options.body));
+      return new Response(createMockReadableStream(chunks), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+
+  const doc = new MockDocument();
+  const root = doc.createElement('div');
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+
+  try {
+    await controller.checkHealth();
+    assert.equal(controller.getState().health.ready, true);
+
+    const announcement = root.getElementById(PROMPT_DOM_IDS.ANNOUNCEMENT);
+    const announcements = [];
+    let currentAnnouncement = announcement.textContent;
+    Object.defineProperty(announcement, 'textContent', {
+      get() {
+        return currentAnnouncement;
+      },
+      set(value) {
+        currentAnnouncement = String(value);
+        announcements.push(currentAnnouncement);
+      },
+      configurable: true,
+    });
+
+    root.getElementById(PROMPT_DOM_IDS.INPUT).value = 'Long output test';
+    root.getElementById(PROMPT_DOM_IDS.MAX_TOKENS).value = '128';
+
+    const finished = new Promise(resolve => {
+      const off = controller.subscribe(s => {
+        if (s.state === GENERATION_STATES.COMPLETED || s.state === GENERATION_STATES.FAILED) {
+          off();
+          resolve(s);
+        }
+      });
+    });
+
+    root.getElementById(PROMPT_DOM_IDS.FORM).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true })
+    );
+
+    const final = await finished;
+
+    assert.equal(final.state, GENERATION_STATES.COMPLETED);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].max_tokens, 128);
+    assert.equal(requests[0].prompt, 'Long output test');
+
+    const output = root.getElementById(PROMPT_DOM_IDS.OUTPUT);
+    assert.equal(output.textContent, text);
+    assert.equal(output.textContent.length, text.length);
+
+    assert.equal(
+      root.getElementById(PROMPT_DOM_IDS.USAGE).textContent,
+      'Tokens: 4 prompt + 128 completion = 132 total'
+    );
+    assert.equal(
+      root.getElementById(PROMPT_DOM_IDS.FINISH_REASON).textContent,
+      'Finish reason: length'
+    );
+    assert.equal(
+      root.getElementById(PROMPT_DOM_IDS.STATUS).textContent,
+      'State: completed'
+    );
+
+    assert.deepEqual(announcements, [
+      `Generation completed. Length: ${[...text].length} characters. (128 tokens)`,
+    ]);
+  } finally {
+    dispose();
+  }
+});
