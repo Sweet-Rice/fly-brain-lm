@@ -1,4 +1,5 @@
 import { validateTelemetryMessage } from "./timeline.js";
+import { validateMemoryMessage } from "./memory.js";
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const isId = value => Number.isInteger(value) && value >= 0;
@@ -80,6 +81,10 @@ export class ProtocolReceiver {
 
     if (["request_lifecycle", "token_step", "stream_status"].includes(message.type)) {
       if (!this.mapping || !validateTelemetryMessage(message)) return { action: "drop_message" };
+      return { action: "accept_telemetry", message };
+    }
+    if (["memory_summary", "memory_slice"].includes(message.type)) {
+      if (!this.mapping || !validateMemoryMessage(message)) return { action: "drop_message" };
       return { action: "accept_telemetry", message };
     }
     if (message.type !== "fire") return { action: "ignore_message" };
