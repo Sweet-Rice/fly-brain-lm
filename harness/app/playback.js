@@ -73,9 +73,9 @@ export class RecordingSource {
     this.status("playing", `Playing ${file.name ?? "recording"}.`);
     let usable = false;
     try {
-      const result = await readRecording(file, this.receiver, (event) => {
+      const result = await readRecording(file, this.receiver, (event, raw) => {
         if (event.action === "replace_mapping") usable = true;
-        this.onEvent(event);
+        this.onEvent(event, raw);
         if (event.action === "accept_fire" && this.controller === controller) this.remaining = 500;
       }, { signal: controller.signal, beforeMessage: () => this.wait(controller) });
       if (this.controller !== controller) return;

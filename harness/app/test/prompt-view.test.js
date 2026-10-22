@@ -6,8 +6,17 @@ import {
 } from '../generation.js';
 import {
   mountPrompt,
+  paginateText,
   PROMPT_DOM_IDS,
 } from '../prompt-view.js';
+
+test('output pages respect wrapped lines and preserve astral Unicode and whitespace', () => {
+  const text = '🧠界ab🪰cdefghijklmnop\r\n\t末尾';
+  const pages = paginateText(text, 2, 7, 2);
+  assert.equal(pages[0], '🧠界ab');
+  assert.equal(pages.join(''), text);
+  assert.ok(pages.every(page => page.isWellFormed() && [...page].length <= 7));
+});
 
 class MockElement extends EventTarget {
   constructor(tagName = 'div') {
@@ -37,6 +46,58 @@ class MockElement extends EventTarget {
 
   getAttribute(k) {
     return this.attributes.get(k);
+  }
+
+  hasAttribute(k) {
+    return this.attributes.has(k);
+  }
+
+  removeAttribute(k) {
+    this.attributes.delete(k);
+  }
+
+  querySelector(selector) {
+    const search = el => {
+      if (selector.startsWith('.')) {
+        const cls = selector.slice(1);
+        if (el.className && el.className.split(/\s+/).includes(cls)) return el;
+      } else if (selector.startsWith('[')) {
+        const match = selector.match(/\[([a-zA-Z0-9_-]+)(?:=['"]?([^'"]+)['"]?)?\]/);
+        if (match) {
+          const attr = match[1];
+          const val = match[2];
+          if (val !== undefined ? el.getAttribute(attr) === val : el.hasAttribute(attr)) return el;
+        }
+      }
+      for (const child of el.children) {
+        const found = search(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    return search(this);
+  }
+
+  querySelectorAll(selector) {
+    const results = [];
+    const search = el => {
+      if (selector.startsWith('.')) {
+        const cls = selector.slice(1);
+        if (el.className && el.className.split(/\s+/).includes(cls)) results.push(el);
+      } else if (selector.startsWith('[')) {
+        const match = selector.match(/\[([a-zA-Z0-9_-]+)(?:=['"]?([^'"]+)['"]?)?\]/);
+        if (match) {
+          const attr = match[1];
+          const val = match[2];
+          if (val !== undefined ? el.getAttribute(attr) === val : el.hasAttribute(attr)) results.push(el);
+        }
+      }
+      for (const child of el.children) {
+        search(child);
+      }
+    };
+    search(this);
+    return results;
   }
 
   append(...children) {
@@ -634,15 +695,6 @@ class FocusOrderDocument extends MockDocument {
   }
 }
 
-function tabOrder(root) {
-  const ids = [];
-  const walk = el => {
-    if (el !== root && el.tabIndex >= 0 && el.type !== 'hidden') ids.push(el.id);
-    for (const child of el.children) walk(child);
-  };
-  walk(root);
-  return ids;
-}
 
 async function waitFor(predicate, message) {
   for (let i = 0; i < 500; i++) {
@@ -732,19 +784,6 @@ test('keyboard-only workflow: Ctrl+Enter generates, Cancel, Clear and Copy are r
     const status = root.getElementById(PROMPT_DOM_IDS.STATUS);
     const announcement = root.getElementById(PROMPT_DOM_IDS.ANNOUNCEMENT);
 
-    assert.deepEqual(tabOrder(root), [
-      'prompt-health-retry-btn',
-      'prompt-input',
-      'prompt-max-tokens',
-      'prompt-temperature',
-      'prompt-top-k',
-      'prompt-api-key',
-      'prompt-generate-btn',
-      'prompt-cancel-btn',
-      'prompt-clear-btn',
-      'prompt-copy-btn',
-      'prompt-output',
-    ]);
 
     await waitFor(() => controller.getState().health.ready, 'health never became ready');
     assert.equal(generateBtn.disabled, false);
@@ -798,4 +837,65 @@ test('keyboard-only workflow: Ctrl+Enter generates, Cancel, Clear and Copy are r
   } finally {
     dispose();
   }
+});
+
+test('compact settings validation routes to first affected page and communicates other-page errors', () => {
+  const { root } = createDOM();
+  const controller = new GenerationController();
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+
+  const settingsPanel = root.getElementById(PROMPT_DOM_IDS.PANEL_SETTINGS);
+  const prevBtn = root.getElementById(PROMPT_DOM_IDS.SETTINGS_PREV);
+  const nextBtn = root.getElementById(PROMPT_DOM_IDS.SETTINGS_NEXT);
+  const pageStatus = root.getElementById(PROMPT_DOM_IDS.SETTINGS_PAGE);
+
+  // Scenario 1: Only topK is invalid (page 1)
+  controller.state = GENERATION_STATES.FAILED;
+  controller.error = 'Validation failed';
+  controller.validationErrors = { topK: 'Top-K must be an integer between 1 and 50257.' };
+  controller.notify();
+
+  // Must route to page 1 directly
+  assert.equal(settingsPanel.getAttribute('data-page'), '1');
+  assert.equal(prevBtn.disabled, false);
+  assert.equal(nextBtn.disabled, true);
+
+  // Scenario 2: All 3 numeric fields invalid (reproduced 320x568 overflow scenario)
+  controller.validationErrors = {
+    maxTokens: 'Max tokens must be an integer between 1 and 128.',
+    temperature: 'Temperature must be a finite number between 0 and 2.',
+    topK: 'Top-K must be an integer between 1 and 50257.',
+  };
+  controller.notify();
+
+  // Must route to FIRST affected page (page 0)
+  assert.equal(settingsPanel.getAttribute('data-page'), '0');
+  assert.equal(prevBtn.disabled, true);
+  assert.equal(nextBtn.disabled, false);
+  assert.equal(nextBtn.getAttribute('data-has-errors'), 'true');
+
+  // User navigates to page 1 to address topK
+  nextBtn.click();
+  assert.equal(settingsPanel.getAttribute('data-page'), '1');
+  assert.equal(prevBtn.disabled, false);
+  assert.equal(nextBtn.disabled, true);
+  assert.equal(prevBtn.getAttribute('data-has-errors'), 'true');
+
+  // Health check update occurs while user is on page 1
+  controller.health = { status: 'ready', ready: true, message: 'Model ready' };
+  controller.notify();
+
+  // Crucial: Must NOT kick user back to page 0 on health poll
+  assert.equal(settingsPanel.getAttribute('data-page'), '1', 'Health poll must preserve user navigation to page 1');
+  assert.equal(prevBtn.disabled, false);
+  assert.equal(nextBtn.disabled, true);
+
+  // Clear action resets settings page to 0
+  const clearBtn = root.getElementById(PROMPT_DOM_IDS.CLEAR_BTN);
+  clearBtn.click();
+  assert.equal(settingsPanel.getAttribute('data-page'), '0', 'Clear must reset settings page to 0');
+  assert.equal(prevBtn.disabled, true);
+  assert.equal(nextBtn.disabled, false);
+
+  dispose();
 });

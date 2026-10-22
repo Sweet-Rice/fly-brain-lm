@@ -12,6 +12,9 @@ const SPACING = 20;
 export const RADIUS = 3;
 const CIRCLE_SEGMENTS = 12;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+export const NODE_IDLE_ALPHA = 0.12;
+export const EDGE_IDLE_ALPHA = 0.008;
+export const ARROW_IDLE_ALPHA = 0.06;
 
 export function computeEdgePath(a, b, tractWaypoint = null, radius = RADIUS) {
   if (a.x === b.x && a.y === b.y) {
@@ -103,6 +106,18 @@ function getTractWaypoint(graph, sourceId, destId) {
 }
 
 export function buildGraph(mapping) {
+  const nodeIndexMap = new Map();
+  const nodeIds = [];
+  if (mapping?.nodes) {
+    for (const node of mapping.nodes) {
+      const id = typeof node === 'object' && node !== null ? node.id : node;
+      if (typeof id === 'number' && !nodeIndexMap.has(id)) {
+        nodeIndexMap.set(id, nodeIds.length);
+        nodeIds.push(id);
+      }
+    }
+  }
+
   const grouped = new Map(mapping.groups.map(group => [group.id, []]));
   for (const node of mapping.nodes) {
     if (grouped.has(node.group)) {
@@ -114,13 +129,13 @@ export function buildGraph(mapping) {
   const isBrain = mapping.groups.some(g => groupStyleMap.get(g.id).anatomical);
 
   if (!isBrain) {
-    return buildGridLayout(mapping, grouped, groupStyleMap);
+    return buildGridLayout(mapping, grouped, groupStyleMap, nodeIndexMap, nodeIds);
   }
 
-  return buildBrainLayout(mapping, grouped, groupStyleMap);
+  return buildBrainLayout(mapping, grouped, groupStyleMap, nodeIndexMap, nodeIds);
 }
 
-function buildGridLayout(mapping, grouped, groupStyleMap) {
+function buildGridLayout(mapping, grouped, groupStyleMap, nodeIndexMap = new Map(), nodeIds = []) {
   const positions = new Map();
   const labels = [];
   const nodes = [];
@@ -128,6 +143,7 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
   const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
   let left = 0;
   let tallest = 0;
+  const base = mapping.edges.length;
 
   function include(x, y) {
     if (x < bounds.minX) bounds.minX = x;
@@ -136,9 +152,9 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     if (y > bounds.maxY) bounds.maxY = y;
   }
 
-  function triangle(target, a, b, c, color, alpha, edgeIndex = -1) {
+  function triangle(target, a, b, c, color, alpha, activityIndex = -1) {
     for (const [x, y] of [a, b, c]) {
-      target.push(x, y, ...color, alpha, edgeIndex);
+      target.push(x, y, ...color, alpha, activityIndex);
       include(x, y);
     }
   }
@@ -152,8 +168,8 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     const q = [a[0] - nx, a[1] - ny];
     const r = [b[0] + nx, b[1] + ny];
     const s = [b[0] - nx, b[1] - ny];
-    triangle(edges, p, q, r, color, 0.12, edgeIndex);
-    triangle(edges, r, q, s, color, 0.12, edgeIndex);
+    triangle(edges, p, q, r, color, EDGE_IDLE_ALPHA, edgeIndex);
+    triangle(edges, r, q, s, color, EDGE_IDLE_ALPHA, edgeIndex);
   }
 
   function arrow(tip, direction, color, edgeIndex) {
@@ -163,7 +179,7 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     const uy = direction[1] / length;
     triangle(edges, tip,
       [tip[0] - ux * 5 - uy * 2.3, tip[1] - uy * 5 + ux * 2.3],
-      [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, 0.65, edgeIndex);
+      [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, ARROW_IDLE_ALPHA, edgeIndex);
   }
 
   mapping.groups.forEach((group) => {
@@ -182,11 +198,13 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
       const x = center + (i % columns - (columns - 1) / 2) * SPACING;
       const y = Math.floor(i / columns) * SPACING - height / 2;
       positions.set(node.id, { x, y, color });
+      const slot = nodeIndexMap.get(node.id);
+      const activityIndex = slot !== undefined ? base + slot : -1;
       for (let j = 0; j < CIRCLE_SEGMENTS; j++) {
         const a = (j * 2 * Math.PI) / CIRCLE_SEGMENTS;
         const b = ((j + 1) * 2 * Math.PI) / CIRCLE_SEGMENTS;
         triangle(nodes, [x, y], [x + Math.cos(a) * RADIUS, y + Math.sin(a) * RADIUS],
-          [x + Math.cos(b) * RADIUS, y + Math.sin(b) * RADIUS], color, 1);
+          [x + Math.cos(b) * RADIUS, y + Math.sin(b) * RADIUS], color, NODE_IDLE_ALPHA, activityIndex);
       }
     });
     left += width + 60;
@@ -222,10 +240,12 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     edgePairs: mapping.edges,
     positions,
     areas: null,
+    nodeIndexMap,
+    nodeIds,
   };
 }
 
-function buildBrainLayout(mapping, grouped, groupStyleMap) {
+function buildBrainLayout(mapping, grouped, groupStyleMap, nodeIndexMap = new Map(), nodeIds = []) {
   const positions = new Map();
   const labels = [];
   const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
@@ -455,12 +475,15 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
   // 10. Preallocate and write nodes geometry
   const nodes = new Float32Array(mapping.nodes.length * CIRCLE_SEGMENTS * 3 * 7);
   let nodeOffset = 0;
+  const base = mapping.edges.length;
   for (const group of mapping.groups) {
     const members = (grouped.get(group.id) ?? []).slice().sort((a, b) => a.id - b.id);
     for (const node of members) {
       const pos = positions.get(node.id);
       if (!pos) continue;
       const { x, y, color } = pos;
+      const slot = nodeIndexMap.get(node.id);
+      const activityIndex = slot !== undefined ? base + slot : -1;
       include(x - RADIUS, y - RADIUS);
       include(x + RADIUS, y + RADIUS);
       for (let j = 0; j < CIRCLE_SEGMENTS; j++) {
@@ -475,8 +498,8 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
           nodes[nodeOffset++] = color[0];
           nodes[nodeOffset++] = color[1];
           nodes[nodeOffset++] = color[2];
-          nodes[nodeOffset++] = 1;
-          nodes[nodeOffset++] = -1;
+          nodes[nodeOffset++] = NODE_IDLE_ALPHA;
+          nodes[nodeOffset++] = activityIndex;
         }
       }
     }
@@ -516,7 +539,7 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
     }
   }
 
-  function segment(a, b, color, edgeIndex, alpha = 0.05) {
+  function segment(a, b, color, edgeIndex, alpha = EDGE_IDLE_ALPHA) {
     const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
     if (length === 0) return;
     const nx = -(b[1] - a[1]) / length * 0.35;
@@ -529,7 +552,7 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
     triangle(edges, r, q, s, color, alpha, edgeIndex);
   }
 
-  function arrow(tip, direction, color, edgeIndex, alpha = 0.25) {
+  function arrow(tip, direction, color, edgeIndex, alpha = ARROW_IDLE_ALPHA) {
     const length = Math.hypot(...direction);
     if (length === 0) return;
     const ux = direction[0] / length;
@@ -545,13 +568,13 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
     const [source] = mapping.edges[edgeIndex];
     const a = positions.get(source);
     for (const seg of path.segments) {
-      segment(seg.a, seg.b, a.color, edgeIndex, 0.05);
+      segment(seg.a, seg.b, a.color, edgeIndex, EDGE_IDLE_ALPHA);
     }
-    arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex, 0.25);
+    arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex, ARROW_IDLE_ALPHA);
   }
 
   return {
-    nodes,
+    nodes: nodeOffset === nodes.length ? nodes : nodes.subarray(0, nodeOffset),
     edges,
     regions,
     labels,
@@ -561,6 +584,8 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
     edgePairs: mapping.edges,
     positions,
     areas,
+    nodeIndexMap,
+    nodeIds,
   };
 }
 

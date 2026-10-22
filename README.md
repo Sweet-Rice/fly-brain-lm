@@ -111,8 +111,20 @@ Chrome or Edge browser.
   never speculative anatomy. Body IDs are not exported in standard mappings and are
   explicitly displayed as unavailable / not exported (never inferred).
   "No observed fire does not mean inactive; fire means positive KC code, not biological spikes."
-- **Future timeline and memory panels**: Timeline and memory backend integration issues
-  will be linked in a follow-up PR later (no placeholder doc links are created).
+- **One-screen visuals**: Brain, Generate, Inspect, and Source views
+  share one viewport. Prompt controls use Compose / Output / Settings tabs; generated
+  text and high-degree neighbor lists are paged rather than put in scrolling panels.
+  Inactive nodes and synapses are translucent; accepted pairs light both endpoints
+  and their directed synapse for 600 ms.
+- **MBON → decoded text**: Dashed links connect the mapped MBON nodes to a model-readout
+  hub and decoded-text card directly on the graph; there is no separate memory tab.
+  These are architectural paths, not measured per-MBON word attribution or biological
+  synapses. The ordinary model server supplies explicitly labeled local SSE text.
+  For producer token IDs and stepped/unprocessed status, use
+  `python -m harness.telemetry.serve --ckpt <vibe2-checkpoint> --port 8771 --viz-port 8767`
+  with the app server in proxy-only mode. Legacy mappings without MBON nodes do not
+  acquire invented readout nodes or links.
+
 ## Run the real model or tests
 
 The [workflow guide](harness/WORKFLOW.md) contains Windows PowerShell and POSIX

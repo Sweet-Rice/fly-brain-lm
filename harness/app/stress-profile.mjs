@@ -25,7 +25,7 @@ function measure(iterations, action) {
 let graph;
 const receiver = new ProtocolReceiver();
 receiver.process(lines[0]);
-const activity = new EdgeActivity(mapping.edges);
+const activity = new EdgeActivity(mapping.edges, mapping.nodes);
 const rawFires = Array.from({ length: 2000 }, (_, t) => JSON.stringify({ ...fires[t % fires.length], t }));
 const results = {
   modules: resolve(directory), nodes: mapping.nodes.length, edges: mapping.edges.length,

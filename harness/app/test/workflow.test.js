@@ -33,7 +33,7 @@ test("real-model workflow reaches the shipped playback, layout and edge activity
         assert.equal(graph.nodeCount, metadata.topology.nodes);
         assert.equal(graph.edgeCount, metadata.topology.edges);
         assert.equal(graph.labels.length, metadata.topology.groups);
-        activity = new EdgeActivity(graph.edgePairs);
+        activity = new EdgeActivity(graph.edgePairs, graph.nodeIndexMap);
         assert.ok(activity.starts.every(time => time === -1));
         epochs.push([]);
       } else {

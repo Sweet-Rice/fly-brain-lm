@@ -2,7 +2,18 @@ import { buildGraph, RADIUS } from "./layout.js";
 import { createRenderer } from "./renderer.js";
 import { Camera } from "./camera.js";
 import { EdgeActivity } from "./activity.js";
+import { GROUP_STYLES, groupStyle } from "./brain-atlas.js";
 
+function getMbonGroupIds(mapping) {
+  const ids = new Set();
+  if (!mapping?.groups) return ids;
+  for (const group of mapping.groups) {
+    if (group?.name === 'MBON' || groupStyle(group)?.placement === GROUP_STYLES.MBON?.placement) {
+      ids.add(group.id);
+    }
+  }
+  return ids;
+}
 export function pickNode(graph, camera, clientX, clientY, rect = { left: 0, top: 0 }) {
   if (!graph?.positions || graph.positions.size === 0) return null;
   const screenX = (clientX ?? 0) - (rect.left || 0);
@@ -29,6 +40,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
   let mapping = null, graph = null, activity = null, renderer, device, context, observer;
   let disposed = false, frame = null, drag = null;
   let busy = false, dirty = false, mappingPending = true, resizePending = true;
+  let fitPending = true;
   let selectedId = null;
   let lastPickTime = 0;
   let lastDragTime = 0;
@@ -72,6 +84,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
       if (disposed || document.visibilityState === "hidden") return;
       dirty = false;
       try {
+        const layoutChanged = mappingPending || resizePending;
         if (mappingPending) {
           mappingPending = false;
           installMapping();
@@ -83,6 +96,12 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
           canvas.height = Math.max(1, Math.round(canvas.clientHeight * scale));
           camera.resize(canvas.clientWidth, canvas.clientHeight);
         }
+        if (fitPending && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+          camera.resize(canvas.clientWidth, canvas.clientHeight);
+          camera.fit(graph?.bounds);
+          fitPending = false;
+        }
+        if (layoutChanged) emitReadoutLayout();
         const now = performance.now();
         draw(now);
         const animate = renderer.isActive(now);
@@ -118,7 +137,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
           // Allocation failure preserves prior valid state
         }
       }
-      camera.fit(graph?.bounds);
+      fitPending = true;
       if (labels) {
         labels.replaceChildren(...(graph?.labels ?? []).map((label) => {
           const element = document.createElement("span");
@@ -141,6 +160,31 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     }
   }
 
+  function emitReadoutLayout() {
+    if (disposed) return;
+    const width = canvas.clientWidth || camera.width;
+    const height = canvas.clientHeight || camera.height;
+    if (!graph || !mapping) {
+      canvas.dispatchEvent(new CustomEvent("readout-layout", {
+        detail: { nodes: [], width, height },
+      }));
+      return;
+    }
+    const mbonGroupIds = getMbonGroupIds(mapping);
+    const nodes = [];
+    for (const node of mapping.nodes ?? []) {
+      if (mbonGroupIds.has(node.group) && graph.positions?.has(node.id)) {
+        const pos = graph.positions.get(node.id);
+        const screen = camera.worldToScreen(pos.x, pos.y);
+        nodes.push({ id: node.id, x: screen.x, y: screen.y });
+      }
+    }
+    nodes.sort((a, b) => a.id - b.id);
+    canvas.dispatchEvent(new CustomEvent("readout-layout", {
+      detail: { nodes, width, height },
+    }));
+  }
+
   // Register before adapter/device awaits so fast file or live input is retained.
   listen("mapping", ({ detail }) => {
     if (mapping !== null || graph !== null) {
@@ -148,7 +192,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
       renderer?.setSelectedNode(null, null);
     }
     mapping = detail;
-    activity = new EdgeActivity(mapping.edges);
+    activity = new EdgeActivity(mapping.edges, mapping.nodes);
     mappingPending = true;
     invalidate();
   });
@@ -156,9 +200,11 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     selectedId = null;
     renderer?.setSelectedNode(null, null);
     mapping = activity = null;
+    graph = null;
     drag = null;
     mappingPending = true;
     invalidate();
+    emitReadoutLayout();
   });
   listen("select-node", ({ detail }) => {
     const id = detail?.id !== undefined ? detail.id : (typeof detail === "number" ? detail : null);
@@ -186,13 +232,14 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
   const motionChanged = () => invalidate();
   motion?.addEventListener("change", motionChanged);
   listeners.push(() => motion?.removeEventListener("change", motionChanged));
-  listen("fit", () => { camera.fit(graph?.bounds); invalidate(); });
-  listen("zoom", ({ detail }) => { camera.zoom(detail); invalidate(); });
+  listen("fit", () => { camera.fit(graph?.bounds); invalidate(); emitReadoutLayout(); });
+  listen("zoom", ({ detail }) => { camera.zoom(detail); invalidate(); emitReadoutLayout(); });
   listen("wheel", (event) => {
     event.preventDefault();
     const rect = canvas.getBoundingClientRect();
     camera.zoom(Math.exp(-event.deltaY * 0.001), event.clientX - rect.left, event.clientY - rect.top);
     invalidate();
+    emitReadoutLayout();
   }, { passive: false });
   function pick(clientX, clientY) {
     if (disposed || !graph) return;
@@ -233,6 +280,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     drag.x = event.clientX;
     drag.y = event.clientY;
     invalidate();
+    emitReadoutLayout();
   });
   const stopDrag = (event) => {
     if (drag && (event?.pointerId === undefined || event.pointerId === drag.id)) {
@@ -266,6 +314,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     else return;
     event.preventDefault();
     invalidate();
+    emitReadoutLayout();
   });
 
   const dispose = () => {
@@ -280,6 +329,9 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     device?.destroy();
     labels?.replaceChildren();
     markLayout(null);
+    canvas.dispatchEvent(new CustomEvent("readout-layout", {
+      detail: { nodes: [], width: camera.width, height: camera.height },
+    }));
   };
   if (!globalThis.isSecureContext || !navigator.gpu) {
     onStatus("WebGPU unavailable. Use a supported browser at http://127.0.0.1; stream inspection still works.");

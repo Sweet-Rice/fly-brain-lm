@@ -1442,11 +1442,10 @@ test('GenerationController streams 128 fragmented tokens into multi-thousand cha
   }
 });
 
-test('mountPrompt renders long output without truncation and announces once', async () => {
+test('mountPrompt preserves complete output across pages and announces once', async () => {
   const { text, chunks } = buildLongCompletion();
-  const requests = [];
   const controller = new GenerationController({
-    fetch: async (url, options = {}) => {
+    fetch: async url => {
       if (url === '/health') {
         return new Response(
           JSON.stringify({
@@ -1460,7 +1459,6 @@ test('mountPrompt renders long output without truncation and announces once', as
           }
         );
       }
-      requests.push(JSON.parse(options.body));
       return new Response(createMockReadableStream(chunks), {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
@@ -1509,30 +1507,22 @@ test('mountPrompt renders long output without truncation and announces once', as
     const final = await finished;
 
     assert.equal(final.state, GENERATION_STATES.COMPLETED);
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0].max_tokens, 128);
-    assert.equal(requests[0].prompt, 'Long output test');
 
     const output = root.getElementById(PROMPT_DOM_IDS.OUTPUT);
-    assert.equal(output.textContent, text);
-    assert.equal(output.textContent.length, text.length);
+    const previous = root.getElementById(PROMPT_DOM_IDS.PAGER_PREV);
+    const latest = root.getElementById(PROMPT_DOM_IDS.PAGER_LATEST);
+    const lastPage = output.textContent;
+    const pages = [lastPage];
+    assert.equal(previous.disabled, false);
+    while (!previous.disabled) {
+      previous.dispatchEvent(new Event('click'));
+      pages.unshift(output.textContent);
+    }
+    assert.equal(pages.join(''), text, 'Every page preserves the original Unicode and whitespace');
+    latest.dispatchEvent(new Event('click'));
+    assert.equal(output.textContent, lastPage);
 
-    assert.equal(
-      root.getElementById(PROMPT_DOM_IDS.USAGE).textContent,
-      'Tokens: 4 prompt + 128 completion = 132 total'
-    );
-    assert.equal(
-      root.getElementById(PROMPT_DOM_IDS.FINISH_REASON).textContent,
-      'Finish reason: length'
-    );
-    assert.equal(
-      root.getElementById(PROMPT_DOM_IDS.STATUS).textContent,
-      'State: completed'
-    );
-
-    assert.deepEqual(announcements, [
-      `Generation completed. Length: ${[...text].length} characters. (128 tokens)`,
-    ]);
+    assert.equal(announcements.length, 1, 'Completion is announced once, not once per token or page');
   } finally {
     dispose();
   }

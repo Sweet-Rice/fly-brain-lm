@@ -16,15 +16,18 @@ struct Vertex {
   @builtin(position) position: vec4f,
   @location(0) color: vec4f,
 };
-@vertex fn vertex(@location(0) position: vec2f, @location(1) color: vec4f, @location(2) edgeIndex: f32) -> Vertex {
+@vertex fn vertex(@location(0) position: vec2f, @location(1) color: vec4f, @location(2) activityIndex: f32) -> Vertex {
   let clip = (position - camera.center) * camera.scale * 2.0 / camera.viewport;
   var highlighted = color;
-  if (edgeIndex >= 0.0) {
-    let start = starts[u32(edgeIndex)];
-    let age = camera.time - start;
-    if (start >= 0.0 && age >= 0.0 && age < camera.duration) {
-      let intensity = select(1.0 - age / camera.duration, 1.0, camera.reducedMotion > 0.5);
-      highlighted = vec4f(mix(color.rgb, vec3f(1.0), 0.8 * intensity), max(color.a, 0.95 * intensity));
+  if (activityIndex >= 0.0) {
+    let index = u32(activityIndex);
+    if (index < arrayLength(&starts)) {
+      let start = starts[index];
+      let age = camera.time - start;
+      if (start >= 0.0 && age >= 0.0 && age < camera.duration) {
+        let intensity = select(1.0 - age / camera.duration, 1.0, camera.reducedMotion > 0.5);
+        highlighted = vec4f(mix(color.rgb, vec3f(1.0), 0.7 * intensity), max(color.a, 0.95 * intensity));
+      }
     }
   }
   return Vertex(vec4f(clip.x, -clip.y, 0.0, 1.0), highlighted);
@@ -79,7 +82,7 @@ export function createRenderer(device, format) {
         }
         if (data.byteLength > device.limits.maxBufferSize) throw new Error('Graph exceeds the GPU buffer size limit');
       }
-      nextActivity ??= graph ? new EdgeActivity(graph.edgePairs) : null;
+      nextActivity ??= graph ? new EdgeActivity(graph.edgePairs, graph.nodeIndexMap ?? graph.nodeIds ?? graph.positions) : null;
       if (nextActivity && (nextActivity.starts.byteLength > device.limits.maxBufferSize ||
           nextActivity.starts.byteLength > device.limits.maxStorageBufferBindingSize)) {
         throw new Error('Graph activity exceeds the GPU storage buffer size limit');

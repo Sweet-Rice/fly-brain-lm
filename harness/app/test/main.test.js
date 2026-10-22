@@ -38,6 +38,9 @@ test("recording controls reset the graph and switch cleanly between files and li
     autocomplete = "";
     clientWidth = 800;
     clientHeight = 600;
+    classList = {
+      add: (...names) => { this.className = [...new Set([...this.className.split(/\s+/).filter(Boolean), ...names])].join(" "); },
+    };
 
     setAttribute(k, v) { this.attributes.set(k, String(v)); }
     getAttribute(k) { return this.attributes.get(k) ?? null; }
@@ -194,6 +197,11 @@ test("recording controls reset the graph and switch cleanly between files and li
       el.ownerDocument = doc;
       return el;
     },
+    createElementNS: (namespace, tag) => {
+      const el = doc.createElement(tag);
+      el.namespaceURI = namespace;
+      return el;
+    },
     execCommand: () => true,
   };
   docBody.ownerDocument = doc;
@@ -208,6 +216,8 @@ test("recording controls reset the graph and switch cleanly between files and li
     isSecureContext: false,
     WebSocket: Socket,
     fetch: stubFetch,
+    requestAnimationFrame: callback => setTimeout(() => callback(performance.now()), 0),
+    cancelAnimationFrame: clearTimeout,
   })) {
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });

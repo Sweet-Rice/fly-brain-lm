@@ -50,6 +50,10 @@ export const PROMPT_DOM_IDS = Object.freeze({
   PAGER_NEXT: 'prompt-pager-next',
   PAGER_LATEST: 'prompt-pager-latest',
   PAGER_STATUS: 'prompt-pager-status',
+  SETTINGS_PAGER: 'prompt-settings-pager',
+  SETTINGS_PREV: 'prompt-settings-prev',
+  SETTINGS_NEXT: 'prompt-settings-next',
+  SETTINGS_PAGE: 'prompt-settings-page',
 });
 
 export const PROMPT_CLASSES = Object.freeze({
@@ -90,6 +94,10 @@ export const PROMPT_CLASSES = Object.freeze({
   PAGER_NEXT: 'prompt-pager-next',
   PAGER_LATEST: 'prompt-pager-latest',
   PAGER_STATUS: 'prompt-pager-status',
+  SETTINGS_PAGER: 'prompt-settings-pager',
+  SETTINGS_PREV: 'prompt-settings-prev',
+  SETTINGS_NEXT: 'prompt-settings-next',
+  SETTINGS_PAGE: 'prompt-settings-page',
 });
 
 export const PAGER_LIMITS = Object.freeze({
@@ -104,9 +112,10 @@ export const PAGER_LIMITS = Object.freeze({
  * @param {string} text - Full text to paginate
  * @param {number} [maxLines=6] - Max logical lines per page
  * @param {number} [maxCodepoints=240] - Max code points per page
+ * @param {number} [columns=Infinity] - Conservative visual columns per line
  * @returns {string[]} Array of page text strings
  */
-export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoints = PAGER_LIMITS.MAX_CODEPOINTS) {
+export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoints = PAGER_LIMITS.MAX_CODEPOINTS, columns = Infinity) {
   if (!text) {
     return [''];
   }
@@ -115,25 +124,37 @@ export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoi
   const pages = [];
   let currentPage = [];
   let currentLines = 1;
+  let currentColumn = 0;
 
   for (let i = 0; i < codepoints.length; i++) {
     const cp = codepoints[i];
+    const newline = cp === '\n' || cp === '\r';
 
-    if (currentPage.length >= maxCodepoints) {
+    if (currentPage.length >= maxCodepoints ||
+        (!newline && currentColumn >= columns && currentLines >= maxLines)) {
       pages.push(currentPage.join(''));
       currentPage = [];
       currentLines = 1;
+      currentColumn = 0;
     }
 
+    if (!newline && currentColumn >= columns) {
+      currentLines++;
+      currentColumn = 0;
+    }
     currentPage.push(cp);
 
-    if (cp === '\n') {
+    if (newline) {
+      currentColumn = 0;
       currentLines++;
       if (currentLines > maxLines && i + 1 < codepoints.length) {
         pages.push(currentPage.join(''));
         currentPage = [];
         currentLines = 1;
       }
+    }
+    else {
+      currentColumn++;
     }
   }
 
@@ -251,6 +272,7 @@ export function mountPrompt(root, options = {}) {
   tabCompose.textContent = 'Compose';
   tabCompose.setAttribute('aria-selected', 'true');
   tabCompose.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_COMPOSE);
+  tabCompose.tabIndex = 0;
 
   const tabOutput = doc.createElement('button');
   tabOutput.id = PROMPT_DOM_IDS.TAB_OUTPUT;
@@ -260,6 +282,7 @@ export function mountPrompt(root, options = {}) {
   tabOutput.textContent = 'Output';
   tabOutput.setAttribute('aria-selected', 'false');
   tabOutput.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_OUTPUT);
+  tabOutput.tabIndex = -1;
 
   const tabSettings = doc.createElement('button');
   tabSettings.id = PROMPT_DOM_IDS.TAB_SETTINGS;
@@ -269,6 +292,7 @@ export function mountPrompt(root, options = {}) {
   tabSettings.textContent = 'Settings';
   tabSettings.setAttribute('aria-selected', 'false');
   tabSettings.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_SETTINGS);
+  tabSettings.tabIndex = -1;
 
   tablist.append(tabCompose, tabOutput, tabSettings);
 
@@ -375,6 +399,7 @@ export function mountPrompt(root, options = {}) {
   settingsPanel.className = `${PROMPT_CLASSES.TABPANEL} ${PROMPT_CLASSES.PANEL_SETTINGS}`;
   settingsPanel.setAttribute('role', 'tabpanel');
   settingsPanel.setAttribute('aria-labelledby', PROMPT_DOM_IDS.TAB_SETTINGS);
+  settingsPanel.setAttribute('data-page', '0');
   settingsPanel.hidden = true;
 
   const controlsGrid = doc.createElement('div');
@@ -383,6 +408,7 @@ export function mountPrompt(root, options = {}) {
   // Max tokens
   const maxTokensGroup = doc.createElement('div');
   maxTokensGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  maxTokensGroup.setAttribute('data-settings-page', '0');
   const maxTokensLabel = doc.createElement('label');
   maxTokensLabel.htmlFor = PROMPT_DOM_IDS.MAX_TOKENS;
   maxTokensLabel.className = PROMPT_CLASSES.LABEL;
@@ -404,6 +430,7 @@ export function mountPrompt(root, options = {}) {
   // Temperature
   const tempGroup = doc.createElement('div');
   tempGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  tempGroup.setAttribute('data-settings-page', '0');
   const tempLabel = doc.createElement('label');
   tempLabel.htmlFor = PROMPT_DOM_IDS.TEMPERATURE;
   tempLabel.className = PROMPT_CLASSES.LABEL;
@@ -426,6 +453,7 @@ export function mountPrompt(root, options = {}) {
   // Top K
   const topKGroup = doc.createElement('div');
   topKGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  topKGroup.setAttribute('data-settings-page', '1');
   const topKLabel = doc.createElement('label');
   topKLabel.htmlFor = PROMPT_DOM_IDS.TOP_K;
   topKLabel.className = PROMPT_CLASSES.LABEL;
@@ -447,6 +475,7 @@ export function mountPrompt(root, options = {}) {
   // Optional memory-only API key (no persistence)
   const apiKeyGroup = doc.createElement('div');
   apiKeyGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  apiKeyGroup.setAttribute('data-settings-page', '1');
   const apiKeyLabel = doc.createElement('label');
   apiKeyLabel.htmlFor = PROMPT_DOM_IDS.API_KEY;
   apiKeyLabel.className = PROMPT_CLASSES.LABEL;
@@ -465,8 +494,37 @@ export function mountPrompt(root, options = {}) {
   apiKeyGroup.append(apiKeyLabel, apiKeyInput, apiKeyHelp);
 
   controlsGrid.append(maxTokensGroup, tempGroup, topKGroup, apiKeyGroup);
-  settingsPanel.append(controlsGrid);
 
+  // Settings Pager (compact 2-page navigation)
+  const settingsPager = doc.createElement('div');
+  settingsPager.id = PROMPT_DOM_IDS.SETTINGS_PAGER;
+  settingsPager.className = PROMPT_CLASSES.SETTINGS_PAGER;
+
+  const settingsPrevBtn = doc.createElement('button');
+  settingsPrevBtn.id = PROMPT_DOM_IDS.SETTINGS_PREV;
+  settingsPrevBtn.type = 'button';
+  settingsPrevBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.SETTINGS_PREV}`;
+  settingsPrevBtn.textContent = 'Previous';
+  settingsPrevBtn.setAttribute('aria-label', 'Previous settings page');
+  settingsPrevBtn.disabled = true;
+
+  const settingsPageStatus = doc.createElement('span');
+  settingsPageStatus.id = PROMPT_DOM_IDS.SETTINGS_PAGE;
+  settingsPageStatus.className = PROMPT_CLASSES.SETTINGS_PAGE;
+  settingsPageStatus.setAttribute('role', 'status');
+  settingsPageStatus.setAttribute('aria-live', 'polite');
+  settingsPageStatus.textContent = 'Page 1 of 2';
+
+  const settingsNextBtn = doc.createElement('button');
+  settingsNextBtn.id = PROMPT_DOM_IDS.SETTINGS_NEXT;
+  settingsNextBtn.type = 'button';
+  settingsNextBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.SETTINGS_NEXT}`;
+  settingsNextBtn.textContent = 'Next';
+  settingsNextBtn.setAttribute('aria-label', 'Next settings page');
+  settingsNextBtn.disabled = false;
+
+  settingsPager.append(settingsPrevBtn, settingsPageStatus, settingsNextBtn);
+  settingsPanel.append(controlsGrid, settingsPager);
   // General error banner
   const generalError = doc.createElement('div');
   generalError.id = PROMPT_DOM_IDS.ERROR_GENERAL;
@@ -532,6 +590,9 @@ export function mountPrompt(root, options = {}) {
     tabCompose.setAttribute('aria-selected', tab === 'compose' ? 'true' : 'false');
     tabOutput.setAttribute('aria-selected', tab === 'output' ? 'true' : 'false');
     tabSettings.setAttribute('aria-selected', tab === 'settings' ? 'true' : 'false');
+    tabCompose.tabIndex = tab === 'compose' ? 0 : -1;
+    tabOutput.tabIndex = tab === 'output' ? 0 : -1;
+    tabSettings.tabIndex = tab === 'settings' ? 0 : -1;
 
     tabCompose.className = tab === 'compose'
       ? `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`
@@ -548,10 +609,130 @@ export function mountPrompt(root, options = {}) {
     settingsPanel.hidden = tab !== 'settings';
   }
 
+  // Settings pager state
+  let currentSettingsPage = 0;
+  let lastHandledValidationErrors = null;
+
+  function areValidationErrorsIdentical(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const k of aKeys) {
+      if (a[k] !== b[k]) return false;
+    }
+    return true;
+  }
+
+  function setSettingsPage(pageIndex) {
+    currentSettingsPage = pageIndex === 1 ? 1 : 0;
+    settingsPanel.setAttribute('data-page', String(currentSettingsPage));
+    updateSettingsPagerDisplay();
+  }
+
+  function updateSettingsPagerDisplay() {
+    const valErrors = controller.getState()?.validationErrors || {};
+    const page0Errors = Boolean(valErrors.maxTokens || valErrors.temperature);
+    const page1Errors = Boolean(valErrors.topK || valErrors.apiKey);
+
+    settingsPrevBtn.disabled = currentSettingsPage <= 0;
+    settingsNextBtn.disabled = currentSettingsPage >= 1;
+
+    if (currentSettingsPage === 0) {
+      if (page1Errors) {
+        settingsPageStatus.textContent = 'Page 1 of 2 (errors on page 2)';
+        settingsPageStatus.setAttribute('data-has-errors', 'true');
+        settingsPager.setAttribute('data-other-page-errors', 'true');
+        settingsNextBtn.setAttribute('data-has-errors', 'true');
+        settingsNextBtn.setAttribute('aria-label', 'Next settings page (has errors)');
+        settingsNextBtn.title = 'Page 2 has validation errors';
+      } else {
+        settingsPageStatus.textContent = 'Page 1 of 2';
+        if (typeof settingsPageStatus.removeAttribute === 'function') settingsPageStatus.removeAttribute('data-has-errors');
+        if (typeof settingsPager.removeAttribute === 'function') settingsPager.removeAttribute('data-other-page-errors');
+        if (typeof settingsNextBtn.removeAttribute === 'function') settingsNextBtn.removeAttribute('data-has-errors');
+        settingsNextBtn.setAttribute('aria-label', 'Next settings page');
+        settingsNextBtn.title = '';
+      }
+      if (typeof settingsPrevBtn.removeAttribute === 'function') settingsPrevBtn.removeAttribute('data-has-errors');
+      settingsPrevBtn.setAttribute('aria-label', 'Previous settings page');
+      settingsPrevBtn.title = '';
+    } else {
+      if (page0Errors) {
+        settingsPageStatus.textContent = 'Page 2 of 2 (errors on page 1)';
+        settingsPageStatus.setAttribute('data-has-errors', 'true');
+        settingsPager.setAttribute('data-other-page-errors', 'true');
+        settingsPrevBtn.setAttribute('data-has-errors', 'true');
+        settingsPrevBtn.setAttribute('aria-label', 'Previous settings page (has errors)');
+        settingsPrevBtn.title = 'Page 1 has validation errors';
+      } else {
+        settingsPageStatus.textContent = 'Page 2 of 2';
+        if (typeof settingsPageStatus.removeAttribute === 'function') settingsPageStatus.removeAttribute('data-has-errors');
+        if (typeof settingsPager.removeAttribute === 'function') settingsPager.removeAttribute('data-other-page-errors');
+        if (typeof settingsPrevBtn.removeAttribute === 'function') settingsPrevBtn.removeAttribute('data-has-errors');
+        settingsPrevBtn.setAttribute('aria-label', 'Previous settings page');
+        settingsPrevBtn.title = '';
+      }
+      if (typeof settingsNextBtn.removeAttribute === 'function') settingsNextBtn.removeAttribute('data-has-errors');
+      settingsNextBtn.setAttribute('aria-label', 'Next settings page');
+      settingsNextBtn.title = '';
+    }
+  }
+
+  function handleSettingsPrev() {
+    if (currentSettingsPage > 0) {
+      setSettingsPage(0);
+    }
+  }
+
+  function handleSettingsNext() {
+    if (currentSettingsPage < 1) {
+      setSettingsPage(1);
+    }
+  }
+
   // Pager state
   let userNavigatedPage = false;
   let currentPageIndex = 0;
   let cachedPages = [''];
+
+  let measureContext = null;
+  let measureFont = '';
+  const glyphWidths = new Map();
+
+  function outputPageLimits(text) {
+    const defaults = { lines: PAGER_LIMITS.MAX_LINES, columns: Infinity };
+    if (!outputPre.clientWidth || !outputPre.clientHeight ||
+        typeof globalThis.getComputedStyle !== 'function') return defaults;
+    const style = getComputedStyle(outputPre);
+    measureContext ??= doc.createElement('canvas').getContext('2d');
+    if (!measureContext) return defaults;
+    const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    if (font !== measureFont) {
+      measureFont = font;
+      measureContext.font = font;
+      glyphWidths.clear();
+    }
+    let widest = measureContext.measureText('M').width;
+    for (const character of text) {
+      if (character === '\n' || character === '\r') continue;
+      let width = glyphWidths.get(character);
+      if (width === undefined) {
+        width = measureContext.measureText(character === '\t' ? '  ' : character).width;
+        glyphWidths.set(character, width);
+      }
+      widest = Math.max(widest, width);
+    }
+    const width = outputPre.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const height = outputPre.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    // Reserve the final blank line in a page ending with a newline.
+    const lines = Math.max(1, Math.floor(height / parseFloat(style.lineHeight)) - 1);
+    return {
+      lines: Math.min(PAGER_LIMITS.MAX_LINES, lines),
+      columns: Math.max(1, Math.floor(width / widest)),
+    };
+  }
 
   function updatePagerDisplay() {
     const totalPages = cachedPages.length;
@@ -621,11 +802,13 @@ export function mountPrompt(root, options = {}) {
       switchTab('output');
       userNavigatedPage = false;
       currentPageIndex = 0;
+      setSettingsPage(0);
     }
 
     // Output pagination
     const fullText = state.text || '';
-    cachedPages = paginateText(fullText);
+    const limits = outputPageLimits(fullText);
+    cachedPages = paginateText(fullText, limits.lines, PAGER_LIMITS.MAX_CODEPOINTS, limits.columns);
     const totalPages = cachedPages.length;
 
     if (!userNavigatedPage) {
@@ -671,10 +854,34 @@ export function mountPrompt(root, options = {}) {
 
     // Switch view to display relevant validation errors
     if (hasValidationErrors) {
-      if (state.validationErrors?.maxTokens || state.validationErrors?.temperature || state.validationErrors?.topK) {
+      const hasSettingsErrors = Boolean(
+        state.validationErrors?.maxTokens ||
+        state.validationErrors?.temperature ||
+        state.validationErrors?.topK ||
+        state.validationErrors?.apiKey
+      );
+
+      if (hasSettingsErrors) {
         switchTab('settings');
       } else if (state.validationErrors?.prompt) {
         switchTab('compose');
+      }
+
+      const isNewValidation = !lastHandledValidationErrors ||
+        !areValidationErrorsIdentical(state.validationErrors, lastHandledValidationErrors);
+
+      if (isNewValidation) {
+        lastHandledValidationErrors = { ...state.validationErrors };
+        if (hasSettingsErrors) {
+          const hasPage0Errors = Boolean(
+            state.validationErrors?.maxTokens || state.validationErrors?.temperature
+          );
+          if (hasPage0Errors) {
+            setSettingsPage(0);
+          } else {
+            setSettingsPage(1);
+          }
+        }
       }
       generalError.textContent = '';
       runIdBadge.textContent = 'Run ID: -';
@@ -703,7 +910,9 @@ export function mountPrompt(root, options = {}) {
         finishReasonBadge.textContent = '';
       }
     }
+    updateSettingsPagerDisplay();
 
+    runIdBadge.title = runIdBadge.textContent;
     const ready = Boolean(state.health?.ready);
     generateBtn.disabled = active || !ready;
     cancelBtn.disabled = !active;
@@ -727,6 +936,12 @@ export function mountPrompt(root, options = {}) {
 
   const unsubscribe = controller.subscribe(render);
   render(controller.getState());
+  const outputResizeObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => {
+      if (outputPre.clientWidth && outputPre.clientHeight) render(controller.getState());
+    })
+    : null;
+  outputResizeObserver?.observe(outputPre);
 
   // Form submission handler
   async function handleSubmit(event) {
@@ -735,6 +950,7 @@ export function mountPrompt(root, options = {}) {
     }
     actionError = null;
     const currentState = controller.getState();
+    lastHandledValidationErrors = null;
     if (controller.isActive() || !currentState.health?.ready) return;
 
     controller.setApiKey(apiKeyInput.value);
@@ -811,6 +1027,8 @@ export function mountPrompt(root, options = {}) {
     userNavigatedPage = false;
     currentPageIndex = 0;
     cachedPages = [''];
+    lastHandledValidationErrors = null;
+    setSettingsPage(0);
     controller.clear();
     switchTab('compose');
     announcement.textContent = 'Prompt and output cleared.';
@@ -833,6 +1051,21 @@ export function mountPrompt(root, options = {}) {
     switchTab('settings');
   }
 
+  function handleTabKeys(event) {
+    const tabs = [tabCompose, tabOutput, tabSettings];
+    const index = tabs.indexOf(event.target);
+    if (index < 0) return;
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    switchTab(['compose', 'output', 'settings'][next]);
+    tabs[next].focus();
+  }
+
   form.addEventListener('submit', handleSubmit);
   promptInput.addEventListener('keydown', handleKeyDown);
   apiKeyInput.addEventListener('input', handleApiKeySync);
@@ -845,10 +1078,13 @@ export function mountPrompt(root, options = {}) {
   tabCompose.addEventListener('click', handleTabComposeClick);
   tabOutput.addEventListener('click', handleTabOutputClick);
   tabSettings.addEventListener('click', handleTabSettingsClick);
+  tablist.addEventListener('keydown', handleTabKeys);
 
   pagerPrevBtn.addEventListener('click', handlePagerPrev);
   pagerNextBtn.addEventListener('click', handlePagerNext);
   pagerLatestBtn.addEventListener('click', handlePagerLatest);
+  settingsPrevBtn.addEventListener('click', handleSettingsPrev);
+  settingsNextBtn.addEventListener('click', handleSettingsNext);
 
   // Initialize health check
   if (options.pollHealth !== false) {
@@ -859,6 +1095,7 @@ export function mountPrompt(root, options = {}) {
 
   // Disposer function
   function dispose() {
+    outputResizeObserver?.disconnect();
     unsubscribe();
     form.removeEventListener('submit', handleSubmit);
     promptInput.removeEventListener('keydown', handleKeyDown);
@@ -872,10 +1109,13 @@ export function mountPrompt(root, options = {}) {
     tabCompose.removeEventListener('click', handleTabComposeClick);
     tabOutput.removeEventListener('click', handleTabOutputClick);
     tabSettings.removeEventListener('click', handleTabSettingsClick);
+    tablist.removeEventListener('keydown', handleTabKeys);
 
     pagerPrevBtn.removeEventListener('click', handlePagerPrev);
     pagerNextBtn.removeEventListener('click', handlePagerNext);
     pagerLatestBtn.removeEventListener('click', handlePagerLatest);
+    settingsPrevBtn.removeEventListener('click', handleSettingsPrev);
+    settingsNextBtn.removeEventListener('click', handleSettingsNext);
 
     clearTimeout(copyTimer);
     copyTimer = null;

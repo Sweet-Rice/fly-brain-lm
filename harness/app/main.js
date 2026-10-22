@@ -5,11 +5,45 @@ import { initializeGPU } from "./gpu.js";
 import { mountPrompt } from "./prompt-view.js";
 import { mountInspector } from "./inspector.js";
 import { groupStyle } from "./brain-atlas.js";
+import { mountReadout } from "./readout-view.js";
+import { GenerationController } from "./generation.js";
 
 const receiver = new ProtocolReceiver();
 const element = (id) => document.getElementById(id);
 const canvas = element("viewport");
 let fires = 0, dropped = 0, droppedPairs = 0;
+let groupsPage = 0;
+const GROUPS_PER_PAGE = 5;
+const readout = mountReadout(element("readout-workspace"), canvas);
+const generation = new GenerationController();
+const unsubscribeReadout = generation.subscribe((state) => readout.setGeneration(state));
+
+function setView(view) {
+  element("workspace-shell").setAttribute("data-view", view);
+  for (const name of ["brain", "generate", "inspector", "source"]) {
+    element(`view-${name}`).setAttribute("aria-pressed", String(name === view));
+  }
+  element("workbench").hidden = view === "brain";
+  for (const [name, id] of Object.entries({
+    generate: "prompt-panel",
+    inspector: "inspector-panel-section", source: "source-panel",
+  })) element(id).hidden = name !== view;
+}
+
+for (const name of ["brain", "generate", "inspector", "source"]) {
+  element(`view-${name}`).addEventListener("click", () => setView(name));
+}
+for (const name of ["setup", "legend", "stream"]) {
+  element(`source-view-${name}`).addEventListener("click", () => {
+    for (const panel of ["setup", "legend", "stream"]) {
+      element(`source-${panel}`).hidden = panel !== name;
+      element(`source-view-${panel}`).setAttribute("aria-pressed", String(panel === name));
+    }
+  });
+}
+canvas?.addEventListener("node-select", ({ detail }) => {
+  if (detail?.id != null) setView("inspector");
+});
 
 function renderMapping() {
   const mapping = receiver.mapping;
@@ -19,7 +53,14 @@ function renderMapping() {
   if (edgesEl) edgesEl.textContent = mapping?.edges.length ?? 0;
   const counts = new Map(mapping?.groups.map((group) => [group.id, 0]));
   for (const node of mapping?.nodes ?? []) counts.set(node.group, counts.get(node.group) + 1);
-  const rows = (mapping?.groups ?? []).map((group, index) => {
+  const groups = mapping?.groups ?? [];
+  const pages = Math.max(1, Math.ceil(groups.length / GROUPS_PER_PAGE));
+  groupsPage = Math.min(groupsPage, pages - 1);
+  element("groups-prev").disabled = groupsPage === 0;
+  element("groups-next").disabled = groupsPage === pages - 1;
+  element("groups-page").textContent = `Page ${groupsPage + 1} of ${pages}`;
+  const rows = groups.slice(groupsPage * GROUPS_PER_PAGE, (groupsPage + 1) * GROUPS_PER_PAGE).map((group, offset) => {
+    const index = groupsPage * GROUPS_PER_PAGE + offset;
     const style = groupStyle(group, index);
     const row = document.createElement("tr");
 
@@ -62,7 +103,9 @@ function renderCounters() {
 
 function clearDisplay() {
   fires = dropped = droppedPairs = 0;
+  groupsPage = 0;
   renderMapping();
+  readout.reset();
   renderCounters();
   const protocolStatus = element("protocol-status");
   if (protocolStatus) protocolStatus.textContent = "Waiting for a mapping.";
@@ -71,9 +114,11 @@ function clearDisplay() {
   canvas?.dispatchEvent(new Event("reset"));
 }
 
-function onEvent(event) {
+function onEvent(event, raw) {
   if (event.action === "replace_mapping") {
     fires = dropped = droppedPairs = 0;
+    groupsPage = 0;
+    readout.reset();
     renderMapping();
     const protocolStatus = element("protocol-status");
     if (protocolStatus) protocolStatus.textContent = `Mapping accepted · epoch ${event.epoch}.`;
@@ -89,10 +134,14 @@ function onEvent(event) {
     canvas?.dispatchEvent(new CustomEvent("fire", { detail: { t: event.t, pairs: event.pairs } }));
   } else if (event.action === "drop_message") {
     dropped++;
+  } else if (event.action === "ignore_message" && receiver.mapping) {
+    readout.accept(raw);
+    return;
   } else if (event.action === "close") {
     const protocolStatus = element("protocol-status");
     if (protocolStatus) protocolStatus.textContent = `Unsupported mapping version (protocol code ${event.code}).`;
     canvas?.dispatchEvent(new Event("reset"));
+    readout.reset();
   }
   renderCounters();
 }
@@ -167,6 +216,7 @@ let disposePrompt = null;
 const promptWorkspace = element("prompt-workspace");
 if (promptWorkspace) {
   disposePrompt = mountPrompt(promptWorkspace, {
+    controller: generation,
     onGenerate: handleGenerate,
   });
 }
@@ -204,6 +254,8 @@ element("recording-play")?.addEventListener("click", () => recording.play());
 element("recording-pause")?.addEventListener("click", () => recording.pause());
 element("recording-restart")?.addEventListener("click", () => recording.restart());
 element("recording-speed")?.addEventListener("change", () => recording.setSpeed(Number(element("recording-speed")?.value)));
+element("groups-prev").addEventListener("click", () => { groupsPage--; renderMapping(); });
+element("groups-next").addEventListener("click", () => { groupsPage++; renderMapping(); });
 
 const gpuStatusEl = element("gpu-status");
 const labelsEl = element("graph-labels");
@@ -219,6 +271,9 @@ window.addEventListener("pagehide", () => {
   gpuReady.then((dispose) => dispose?.());
   disposePrompt?.();
   disposeInspector?.();
+  unsubscribeReadout();
+  generation.dispose();
+  readout.dispose();
 });
 if (new URLSearchParams(location.search).has("ws") && element("endpoint")?.value) {
   live.connect(element("endpoint").value);

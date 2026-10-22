@@ -11,9 +11,8 @@ and receivers are unaffected and operate normally even when the model API is mis
 or unstarted. The existing `harness/example/` Canvas demo is unchanged.
 
 For the canonical real-model reference, clean-checkout setup and all integration
-scenarios, use the [end-to-end workflow](../WORKFLOW.md). The dashboard layout and
-its data limits follow the
-[dashboard visual redesign plan](dashboard-visual-redesign-plan.md); see
+scenarios, use the [end-to-end workflow](../WORKFLOW.md). The `visuals` branch uses a
+single-viewport workbench; see [Workspace views](#workspace-views) and
 [Fly-brain schematic](#fly-brain-schematic) below.
 
 ## Run the live workspace (real model + app server)
@@ -62,6 +61,18 @@ python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-po
 # Terminal 2: App server (serves /app/ and proxies /health + /v1 on 8772 to 8771)
 python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
 ```
+
+
+For token IDs and processing status in the **MBON graph readout**, replace Terminal 1's command with:
+
+```console
+python -m harness.telemetry.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767
+```
+
+This opt-in server emits request/token metadata. Use the proxy-only app command in
+Terminal 2, not `--model-ckpt`: the one-command launcher starts the plain model
+server. The ordinary server also supports the graph readout, using explicitly
+labeled local SSE text without invented token IDs or graph-step alignment.
 
 In this form the page cannot tell a loading model from a stopped one; both show
 `Model service unavailable: the model server is not running or is still starting. This page is ready; it checks again every 10 seconds, or use Retry Health.`
@@ -128,6 +139,27 @@ This UI workstream owns `harness/app/` (browser workspace) and `harness/app_serv
 checkpoints/weights, model implementations, the model-side visualization stream
 (`harness/viz_stream.py`, `harness/protocol/v1/`) or `model/serve/` (frozen; the launcher
 only starts it unchanged).
+
+## Workspace views
+
+The page is fixed to the viewport. **Brain**, **Generate**, **Inspect**, and
+**Source** switch workspaces without page or panel scrolling.
+Desktop views retain the graph beside the workbench where space permits; narrow
+screens show one workspace at a time. Only the graph consumes wheel gestures, as zoom.
+
+- **Generate** has Compose / Output / Settings tabs. Output uses Previous / Next /
+  Latest pages sized to the actual text surface, with Unicode-safe boundaries.
+  Generation follows the latest page until an older page is selected. Copy uses
+  the entire original output, not just the visible page.
+  Short, narrow screens also page Settings controls in pairs, including validation
+  errors; health polling does not pull the user away from the selected page.
+- **Inspect** has Identity / Links / Activity tabs. Incoming and outgoing neighbors
+  retain ten-per-page navigation; activity retains the latest 32 observed steps.
+- **Source** has Connection / Groups / Stream views. Group metadata is paged five
+  rows at a time; connection and recording controls remain available.
+- **MBON readout** stays on the graph, not in another tab. Dashed paths start at
+  the actual MBON node positions, converge on a model-readout hub, and end at a
+  decoded-text card. They follow graph pan, zoom, and viewport changes.
 
 ## Run from a fresh checkout (offline review)
 
@@ -262,6 +294,9 @@ The extra fence time is software rasterization of the larger edge buffer.
 The neuron inspector (`inspector.js`) is backed by a DOM-free topology index (`NeuronIndex`)
 that manages sparse node IDs, adjacency lists, and per-node observed activity:
 
+Identity, Links, and Activity tabs show one detail section at a time without
+changing the selected neuron. Neighbor navigation keeps the Links view selected.
+
 - **ID selection form**: Enter any numeric sparse node ID (`#inspector-node-input`) and
   click Inspect (`#inspector-select-btn`) or press Enter to inspect that node.
 - **Node attributes**: Displays the selected node ID and its declared group / model role
@@ -333,18 +368,42 @@ interface for submitting generation requests to the local model reverse proxy:
     `completed`, `cancelled`, and `failed`.
   - Accessible announcements (`#prompt-announcement`) announce terminal completion or
     errors without flooding screen readers on every token chunk.
-- **Future timeline and memory panels**:
-  - Timeline and memory backend integration issues will be linked in a follow-up PR later
-    (no placeholder doc links are created).
+
+### MBON nodes to decoded text
+
+`readout-view.js` draws the output path directly on the graph. `gpu.js` projects
+the actual nodes of the atlas-classified MBON group into CSS-pixel coordinates.
+Mappings without MBON nodes hide the readout instead of inventing output nodes.
+
+- Dashed links are **architectural paths**, separate from mapped synapses. The
+  MBON head readout still passes through gating/output projection, residual blocks,
+  final normalization, and the tied vocabulary head before token sampling. The
+  diagram does not claim per-MBON word attribution, logits, probabilities, or
+  additional biological synapses.
+- With producer telemetry, the card shows a completion token's actual ID,
+  incremental UTF-8 text, request provenance, and stepped/unprocessed status.
+  A final sampled token can have `t = -1`; it is not falsely matched to a graph fire.
+  Raw bytes are available in the text tooltip; incomplete UTF-8 is labeled pending.
+- With the ordinary server, the card shows actual **local SSE** text instead.
+  Frontend run IDs and global stream request IDs are distinct; neither is used to
+  invent token IDs or align unrelated requests.
+- Previous / Next / Latest navigate the last 128 completion tokens, with capacity
+  and evictions labeled. Long tokens and local SSE output are split into small,
+  Unicode-safe pieces, accounting for the displayed escapes of control characters.
+  Selecting older retained output does not jump forward as new tokens arrive.
+- Gaps, resyncs, epoch changes, and source resets clear stale stream history.
+  Malformed messages and stale sequence/epoch values cannot advance accepted
+  state. Health polling cannot resurrect completed local text after a source reset.
+
 ### Activity highlights
 
-Every accepted source-to-destination pair brightens its entire directed edge,
-including the destination arrowhead, then fades linearly to its base color over
-**600 ms** of local elapsed time. The highlight mixes 80% white into the edge's
-group color and raises its opacity to 95% at the start. A repeat restarts that
-edge's 600 ms highlight; it does not add intensity. Other active edges keep their
-own start times. With the system's reduced-motion preference enabled, the edge
-holds its full highlight for 600 ms and then returns to its base appearance.
+Inactive node geometry uses 12% opacity, synapse shafts 0.8%, and arrowheads 6%.
+Overlapping translucent synapses can still form visible bundles. Every accepted
+source-to-destination pair brightens its directed synapse and both endpoint nodes,
+then fades to the translucent appearance over **600 ms** of local elapsed time.
+The highlight mixes 70% white into the group color and reaches 95% opacity.
+A repeat restarts the participating edge/node timers without adding intensity.
+With reduced motion enabled, highlights hold steady for 600 ms, then return to idle.
 
 The protocol's `t` determines message order only. A jump in `t` highlights the
 received pairs immediately, without waiting or inventing intermediate fires.
@@ -512,8 +571,8 @@ python -m pytest test/test_app_server.py
   replacement during validation, stale cancellation after a newer validation
   failure, terminal-result preservation during subscriber re-entry, rejection
   of disposed-client reuse, a 128-token stream sliced every 11 bytes reconstructed
-  exactly into multi-thousand-character output, and long output rendered without
-  truncation with one completion announcement.
+  exactly into multi-thousand-character output, and long output preserved across
+  navigable pages with one completion announcement.
 - **`prompt-view.test.js`**: DOM rendering with stable `prompt-*` IDs and accessible announcements,
   keyboard shortcut `Ctrl+Enter` / `Cmd+Enter` (ignores repeat keydown, preserves newlines and
   IME composition), Generate, Cancel, Clear, and Copy buttons lifecycle, Copy button clipboard
@@ -521,8 +580,12 @@ python -m pytest test/test_app_server.py
   resetting prompt input and output when idle (disabled during generation), readiness gating of
   submission, manual health retry button with typed API key sync and clearing, error banner display,
   terminal status announcements with accurate Unicode codepoint counting, safe disposer cleanup,
-  and a keyboard-only workflow (tab order of every control, Ctrl+Enter submit, Cancel keeping
-  partial output, Clear, exact Copy).
+  and a keyboard-only workflow (Ctrl+Enter submit, Cancel keeping partial output,
+  Clear, exact Copy).
+- **`readout-view.test.js`**: Stale-epoch and malformed-sequence rejection without
+  poisoning later valid output, clearing after a stream gap, retained selection
+  across bounded-history eviction, Unicode/control-character piece navigation,
+  local-versus-stream identity, and source-reset behavior during health polling.
 - **`inspector.test.js`**: DOM-free `NeuronIndex` (sparse node ID indexing, integer ID parsing,
   incoming/outgoing degree and neighbor list computation, self-loop activity deduplication per
   step, per-node recent observed fire history capped at `MAX_RECENT_STEPS` [32 steps] within current
@@ -535,10 +598,11 @@ python -m pytest test/test_app_server.py
 - **`gpu.test.js` and `layout.test.js`**: Node picking under camera pan/zoom transformations,
   drag vs click threshold differentiation, background click clearing selection, dynamic
   selection ring and incident edge overlay rendering without per-frame allocations,
-  selection events prior to GPU readiness, and the `data-layout` marker through
-  replacement and reset. Layout tests check real-capture anatomical placement against
-  the same world-space areas the layout used, node spacing, determinism under node
-  reordering, curved tract edges with arrowheads at destinations, overlays following
+  selection events prior to GPU readiness, fitting a mapping first received while
+  its workspace is hidden, and the `data-layout` marker through replacement and
+  reset. Layout tests check real-capture anatomical placement against
+  the same world-space areas the layout used, node spacing, curved tract edges
+  with arrowheads at destinations, overlays following
   those curves, non-overlapping areas, callouts near their own groups, fit dot size,
   grid fallback, mixed mappings and empty/sparse/self-loop cases.
 - **Existing protocol and rendering suites**: `protocol.test.js`, `sources.test.js`,
@@ -609,3 +673,23 @@ recorded-to-live switching on Generate worked. No horizontal overflow or nested
 scroll areas at 1586×992, 1024×768, 390×844 and 793×496 at 2× scale (200% zoom);
 touch layouts gave every control at least 44 px; Tab reached every control in order
 with a 2 px focus ring; reduced motion was honoured.
+
+### Observed visuals-branch smoke
+
+Managed Chromium rendered actual WebGPU geometry and real activity from an
+untrained `vibe2` model. All 15 MBON paths began at the projected mapping nodes.
+Token IDs and decoded text matched the server's NDJSON recording; the final
+sampled token was correctly labeled unprocessed. Pan, button zoom, wheel zoom,
+and resizing preserved the readout connections without scrolling the document.
+The ordinary model server also generated through the local-SSE fallback, with
+no invented token IDs.
+
+Checked 60 workspace/subview states and eight validation-error states across
+1365×768, 1280×720, 1024×600, 390×844, 390×600, and 320×568, including a degree-874
+node. No document overflow or clipped controls were observed; long identity/status
+strings use ellipsis. A separate 193-codepoint control-character, emoji, and
+unbroken-text token reconstructed exactly across 12 readout pieces at 320×568
+without clipping. The graph also fitted correctly when first opened after a
+narrow-screen start. Managed-browser clipboard permissions blocked writes in the
+earlier output-copy smoke; the UI displayed its explicit copy error.
+
