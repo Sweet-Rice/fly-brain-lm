@@ -145,7 +145,8 @@ async function run(sustained) {
       events, frames, replacements, cpu_fire_and_submit: summary(cpu),
       submitted_work_fence: summary(fence), animation_frame_gap: summary(gaps),
       writes_per_1000_event_burst: writesPer1000EventBurst,
-      static_buffer_creations_during_activity: stats.created - initialBuffers - replacements * 3,
+      static_buffer_creations_during_activity: stats.created - initialBuffers
+        - replacements * ([graph.regions, graph.edges, graph.nodes].filter(data => data?.length).length + 1),
       steady_live_buffers: steadyBuffers, settled_live_buffers: settledBuffers,
       hidden_transitions: hiddenTransitions, buffers: stats,
     }, null, 2);

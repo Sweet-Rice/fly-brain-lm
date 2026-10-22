@@ -66,6 +66,15 @@ test('uploads geometry once, draws edges before nodes, and updates only the came
   s.renderer.destroy();
 });
 
+test('brain regions upload once and draw beneath edges and nodes', () => {
+  const s = setup();
+  s.renderer.setGraph({ ...graph(), regions: new Float32Array(4 * 21) });
+  s.renderer.draw(s.pass, camera, 100);
+  assert.deepEqual(s.calls, [s.buffers[1], 12, s.buffers[2], 3, s.buffers[3], 6]);
+  assert.throws(() => s.renderer.setGraph({ ...graph(), regions: new Float32Array(6) }), /triangle vertices/);
+  s.renderer.destroy();
+});
+
 test('replacement changes the complete scene and immediately destroys unused buffer handles', () => {
   const s = setup();
   s.renderer.setGraph(graph());

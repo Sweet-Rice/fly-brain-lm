@@ -8,100 +8,145 @@
   <script type="module" src="main.js"></script>
 </head>
 <body>
-  <main>
-    <header>
-      <p class="eyebrow">FLY BRAIN LM / STREAM V1</p>
-      <h1>Fly Brain LM workspace</h1>
-      <p>Inspect a live model stream or an NDJSON recording alongside prompt generation.</p>
-    </header>
-
-    <section aria-labelledby="source-heading" class="source-section">
-      <details open class="source-details">
-        <summary class="source-summary">
-          <h2 id="source-heading">Source &amp; Playback</h2>
-        </summary>
-        <div class="source-body">
-          <form id="connection">
-            <label for="endpoint">WebSocket endpoint</label>
-            <div class="connection-row">
-              <input id="endpoint" type="url" required spellcheck="false" aria-describedby="endpoint-help">
-              <button type="submit">Connect</button>
-              <button id="disconnect" type="button">Disconnect</button>
-            </div>
-            <p id="endpoint-help" class="hint">Use the exact URL printed by the model or replay server.</p>
-          </form>
-          <div class="recording-block">
-            <label for="recording">Or open a recording</label>
-            <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
-            <div class="playback-controls" role="group" aria-label="Recording playback">
-              <button id="recording-play" type="button" disabled>Play</button>
-              <button id="recording-pause" type="button" disabled>Pause</button>
-              <button id="recording-restart" type="button" disabled>Restart</button>
-              <label for="recording-speed">Playback speed</label>
-              <select id="recording-speed" disabled aria-describedby="recording-help">
-                <option value="0.25">0.25×</option>
-                <option value="0.5">0.5×</option>
-                <option value="1" selected>1×</option>
-                <option value="2">2×</option>
-                <option value="4">4×</option>
-              </select>
-            </div>
-            <p id="recording-help" class="hint">Recordings play locally with 500 ms between fires at 1×. Pause stops new messages; active highlights finish fading. Recordings are saved data for inspection, not live model output.</p>
-          </div>
+  <main class="app-shell">
+    <header class="app-header">
+      <div class="header-brand">
+        <p class="eyebrow">FLY BRAIN LM / STREAM V1</p>
+        <h1 class="header-title">Fly Brain LM workspace</h1>
+      </div>
+      <div class="header-status">
+        <div class="status-pill">
           <p id="source-status" role="status">Disconnected. Connect or open a recording to begin.</p>
         </div>
-      </details>
-    </section>
+      </div>
+      <div class="header-counters" role="group" aria-label="Mapping summary">
+        <div class="header-counter">
+          <span class="counter-label">Mapping nodes</span>
+          <span id="nodes" class="counter-value">0</span>
+        </div>
+        <div class="header-counter">
+          <span class="counter-label">Declared connections</span>
+          <span id="edges" class="counter-value">0</span>
+        </div>
+      </div>
+    </header>
 
-    <div class="workspace-grid">
-      <div class="workspace-primary">
-        <section aria-labelledby="gpu-heading" class="graph-section">
-          <h2 id="gpu-heading">Brain graph</h2>
-          <p id="gpu-status" role="status">Checking WebGPU support…</p>
+    <details open class="source-details source-section" aria-labelledby="source-heading">
+      <summary class="source-summary">
+        <h2 id="source-heading">Source &amp; Legend</h2>
+      </summary>
+      <div class="source-body">
+        <form id="connection">
+          <label for="endpoint">WebSocket endpoint</label>
+          <div class="connection-row">
+            <input id="endpoint" type="url" required spellcheck="false" aria-describedby="endpoint-help">
+            <button type="submit">Connect</button>
+            <button id="disconnect" type="button">Disconnect</button>
+          </div>
+          <p id="endpoint-help" class="hint">Use the exact URL printed by the model or replay server.</p>
+        </form>
+        <div class="recording-block">
+          <label for="recording">Or open a recording</label>
+          <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
+        </div>
+        <div class="groups-legend-block">
+          <h3 class="groups-legend-heading">Groups</h3>
+          <table class="groups-table">
+            <caption class="sr-only">Groups in mapping order</caption>
+            <thead>
+              <tr>
+                <th scope="col"><span class="sr-only">Colour</span></th>
+                <th scope="col">Group</th>
+                <th scope="col">ID</th>
+                <th scope="col">Nodes</th>
+                <th scope="col">Placement</th>
+              </tr>
+            </thead>
+            <tbody id="groups">
+              <tr><td colspan="5">No mapping received.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <div class="center-panel">
+      <section aria-labelledby="gpu-heading" class="graph-section">
+        <div class="graph-header">
+          <div class="graph-title-row">
+            <h2 id="gpu-heading">Fly brain</h2>
+            <span class="schematic-chip brain-only">Schematic layout: illustrative positions, not measured anatomy</span>
+          </div>
           <div class="graph-controls">
             <button id="fit-graph" type="button">Fit graph</button>
             <button id="zoom-in" type="button">Zoom in (+)</button>
             <button id="zoom-out" type="button">Zoom out (−)</button>
           </div>
-          <div class="graph-view">
-            <canvas id="viewport" tabindex="0" aria-label="Directed brain graph" aria-describedby="graph-help"></canvas>
-            <div id="graph-labels" aria-hidden="true"></div>
+        </div>
+        <p id="gpu-status" role="status">Checking WebGPU support…</p>
+        <div class="graph-view">
+          <canvas id="viewport" tabindex="0" aria-label="Schematic fly-brain visualization of the directed mapping graph" aria-describedby="graph-help"></canvas>
+          <div id="graph-labels" aria-hidden="true"></div>
+        </div>
+        <div class="graph-legend-bar" role="group" aria-label="Graph visual legend">
+          <span class="legend-item"><span class="swatch-indicator active-swatch" aria-hidden="true"></span>Active connection (brightens toward white)</span>
+          <span class="legend-item"><span class="swatch-indicator selected-swatch" aria-hidden="true"></span>Selected node (white ring)</span>
+          <span class="legend-item"><span class="swatch-indicator in-swatch" aria-hidden="true"></span>Incoming selection</span>
+          <span class="legend-item"><span class="swatch-indicator out-swatch" aria-hidden="true"></span>Outgoing selection</span>
+          <span class="legend-item orientation-note brain-only">Frontal view · dorsal ↑</span>
+        </div>
+        <p id="graph-help" class="hint">Schematic layout with arrowheads pointing to the destination. Active connections brighten toward white for 600 ms; repeated activity restarts the highlight. Click a node to select and inspect it; drag the canvas to pan; scroll to zoom. With the graph focused, use arrow keys to pan, +/− to zoom, and 0 or Home to fit. Direct lookup fallback: enter any node ID into the Neuron Inspector panel.</p>
+      </section>
+
+      <section class="transport-section" aria-label="Recording transport">
+        <div class="transport-strip">
+          <div class="transport-controls" role="group" aria-label="Recording playback controls">
+            <button id="recording-play" type="button" disabled>Play</button>
+            <button id="recording-pause" type="button" disabled>Pause</button>
+            <button id="recording-restart" type="button" disabled>Restart</button>
           </div>
-          <p id="graph-help" class="hint">Arrowheads point to the destination. Active edges brighten for 600 ms; repeated activity restarts the highlight. Click a neuron node to select and inspect it; drag the canvas to pan; scroll to zoom. Keyboard fallback: enter any neuron ID into the Neuron Inspector panel to inspect it directly. With the graph focused, use arrow keys to pan, +/− to zoom, and 0 or Home to fit.</p>
-        </section>
+          <div class="transport-speed-wrap">
+            <label for="recording-speed">Playback speed</label>
+            <select id="recording-speed" disabled aria-describedby="recording-help">
+              <option value="0.25">0.25×</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+            </select>
+          </div>
+        </div>
+        <p id="recording-help" class="hint">Recordings play locally with 500 ms between fires at 1×. Pause stops new messages; active highlights finish fading. Recordings are saved data for inspection, not live model output.</p>
+      </section>
 
-        <section aria-labelledby="prompt-heading" class="prompt-section">
-          <h2 id="prompt-heading">Prompt</h2>
-          <div id="prompt-workspace" aria-labelledby="prompt-heading"></div>
-        </section>
-      </div>
-
-      <aside class="workspace-sidebar">
-        <section aria-labelledby="inspector-heading" class="inspector-section">
-          <h2 id="inspector-heading">Neuron Inspector</h2>
-          <div id="inspector-workspace" aria-labelledby="inspector-heading"></div>
-        </section>
-      </aside>
+      <section aria-labelledby="prompt-heading" class="prompt-section">
+        <h2 id="prompt-heading">Prompt</h2>
+        <div id="prompt-workspace" aria-labelledby="prompt-heading"></div>
+      </section>
     </div>
 
-    <section aria-labelledby="stream-heading" class="stream-section">
-      <h2 id="stream-heading">Accepted stream</h2>
-      <dl class="metrics">
-        <div><dt>Nodes</dt><dd id="nodes">0</dd></div>
-        <div><dt>Edges</dt><dd id="edges">0</dd></div>
-        <div><dt>Last step</dt><dd id="step">—</dd></div>
-        <div><dt>Accepted fires</dt><dd id="fires">0</dd></div>
-        <div><dt>Dropped messages</dt><dd id="dropped">0</dd></div>
-        <div><dt>Undeclared pairs</dt><dd id="pairs-dropped">0</dd></div>
-      </dl>
-      <p id="protocol-status">Waiting for a mapping.</p>
-      <table>
-        <caption>Groups in mapping order</caption>
-        <thead><tr><th scope="col">Group</th><th scope="col">ID</th><th scope="col">Nodes</th></tr></thead>
-        <tbody id="groups"><tr><td colspan="3">No mapping received.</td></tr></tbody>
-      </table>
-      <p id="last-fire" class="hint">No accepted fire event.</p>
-    </section>
+    <aside class="rail-right">
+      <section aria-labelledby="inspector-heading" class="inspector-section">
+        <h2 id="inspector-heading">Neuron Inspector</h2>
+        <div id="inspector-workspace" aria-labelledby="inspector-heading"></div>
+      </section>
+    </aside>
+
+    <details open class="stream-section" aria-labelledby="stream-heading">
+      <summary class="stream-summary">
+        <h2 id="stream-heading">Accepted stream</h2>
+      </summary>
+      <div class="stream-body">
+        <dl class="metrics">
+          <div><dt>Last step</dt><dd id="step">—</dd></div>
+          <div><dt>Accepted fires</dt><dd id="fires">0</dd></div>
+          <div><dt>Dropped messages</dt><dd id="dropped">0</dd></div>
+          <div><dt>Undeclared pairs</dt><dd id="pairs-dropped">0</dd></div>
+        </dl>
+        <p id="protocol-status">Waiting for a mapping.</p>
+        <p id="last-fire" class="hint">No accepted fire event.</p>
+      </div>
+    </details>
   </main>
 </body>
 </html>

@@ -7,6 +7,9 @@ are observations on this machine, not CI thresholds or guaranteed capacity.
 For the current firing rule and a full-model comparison of disabled, idle,
 recording and live instrumentation, see [model activity](ACTIVITY.md#full-inference-measurement).
 The stage-only timings below predate the issue #3 host-mask extraction change.
+The fly-brain dashboard layout (2026-10-21) later raised static geometry to
+16,516,164 bytes in five steady buffers; its software-adapter measurements are in
+the [app README](app/README.md#fly-brain-schematic). The tables below are unchanged.
 
 ## Target and environment
 

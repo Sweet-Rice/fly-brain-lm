@@ -11,9 +11,10 @@ and receivers are unaffected and operate normally even when the model API is mis
 or unstarted. The existing `harness/example/` Canvas demo is unchanged.
 
 For the canonical real-model reference, clean-checkout setup and all integration
-scenarios, use the [end-to-end workflow](../WORKFLOW.md). For the planned
-fly-brain dashboard layout, see the
-[dashboard visual redesign plan](dashboard-visual-redesign-plan.md).
+scenarios, use the [end-to-end workflow](../WORKFLOW.md). The dashboard layout and
+its data limits follow the
+[dashboard visual redesign plan](dashboard-visual-redesign-plan.md); see
+[Fly-brain schematic](#fly-brain-schematic) below.
 
 ## Run the live workspace (real model + app server)
 
@@ -125,17 +126,63 @@ below the graph. This is a schematic, not an anatomical reconstruction.
 - **Click vs pan picking**: Click directly on a node to select it. Dragging (pointer
   movement exceeding a small movement threshold) pans the camera without selecting
   nodes. Clicking empty background clears the active selection.
-- **Selection overlay**: Selecting a node highlights it with an overlay ring and
-  brightens its incident incoming and outgoing directed edges clearly. This overlay
-  is rendered dynamically without rebuilding static graph topology or reallocating
-  rendering pipelines.
+- **Selection overlay**: Selecting a node rings it in white, rings its neighbours,
+  and draws its incoming edges in fuchsia and outgoing edges in coral along the
+  same curved paths as the base edges. This overlay is rendered dynamically without
+  rebuilding static graph topology or reallocating rendering pipelines.
 - Selection events (`node-select` and `select-node`) work even before GPU initialization
   completes, or when WebGPU is unavailable.
 
-Layout is deterministic: each group gets a grid, with members sorted by numeric
-node id. Empty groups keep their place, isolated nodes remain visible and sparse
-ids do not allocate arrays sized by the largest id. Positions are computed locally;
-no coordinates or floating-point fields are added to the protocol.
+### Fly-brain schematic
+
+When any mapping group name matches the model exporter's groups, the graph is
+drawn inside a frontal-view fly-brain outline (`brain-atlas.js`): central brain,
+both optic lobes, esophageal foramen, and per hemisphere the antennal lobe (AL) and
+mushroom body (calyx, peduncle, vertical and medial lobes). The modeled circuit
+fills the viewer's-left hemisphere; the other hemisphere is outline-only context.
+
+| Group | Placement |
+|---|---|
+| `Glomerulus` | Antennal lobe |
+| `KC_gamma`, `KC_alphabeta`, `KC_alphaprime_betaprime` | Three adjacent calyx sectors, angular spans proportional to member counts |
+| `MBON` | Lobe of the KC group supplying most of its declared incoming edges (γ medial lobe; α/β and α′/β′ vertical lobe), heel when tied or absent |
+
+- **Schematic, not anatomy.** Positions are illustrative; the chip above the
+  viewport says so whenever the template is drawn. Mappings carry no coordinates,
+  body IDs or hemisphere, so the UI shows no left/right label, scale bar or
+  measured shape. AL and mushroom body are enlarged so the circuit is legible.
+  Glomerulus and MBON nodes are model abstractions, not single neurons.
+- **Real topology only.** Every mapping node and directed edge is drawn once; context
+  neuropils carry no dots. Glomerulus→KC edges curve through an antennal-lobe-tract
+  waypoint and KC→MBON edges through the peduncle (4-segment quadratic curves);
+  other edges stay straight and self-loops keep their loop.
+- **Deterministic.** Members sort by numeric node id and fill each area with a
+  golden-angle pattern; one uniform scale keeps node centres at least 2.5 × the node
+  radius apart. Sparse ids do not allocate arrays sized by the largest id.
+- **Fallback.** Mappings with no matching group names (for example `PN`, `KC`,
+  `Sensory`) keep the grouped grid with no brain outline. In mixed mappings,
+  unmatched groups form a labelled grid row beneath the brain. Empty groups keep a
+  label and isolated nodes remain visible.
+- Positions are computed locally; no coordinates or floating-point fields are added
+  to the protocol.
+
+Geometry for the real capture (1,958 nodes, 19,037 edges, no self-edges), measured
+2026-10-21 on this branch with `stress.html` in headless Chromium on the SwiftShader
+software adapter (single samples; not native-GPU timings):
+
+| | Grid (`4d371cd`) | Fly brain |
+|---|---:|---:|
+| Static geometry bytes (regions + edges + nodes) | 6,770,988 | 16,516,164 |
+| Edge buffer bytes | 4,797,324 | 14,391,972 |
+| Layout, Node p50 / p95 (30 runs) | 122.9 / 136.8 ms | 82.4 / 125.2 ms |
+| Layout in browser, first run | 189.5 ms | 181.7 ms |
+| GPU upload CPU / with fence | 29.3 / 55.0 ms | 40.0 / 80.6 ms |
+| Submitted-work fence p50 / p95 | 61.3 / 79.1 ms | 87.6 / 115.8 ms |
+| Steady / peak live buffers | 4 / 7 | 5 / 9 |
+| Static buffer creations during activity | 0 | 0 |
+
+Layout preallocates typed arrays, so it got faster despite 3× the edge vertices.
+The extra fence time is software rasterization of the larger edge buffer.
 
 ### Neuron inspector panel
 
@@ -396,8 +443,13 @@ python -m pytest test/test_app_server.py
   canvas-null tolerance, and disposer cleanup.
 - **`gpu.test.js` and `layout.test.js`**: Node picking under camera pan/zoom transformations,
   drag vs click threshold differentiation, background click clearing selection, dynamic
-  selection ring and incident edge overlay rendering without per-frame allocations, and
-  selection events prior to GPU readiness.
+  selection ring and incident edge overlay rendering without per-frame allocations,
+  selection events prior to GPU readiness, and the `data-layout` marker through
+  replacement and reset. Layout tests check real-capture anatomical placement against
+  the same world-space areas the layout used, node spacing, determinism under node
+  reordering, curved tract edges with arrowheads at destinations, overlays following
+  those curves, non-overlapping areas, callouts near their own groups, fit dot size,
+  grid fallback, mixed mappings and empty/sparse/self-loop cases.
 - **Existing protocol and rendering suites**: `protocol.test.js`, `sources.test.js`,
   `playback.test.js`, `activity.test.js`, `camera.test.js`, `renderer.test.js`,
   `main.test.js`, and `workflow.test.js` continue to verify normative v1 contract fixtures,
@@ -441,3 +493,20 @@ with browser permission, invalid-input rejection, API-down offline inspection, a
 API-key rejection/recovery. Node picking, neighbor focus, recording restart and
 recorded-to-live switching worked. Layout stayed within the viewport at 360 px and
 with CSS zoom set to 200%. This is software-GPU evidence, not native-device benchmarking.
+
+### Observed fly-brain dashboard smoke
+
+Checked on 2026-10-21 in headless Chromium with the SwiftShader WebGPU adapter.
+Canvas presentation is not captured in this headless setup, so frames were read back
+through a test-only `copyTextureToBuffer` shim; this is software-GPU evidence. At
+1586×992 the canvas was 919×615 CSS px and Fit framed the whole brain (dots 2.56 px
+across by camera math). Recording fires and live fires from an untrained `vibe2`
+checkpoint brightened curved AL-tract and peduncle bundles. Clicking KC node 700
+selected it (in-degree 11, out-degree 5 to MBONs 1943–1947) and fuchsia/coral overlays
+followed the curves. Grid, mixed and real mappings replaced each other without GPU
+errors, toggling the schematic chip. Play/Pause/Restart/4× speed, Generate, Cancel
+with partial output, exact Copy, Clear, API-key rejection and recovery, and
+recorded-to-live switching on Generate worked. No horizontal overflow or nested
+scroll areas at 1586×992, 1024×768, 390×844 and 793×496 at 2× scale (200% zoom);
+touch layouts gave every control at least 44 px; Tab reached every control in order
+with a 2 px focus ring; reduced motion was honoured.

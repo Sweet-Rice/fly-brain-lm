@@ -1,14 +1,126 @@
-const COLORS = [
-  [0.35, 0.79, 1], [0.56, 0.88, 0.56], [1, 0.72, 0.35],
-  [0.82, 0.57, 1], [1, 0.49, 0.62], [0.35, 0.87, 0.79],
-];
+import {
+  COLORS,
+  groupStyle,
+  getBrainAreas,
+  isInsideArea,
+  buildBrainRegions,
+  BASE_AREAS,
+  computeCalyxSectors,
+} from './brain-atlas.js';
+
 const SPACING = 20;
 export const RADIUS = 3;
 const CIRCLE_SEGMENTS = 12;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+export function computeEdgePath(a, b, tractWaypoint = null, radius = RADIUS) {
+  if (a.x === b.x && a.y === b.y) {
+    const segments = [];
+    let previous = [a.x - 2, a.y - 2];
+    let lastDir = [0, 0];
+    for (let i = 1; i <= 16; i++) {
+      const t = i / 16;
+      const u = 1 - t;
+      const point = [
+        u ** 3 * (a.x - 2) + 3 * u * u * t * (a.x - 20)
+          + 3 * u * t * t * (a.x + 20) + t ** 3 * (a.x + 2),
+        u ** 3 * (a.y - 2) + 3 * u * u * t * (a.y - 24)
+          + 3 * u * t * t * (a.y - 24) + t ** 3 * (a.y - 2),
+      ];
+      segments.push({ a: previous, b: point });
+      if (i === 16) lastDir = [point[0] - previous[0], point[1] - previous[1]];
+      previous = point;
+    }
+    return {
+      type: 'loop',
+      segments,
+      arrow: { tip: previous, direction: lastDir },
+      midPoint: [a.x, a.y - 24],
+    };
+  }
+
+  if (tractWaypoint) {
+    const p0 = [a.x, a.y];
+    const p1 = [tractWaypoint.x, tractWaypoint.y];
+    const p2 = [b.x, b.y];
+
+    const d0 = [p1[0] - p0[0], p1[1] - p0[1]];
+    const len0 = Math.hypot(...d0);
+    const t0 = len0 > 0 ? [d0[0] / len0, d0[1] / len0] : [1, 0];
+    const q0 = [p0[0] + t0[0] * radius, p0[1] + t0[1] * radius];
+
+    const d1 = [p2[0] - p1[0], p2[1] - p1[1]];
+    const len1 = Math.hypot(...d1);
+    const t1 = len1 > 0 ? [d1[0] / len1, d1[1] / len1] : [1, 0];
+    const tip = [p2[0] - t1[0] * radius, p2[1] - t1[1] * radius];
+
+    const bezierPoint = (t) => {
+      const u = 1 - t;
+      return [
+        u * u * q0[0] + 2 * u * t * p1[0] + t * t * tip[0],
+        u * u * q0[1] + 2 * u * t * p1[1] + t * t * tip[1],
+      ];
+    };
+
+    const pts = [q0, bezierPoint(0.25), bezierPoint(0.5), bezierPoint(0.75), tip];
+    const segments = [
+      { a: pts[0], b: pts[1] },
+      { a: pts[1], b: pts[2] },
+      { a: pts[2], b: pts[3] },
+      { a: pts[3], b: pts[4] },
+    ];
+    return {
+      type: 'curve',
+      segments,
+      arrow: { tip, direction: t1 },
+      midPoint: pts[2],
+    };
+  }
+
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy);
+  const dir = length > 0 ? [dx / length, dy / length] : [1, 0];
+  const start = [a.x + dir[0] * radius, a.y + dir[1] * radius];
+  const tip = [b.x - dir[0] * radius, b.y - dir[1] * radius];
+  return {
+    type: 'straight',
+    segments: [{ a: start, b: tip }],
+    arrow: { tip, direction: [dx, dy] },
+    midPoint: [(start[0] + tip[0]) / 2, (start[1] + tip[1]) / 2],
+  };
+}
+
+function getTractWaypoint(graph, sourceId, destId) {
+  const tracts = graph?.areas?.tracts ?? graph?.tracts;
+  if (!tracts) return null;
+  const a = graph.positions.get(sourceId);
+  const b = graph.positions.get(destId);
+  if (!a || !b) return null;
+  if (a.area === 'AL' && b.area === 'Calyx') return tracts.alToCalyx;
+  if (a.area === 'Calyx' && b.area === 'Lobe') return tracts.calyxToLobe;
+  return null;
+}
 
 export function buildGraph(mapping) {
   const grouped = new Map(mapping.groups.map(group => [group.id, []]));
-  for (const node of mapping.nodes) grouped.get(node.group).push(node);
+  for (const node of mapping.nodes) {
+    if (grouped.has(node.group)) {
+      grouped.get(node.group).push(node);
+    }
+  }
+
+  const groupStyleMap = new Map(mapping.groups.map((g, i) => [g.id, groupStyle(g, i)]));
+  const isBrain = mapping.groups.some(g => groupStyleMap.get(g.id).anatomical);
+
+  if (!isBrain) {
+    return buildGridLayout(mapping, grouped, groupStyleMap);
+  }
+
+  return buildBrainLayout(mapping, grouped, groupStyleMap);
+}
+
+function buildGridLayout(mapping, grouped, groupStyleMap) {
   const positions = new Map();
   const labels = [];
   const nodes = [];
@@ -18,10 +130,10 @@ export function buildGraph(mapping) {
   let tallest = 0;
 
   function include(x, y) {
-    bounds.minX = Math.min(bounds.minX, x);
-    bounds.minY = Math.min(bounds.minY, y);
-    bounds.maxX = Math.max(bounds.maxX, x);
-    bounds.maxY = Math.max(bounds.maxY, y);
+    if (x < bounds.minX) bounds.minX = x;
+    if (y < bounds.minY) bounds.minY = y;
+    if (x > bounds.maxX) bounds.maxX = x;
+    if (y > bounds.maxY) bounds.maxY = y;
   }
 
   function triangle(target, a, b, c, color, alpha, edgeIndex = -1) {
@@ -33,6 +145,7 @@ export function buildGraph(mapping) {
 
   function segment(a, b, color, edgeIndex) {
     const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (length === 0) return;
     const nx = -(b[1] - a[1]) / length * 0.35;
     const ny = (b[0] - a[0]) / length * 0.35;
     const p = [a[0] + nx, a[1] + ny];
@@ -45,6 +158,7 @@ export function buildGraph(mapping) {
 
   function arrow(tip, direction, color, edgeIndex) {
     const length = Math.hypot(...direction);
+    if (length === 0) return;
     const ux = direction[0] / length;
     const uy = direction[1] / length;
     triangle(edges, tip,
@@ -52,14 +166,14 @@ export function buildGraph(mapping) {
       [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, 0.65, edgeIndex);
   }
 
-  mapping.groups.forEach((group, index) => {
-    const members = grouped.get(group.id).sort((a, b) => a.id - b.id);
+  mapping.groups.forEach((group) => {
+    const members = (grouped.get(group.id) ?? []).slice().sort((a, b) => a.id - b.id);
     const columns = Math.max(1, Math.ceil(Math.sqrt(members.length / 2)));
     const rows = Math.ceil(members.length / columns);
     const width = Math.max(140, columns * SPACING + 40);
     const height = Math.max(0, rows - 1) * SPACING;
     const center = left + width / 2;
-    const color = COLORS[index % COLORS.length];
+    const color = groupStyleMap.get(group.id).color;
     tallest = Math.max(tallest, height);
     labels.push({ id: group.id, name: group.name, x: center, y: 0, width, color });
     include(left, -height / 2);
@@ -69,8 +183,8 @@ export function buildGraph(mapping) {
       const y = Math.floor(i / columns) * SPACING - height / 2;
       positions.set(node.id, { x, y, color });
       for (let j = 0; j < CIRCLE_SEGMENTS; j++) {
-        const a = j * 2 * Math.PI / CIRCLE_SEGMENTS;
-        const b = (j + 1) * 2 * Math.PI / CIRCLE_SEGMENTS;
+        const a = (j * 2 * Math.PI) / CIRCLE_SEGMENTS;
+        const b = ((j + 1) * 2 * Math.PI) / CIRCLE_SEGMENTS;
         triangle(nodes, [x, y], [x + Math.cos(a) * RADIUS, y + Math.sin(a) * RADIUS],
           [x + Math.cos(b) * RADIUS, y + Math.sin(b) * RADIUS], color, 1);
       }
@@ -88,42 +202,370 @@ export function buildGraph(mapping) {
   for (const [edgeIndex, [source, destination]] of mapping.edges.entries()) {
     const a = positions.get(source);
     const b = positions.get(destination);
-    if (source === destination) {
-      let previous = [a.x - 2, a.y - 2];
-      for (let i = 1; i <= 16; i++) {
-        const t = i / 16;
-        const u = 1 - t;
-        const point = [
-          u ** 3 * (a.x - 2) + 3 * u * u * t * (a.x - 20)
-            + 3 * u * t * t * (a.x + 20) + t ** 3 * (a.x + 2),
-          u ** 3 * (a.y - 2) + 3 * u * u * t * (a.y - 24)
-            + 3 * u * t * t * (a.y - 24) + t ** 3 * (a.y - 2),
-        ];
-        segment(previous, point, a.color, edgeIndex);
-        if (i === 16) arrow(point, [point[0] - previous[0], point[1] - previous[1]], a.color, edgeIndex);
-        previous = point;
-      }
-    } else {
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const length = Math.hypot(dx, dy);
-      const start = [a.x + dx / length * RADIUS, a.y + dy / length * RADIUS];
-      const end = [b.x - dx / length * RADIUS, b.y - dy / length * RADIUS];
-      segment(start, end, a.color, edgeIndex);
-      arrow(end, [dx, dy], a.color, edgeIndex);
+    if (!a || !b) continue;
+    const path = computeEdgePath(a, b, null, RADIUS);
+    for (const seg of path.segments) {
+      segment(seg.a, seg.b, a.color, edgeIndex);
     }
+    arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex);
   }
 
   if (mapping.groups.length === 0) Object.assign(bounds, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
   return {
-    nodes: new Float32Array(nodes), edges: new Float32Array(edges), labels, bounds,
-    nodeCount: mapping.nodes.length, edgeCount: mapping.edges.length, edgePairs: mapping.edges,
+    nodes: new Float32Array(nodes),
+    edges: new Float32Array(edges),
+    regions: new Float32Array(0),
+    labels,
+    bounds,
+    nodeCount: mapping.nodes.length,
+    edgeCount: mapping.edges.length,
+    edgePairs: mapping.edges,
     positions,
+    areas: null,
+  };
+}
+
+function buildBrainLayout(mapping, grouped, groupStyleMap) {
+  const positions = new Map();
+  const labels = [];
+  const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+
+  function include(x, y) {
+    if (x < bounds.minX) bounds.minX = x;
+    if (y < bounds.minY) bounds.minY = y;
+    if (x > bounds.maxX) bounds.maxX = x;
+    if (y > bounds.maxY) bounds.maxY = y;
+  }
+
+  const groupNameMap = new Map(mapping.groups.map(g => [g.id, g.name]));
+  const nodeGroupMap = new Map(mapping.nodes.map(n => [n.id, n.group]));
+
+  // 1. Calyx sector allocations
+  const calyxSectorAngles = computeCalyxSectors(mapping);
+  const kcGroups = ['KC_gamma', 'KC_alphabeta', 'KC_alphaprime_betaprime'];
+  let totalKCs = 0;
+  for (const name of kcGroups) {
+    totalKCs += calyxSectorAngles[name].count;
+  }
+
+  // 2. Uniform template scale
+  const glomGroup = mapping.groups.find(g => g.name === 'Glomerulus');
+  const glomCount = glomGroup ? (grouped.get(glomGroup.id)?.length ?? 0) : 0;
+  const S_AL = (7.5 * Math.sqrt(Math.max(1, glomCount))) / (1.546 * 50);
+  const S_calyx = (7.5 * Math.sqrt(Math.max(1, totalKCs))) / (1.546 * 216);
+  const scale = Math.max(1.0, S_AL, S_calyx);
+
+  const areas = getBrainAreas(scale, calyxSectorAngles);
+
+  // 3. Node placement: AL (Glomerulus)
+  if (glomGroup) {
+    const members = (grouped.get(glomGroup.id) ?? []).slice().sort((a, b) => a.id - b.id);
+    const N = members.length;
+    const alArea = areas.AL;
+    const color = groupStyleMap.get(glomGroup.id).color;
+    members.forEach((node, i) => {
+      const r = N === 1 ? 0 : alArea.r * 0.94 * Math.sqrt((i + 0.5) / N);
+      const theta = i * GOLDEN_ANGLE;
+      positions.set(node.id, {
+        x: alArea.x + r * Math.cos(theta),
+        y: alArea.y + r * Math.sin(theta),
+        color,
+        area: 'AL',
+        group: glomGroup.id,
+      });
+    });
+  }
+
+  // 4. Node placement: Calyx (KC groups)
+  const calyxArea = areas.calyx;
+  for (const name of kcGroups) {
+    const g = mapping.groups.find(gr => gr.name === name);
+    if (!g) continue;
+    const members = (grouped.get(g.id) ?? []).slice().sort((a, b) => a.id - b.id);
+    const sec = calyxSectorAngles[name];
+    const color = groupStyleMap.get(g.id).color;
+    let count = 0;
+    let k = 0;
+    while (count < members.length) {
+      const theta = (k * GOLDEN_ANGLE) % (2 * Math.PI);
+      let normTheta = theta;
+      while (normTheta < sec.theta0) normTheta += 2 * Math.PI;
+      while (normTheta >= sec.theta0 + 2 * Math.PI) normTheta -= 2 * Math.PI;
+      if (normTheta >= sec.theta0 && normTheta < sec.theta1) {
+        const r = calyxArea.r * 0.98 * Math.sqrt((k + 0.5) / Math.max(1, totalKCs));
+        const node = members[count];
+        positions.set(node.id, {
+          x: calyxArea.x + r * Math.cos(normTheta),
+          y: calyxArea.y + r * Math.sin(normTheta),
+          color,
+          area: 'Calyx',
+          group: g.id,
+        });
+        count++;
+      }
+      k++;
+    }
+  }
+
+  // 5. Node placement: MBON (Lobes)
+  const mbonGroup = mapping.groups.find(g => g.name === 'MBON');
+  if (mbonGroup) {
+    const members = (grouped.get(mbonGroup.id) ?? []).slice().sort((a, b) => a.id - b.id);
+    const mbonLobeNodes = { gamma: [], alphabeta: [], alphaprime_betaprime: [], shared: [] };
+    for (const node of members) {
+      const incoming = { KC_gamma: 0, KC_alphabeta: 0, KC_alphaprime_betaprime: 0 };
+      for (const [src, dst] of mapping.edges) {
+        if (dst === node.id) {
+          const sName = groupNameMap.get(nodeGroupMap.get(src));
+          if (incoming[sName] !== undefined) incoming[sName]++;
+        }
+      }
+      const max = Math.max(...Object.values(incoming));
+      let target = 'shared';
+      if (max > 0) {
+        const winners = Object.keys(incoming).filter(k => incoming[k] === max);
+        if (winners.length === 1) {
+          if (winners[0] === 'KC_gamma') target = 'gamma';
+          else if (winners[0] === 'KC_alphabeta') target = 'alphabeta';
+          else if (winners[0] === 'KC_alphaprime_betaprime') target = 'alphaprime_betaprime';
+        }
+      }
+      mbonLobeNodes[target].push(node);
+    }
+
+    const color = groupStyleMap.get(mbonGroup.id).color;
+    for (const [target, nodes] of Object.entries(mbonLobeNodes)) {
+      const lobeArea = areas.lobes[target];
+      const M = nodes.length;
+      nodes.forEach((node, i) => {
+        const r = M === 1 ? 0 : lobeArea.r * 0.85 * Math.sqrt((i + 0.5) / M);
+        const theta = i * GOLDEN_ANGLE;
+        positions.set(node.id, {
+          x: lobeArea.x + r * Math.cos(theta),
+          y: lobeArea.y + r * Math.sin(theta),
+          color,
+          area: 'Lobe',
+          group: mbonGroup.id,
+        });
+      });
+    }
+  }
+
+  // 6. Callout labels and leader lines
+  const calloutLines = [];
+  const brainCalloutDefs = {
+    Glomerulus: {
+      anchor: { x: -150 * scale, y: 340 * scale },
+      width: 180 * scale,
+      from: { x: -150 * scale, y: 320 * scale },
+      to: { x: -150 * scale, y: 240 * scale },
+    },
+    KC_gamma: {
+      anchor: { x: -170 * scale, y: -450 * scale },
+      width: 160 * scale,
+      from: { x: -170 * scale, y: -430 * scale },
+      to: { x: -295 * scale, y: -275 * scale },
+    },
+    KC_alphabeta: {
+      anchor: { x: -500 * scale, y: 80 * scale },
+      width: 220 * scale,
+      from: { x: -500 * scale, y: 60 * scale },
+      to: { x: -405 * scale, y: -107 * scale },
+    },
+    KC_alphaprime_betaprime: {
+      anchor: { x: -590 * scale, y: -450 * scale },
+      width: 420 * scale,
+      from: { x: -590 * scale, y: -430 * scale },
+      to: { x: -480 * scale, y: -288 * scale },
+    },
+    MBON: {
+      anchor: { x: 60 * scale, y: -70 * scale },
+      width: 100 * scale,
+      from: { x: 40 * scale, y: -60 * scale },
+      to: { x: -20 * scale, y: 35 * scale },
+    },
+  };
+
+  // Add labels for anatomical groups
+  for (const group of mapping.groups) {
+    const style = groupStyleMap.get(group.id);
+    if (!style.anatomical) continue;
+    const def = brainCalloutDefs[group.name];
+    if (def) {
+      labels.push({
+        id: group.id,
+        name: group.name,
+        x: def.anchor.x,
+        y: def.anchor.y,
+        width: def.width,
+        color: style.color,
+      });
+      calloutLines.push({
+        from: def.from,
+        to: def.to,
+        color: style.color,
+      });
+    }
+  }
+
+  // 7. Build regions geometry
+  const regions = buildBrainRegions(scale, calyxSectorAngles, calloutLines);
+  for (let i = 0; i < regions.length; i += 7) {
+    include(regions[i], regions[i + 1]);
+  }
+
+  // 8. Mixed mapping: unmatched groups placed below the brain
+  const unmatchedGroups = mapping.groups.filter(g => !groupStyleMap.get(g.id).anatomical);
+  if (unmatchedGroups.length > 0) {
+    const brainBottom = Math.max(bounds.maxY, 290 * scale);
+    const startY = brainBottom + 80;
+    let gridLeft = -200;
+    unmatchedGroups.forEach((group) => {
+      const members = (grouped.get(group.id) ?? []).slice().sort((a, b) => a.id - b.id);
+      const columns = Math.max(1, Math.ceil(Math.sqrt(members.length / 2)));
+      const rows = Math.ceil(members.length / columns);
+      const width = Math.max(140, columns * SPACING + 40);
+      const height = Math.max(0, rows - 1) * SPACING;
+      const center = gridLeft + width / 2;
+      const color = groupStyleMap.get(group.id).color;
+      labels.push({
+        id: group.id,
+        name: group.name,
+        x: center,
+        y: startY,
+        width,
+        color,
+      });
+      members.forEach((node, i) => {
+        const x = center + (i % columns - (columns - 1) / 2) * SPACING;
+        const y = startY + 36 + Math.floor(i / columns) * SPACING;
+        positions.set(node.id, { x, y, color, area: 'Grid', group: group.id });
+      });
+      gridLeft += width + 60;
+    });
+  }
+
+  // 9. Include label extents in bounds
+  for (const label of labels) {
+    const halfWidth = Math.max(40, label.width / 2);
+    include(label.x - halfWidth, label.y - 20 / scale - 10);
+    include(label.x + halfWidth, label.y + 10);
+  }
+
+  // 10. Preallocate and write nodes geometry
+  const nodes = new Float32Array(mapping.nodes.length * CIRCLE_SEGMENTS * 3 * 7);
+  let nodeOffset = 0;
+  for (const group of mapping.groups) {
+    const members = (grouped.get(group.id) ?? []).slice().sort((a, b) => a.id - b.id);
+    for (const node of members) {
+      const pos = positions.get(node.id);
+      if (!pos) continue;
+      const { x, y, color } = pos;
+      include(x - RADIUS, y - RADIUS);
+      include(x + RADIUS, y + RADIUS);
+      for (let j = 0; j < CIRCLE_SEGMENTS; j++) {
+        const a = (j * 2 * Math.PI) / CIRCLE_SEGMENTS;
+        const b = ((j + 1) * 2 * Math.PI) / CIRCLE_SEGMENTS;
+        const p1 = [x, y];
+        const p2 = [x + Math.cos(a) * RADIUS, y + Math.sin(a) * RADIUS];
+        const p3 = [x + Math.cos(b) * RADIUS, y + Math.sin(b) * RADIUS];
+        for (const [vx, vy] of [p1, p2, p3]) {
+          nodes[nodeOffset++] = vx;
+          nodes[nodeOffset++] = vy;
+          nodes[nodeOffset++] = color[0];
+          nodes[nodeOffset++] = color[1];
+          nodes[nodeOffset++] = color[2];
+          nodes[nodeOffset++] = 1;
+          nodes[nodeOffset++] = -1;
+        }
+      }
+    }
+  }
+
+  // 11. Precalculate edge buffer size and preallocate
+  let totalEdgeFloats = 0;
+  const edgePaths = [];
+  for (const [source, destination] of mapping.edges) {
+    const a = positions.get(source);
+    const b = positions.get(destination);
+    if (!a || !b) {
+      edgePaths.push(null);
+      continue;
+    }
+    const tractWaypoint = getTractWaypoint({ positions, areas }, source, destination);
+    const path = computeEdgePath(a, b, tractWaypoint, RADIUS);
+    edgePaths.push(path);
+    // each segment = 2 triangles = 6 vertices = 42 floats
+    // arrow = 1 triangle = 3 vertices = 21 floats
+    totalEdgeFloats += path.segments.length * 42 + 21;
+  }
+
+  const edges = new Float32Array(totalEdgeFloats);
+  let edgeOffset = 0;
+
+  function triangle(target, a, b, c, color, alpha, edgeIndex) {
+    for (const [x, y] of [a, b, c]) {
+      target[edgeOffset++] = x;
+      target[edgeOffset++] = y;
+      target[edgeOffset++] = color[0];
+      target[edgeOffset++] = color[1];
+      target[edgeOffset++] = color[2];
+      target[edgeOffset++] = alpha;
+      target[edgeOffset++] = edgeIndex;
+      include(x, y);
+    }
+  }
+
+  function segment(a, b, color, edgeIndex, alpha = 0.05) {
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (length === 0) return;
+    const nx = -(b[1] - a[1]) / length * 0.35;
+    const ny = (b[0] - a[0]) / length * 0.35;
+    const p = [a[0] + nx, a[1] + ny];
+    const q = [a[0] - nx, a[1] - ny];
+    const r = [b[0] + nx, b[1] + ny];
+    const s = [b[0] - nx, b[1] - ny];
+    triangle(edges, p, q, r, color, alpha, edgeIndex);
+    triangle(edges, r, q, s, color, alpha, edgeIndex);
+  }
+
+  function arrow(tip, direction, color, edgeIndex, alpha = 0.25) {
+    const length = Math.hypot(...direction);
+    if (length === 0) return;
+    const ux = direction[0] / length;
+    const uy = direction[1] / length;
+    triangle(edges, tip,
+      [tip[0] - ux * 5 - uy * 2.3, tip[1] - uy * 5 + ux * 2.3],
+      [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, alpha, edgeIndex);
+  }
+
+  for (let edgeIndex = 0; edgeIndex < mapping.edges.length; edgeIndex++) {
+    const path = edgePaths[edgeIndex];
+    if (!path) continue;
+    const [source] = mapping.edges[edgeIndex];
+    const a = positions.get(source);
+    for (const seg of path.segments) {
+      segment(seg.a, seg.b, a.color, edgeIndex, 0.05);
+    }
+    arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex, 0.25);
+  }
+
+  return {
+    nodes,
+    edges,
+    regions,
+    labels,
+    bounds,
+    nodeCount: mapping.nodes.length,
+    edgeCount: mapping.edges.length,
+    edgePairs: mapping.edges,
+    positions,
+    areas,
   };
 }
 
 export function buildSelectionGeometry(graph, selectedId) {
-  if (!graph?.positions?.has(selectedId)) return new Float32Array(0);
+  if (!graph?.positions?.has?.(selectedId)) return new Float32Array(0);
   const node = graph.positions.get(selectedId);
   const vertices = [];
 
@@ -144,7 +586,7 @@ export function buildSelectionGeometry(graph, selectedId) {
     triangle(target, [a[0] - ux, a[1] - uy], [b[0] + ux, b[1] + uy], [b[0] - ux, b[1] - uy], color, alpha);
   }
 
-  function arrow(target, tip, direction, color, alpha, scale = 1.3) {
+  function arrow(target, tip, direction, color, alpha, scale = 1.4) {
     const length = Math.hypot(...direction);
     if (length === 0) return;
     const ux = direction[0] / length;
@@ -157,8 +599,8 @@ export function buildSelectionGeometry(graph, selectedId) {
 
   function ring(target, center, innerR, outerR, color, alpha, segments = 24) {
     for (let j = 0; j < segments; j++) {
-      const a = j * 2 * Math.PI / segments;
-      const b = (j + 1) * 2 * Math.PI / segments;
+      const a = (j * 2 * Math.PI) / segments;
+      const b = ((j + 1) * 2 * Math.PI) / segments;
       const cosA = Math.cos(a), sinA = Math.sin(a);
       const cosB = Math.cos(b), sinB = Math.sin(b);
       const p1 = [center.x + cosA * innerR, center.y + sinA * innerR];
@@ -176,9 +618,10 @@ export function buildSelectionGeometry(graph, selectedId) {
   // 2. Incident edges and neighbor nodes
   const edgePairs = graph.edgePairs ?? [];
   const neighbors = new Set();
-  const outgoingColor = [1, 0.85, 0.35];
-  const incomingColor = [0.35, 0.85, 1];
+  const outgoingColor = [1, 0.48, 0.35]; // coral
+  const incomingColor = [0.91, 0.47, 0.98]; // fuchsia
   const selfColor = [1, 0.95, 0.5];
+
   for (const [source, destination] of edgePairs) {
     const isOut = (source === selectedId);
     const isIn = (destination === selectedId);
@@ -191,33 +634,14 @@ export function buildSelectionGeometry(graph, selectedId) {
     if (isOut && destination !== selectedId) neighbors.add(destination);
     if (isIn && source !== selectedId) neighbors.add(source);
 
-    if (source === destination) {
-      let previous = [a.x - 2, a.y - 2];
-      for (let i = 1; i <= 16; i++) {
-        const t = i / 16;
-        const u = 1 - t;
-        const point = [
-          u ** 3 * (a.x - 2) + 3 * u * u * t * (a.x - 20)
-            + 3 * u * t * t * (a.x + 20) + t ** 3 * (a.x + 2),
-          u ** 3 * (a.y - 2) + 3 * u * u * t * (a.y - 24)
-            + 3 * u * t * t * (a.y - 24) + t ** 3 * (a.y - 2),
-        ];
-        segment(vertices, previous, point, selfColor, 0.95, 1.4);
-        if (i === 16) arrow(vertices, point, [point[0] - previous[0], point[1] - previous[1]], selfColor, 0.95, 1.4);
-        previous = point;
-      }
-    } else {
-      const color = isOut ? outgoingColor : incomingColor;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const length = Math.hypot(dx, dy);
-      if (length > 0) {
-        const start = [a.x + dx / length * RADIUS, a.y + dy / length * RADIUS];
-        const end = [b.x - dx / length * RADIUS, b.y - dy / length * RADIUS];
-        segment(vertices, start, end, color, 0.9, 1.4);
-        arrow(vertices, end, [dx, dy], color, 0.9, 1.4);
-      }
+    const tractWaypoint = getTractWaypoint(graph, source, destination);
+    const path = computeEdgePath(a, b, tractWaypoint, RADIUS);
+
+    const color = source === destination ? selfColor : (isOut ? outgoingColor : incomingColor);
+    for (const seg of path.segments) {
+      segment(vertices, seg.a, seg.b, color, 0.9, 1.4);
     }
+    arrow(vertices, path.arrow.tip, path.arrow.direction, color, 0.9, 1.4);
   }
 
   // 3. Highlight neighbor nodes

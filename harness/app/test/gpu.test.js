@@ -54,6 +54,7 @@ function platform(t, gpu = {}) {
   class Canvas extends EventTarget {
     clientWidth = 800;
     clientHeight = 600;
+    dataset = {};
     getContext() { return context; }
     getBoundingClientRect() { return { left: 10, top: 20 }; }
     focus() { calls.focused = true; }
@@ -272,6 +273,26 @@ test("replacement and reset remove the previous geometry and labels", async t =>
   assert.match(mock.statuses.at(-1), /Waiting for a mapping/);
   dispose();
   assert.ok(mock.calls.buffers.every(buffer => buffer.destroys === 1));
+});
+
+test("the canvas layout marker follows the drawn template through replacement and reset", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status, mock.labels);
+  await mock.flush();
+  assert.equal(mock.canvas.dataset.layout, undefined);
+  mock.emit("mapping", { detail: {
+    groups: [{ id: 0, name: "Glomerulus" }, { id: 1, name: "KC_gamma" }],
+    nodes: [{ id: 0, group: 0 }, { id: 1, group: 1 }], edges: [[0, 1]],
+  } });
+  await mock.flush();
+  assert.equal(mock.canvas.dataset.layout, "brain");
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  assert.equal(mock.canvas.dataset.layout, "grid");
+  mock.emit("reset");
+  await mock.flush();
+  assert.equal(mock.canvas.dataset.layout, undefined);
+  dispose();
 });
 
 test("pointer, wheel and keyboard navigation update uniforms without geometry uploads", async t => {

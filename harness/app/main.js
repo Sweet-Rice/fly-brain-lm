@@ -4,6 +4,7 @@ import { RecordingSource } from "./playback.js";
 import { initializeGPU } from "./gpu.js";
 import { mountPrompt } from "./prompt-view.js";
 import { mountInspector } from "./inspector.js";
+import { groupStyle } from "./brain-atlas.js";
 
 const receiver = new ProtocolReceiver();
 const element = (id) => document.getElementById(id);
@@ -18,9 +19,20 @@ function renderMapping() {
   if (edgesEl) edgesEl.textContent = mapping?.edges.length ?? 0;
   const counts = new Map(mapping?.groups.map((group) => [group.id, 0]));
   for (const node of mapping?.nodes ?? []) counts.set(node.group, counts.get(node.group) + 1);
-  const rows = (mapping?.groups ?? []).map((group) => {
+  const rows = (mapping?.groups ?? []).map((group, index) => {
+    const style = groupStyle(group, index);
     const row = document.createElement("tr");
-    for (const text of [group.name, group.id, counts.get(group.id)]) {
+
+    const swatchCell = document.createElement("td");
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.setAttribute("aria-hidden", "true");
+    const [r, g, b] = style.color;
+    swatch.style.background = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+    swatchCell.append(swatch);
+    row.append(swatchCell);
+
+    for (const text of [group.name, group.id, counts.get(group.id), style.placement]) {
       const cell = document.createElement("td");
       cell.textContent = text;
       row.append(cell);
@@ -29,7 +41,7 @@ function renderMapping() {
   });
   if (!rows.length) {
     const row = document.createElement("tr"), cell = document.createElement("td");
-    cell.colSpan = 3;
+    cell.colSpan = 5;
     cell.textContent = mapping ? "This mapping has no groups." : "No mapping received.";
     row.append(cell);
     rows.push(row);
