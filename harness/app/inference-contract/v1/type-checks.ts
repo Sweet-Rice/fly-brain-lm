@@ -1,8 +1,10 @@
 import type {
   CompletionEvent, FinishChunk, HealthResponse, InferenceFixture,
   NonStreamingCompletionRequest, StreamingCompletionRequest,
+  GenerationClientSnapshot, GenerationResult, GenerationState,
 } from './types.js';
 import { fixture } from './fixture.js';
+import { GenerationController, SSELineParser } from '../../generation.js';
 
 // Check that an independent TypeScript consumer can import the declarations and the checked fixture.
 const session: InferenceFixture = fixture;
@@ -31,3 +33,39 @@ void missingPrompt;
 void stringLimit;
 void wrongTransport;
 void fabricatedLoadingState;
+
+// Check the real no-build JS implementation, not a separately maintained controller declaration.
+async function consumeClient(client: GenerationController) {
+  const snapshot: GenerationClientSnapshot = client.getState();
+  const state: GenerationState = snapshot.state;
+  const ready: boolean = (await client.checkHealth()).ready;
+  const result: GenerationResult = await client.submit(fixture.request, {
+    onGenerate: async start => {
+      const numericLimit: number = start.maxTokens;
+      const localRunId: string = start.runId;
+      void numericLimit;
+      void localRunId;
+    },
+  });
+  if (result.success) {
+    const output: string = result.text;
+    void output;
+  }
+  client.subscribe(current => {
+    const serverId: string | null = current.modelCompletionId;
+    void serverId;
+  });
+  // @ts-expect-error Completion inputs do not accept chat message arrays as prompts.
+  client.submit({ ...fixture.request, prompt: ['not text'] });
+  // @ts-expect-error Unexported checkpoint identities must not be invented by consumers.
+  snapshot.health.checkpoint_digest;
+  // @ts-expect-error Poll cadence is numeric, not an unchecked input string.
+  client.startHealthPolling({ intervalMs: '1000' });
+  void state;
+  void ready;
+}
+const parser = new SSELineParser({ onEvent: data => { const text: string = data; void text; } });
+parser.feed(new Uint8Array([100, 97, 116, 97]));
+// @ts-expect-error SSE input consists of text or encoded bytes, not scalar numbers.
+parser.feed(7);
+void consumeClient;

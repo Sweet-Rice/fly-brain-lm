@@ -114,6 +114,64 @@ export interface GenerationSnapshot {
   usage: TokenUsage | null;
 }
 
+/** Form values accepted by the plain-JS service client before runtime validation. */
+export interface GenerationInput {
+  prompt?: string;
+  maxTokens?: string | number | null;
+  max_tokens?: string | number | null;
+  temperature?: string | number | null;
+  topK?: string | number | null;
+  top_k?: string | number | null;
+}
+
+export interface ValidationErrors {
+  prompt?: string;
+  maxTokens?: string;
+  temperature?: string;
+  topK?: string;
+}
+
+export interface HealthSnapshot {
+  status: 'unknown' | 'checking' | 'ready' | 'error';
+  modelId: string | null;
+  note: string | null;
+  message: string;
+  ready: boolean;
+}
+
+export interface GenerationClientSnapshot extends GenerationSnapshot {
+  error: string | null;
+  validationErrors: ValidationErrors;
+  health: HealthSnapshot;
+}
+
+export interface GenerationClientOptions {
+  /** Relative same-origin paths by default; configure the proxy upstream with --api-url. */
+  endpoint?: string;
+  healthEndpoint?: string;
+  fetch?: typeof globalThis.fetch;
+  apiKey?: string | null;
+}
+
+export interface GenerationStart {
+  prompt: string;
+  maxTokens: number;
+  temperature: number;
+  topK: number;
+  runId: string;
+}
+
+export interface GenerationSubmitOptions {
+  onGenerate?: ((request: GenerationStart) => void | Promise<void>) | null;
+}
+
+export type GenerationResult =
+  | { success: true; text: string; runId: string; usage: TokenUsage | null; finishReason: FinishReason | null }
+  | { success: false; errors: ValidationErrors }
+  | { success: false; cancelled: true; text?: string }
+  | { success: false; aborted: true }
+  | { success: false; error: string; text?: string };
+
 /** Development/test-only session fixture. Never selected as a production model fallback. */
 export interface InferenceFixture {
   contract_version: InferenceContractVersion;

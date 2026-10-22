@@ -210,6 +210,221 @@ test('GenerationController rejects duplicate submit when already active', async 
   await firstPromise.catch(() => {});
 });
 
+test('cancellation survives a late preparation rejection without becoming failure', async () => {
+  let rejectPreparation;
+  const preparation = new Promise((resolve, reject) => { rejectPreparation = reject; });
+  let requests = 0;
+  const controller = new GenerationController({
+    fetch: async () => { requests++; return new Response(''); },
+  });
+  try {
+    const pending = controller.submit(fixture.request, { onGenerate: () => preparation });
+    controller.cancel();
+    rejectPreparation(new Error('Preparation failed after cancellation'));
+    const result = await pending;
+    assert.equal(result.cancelled, true);
+    assert.equal(controller.getState().state, GENERATION_STATES.CANCELLED);
+    assert.equal(controller.getState().error, null);
+    assert.equal(requests, 0);
+  } finally {
+    controller.dispose();
+  }
+});
+
+test('disposal from a validation subscriber cannot revive the run or start a request', async () => {
+  let requests = 0;
+  const controller = new GenerationController({
+    fetch: async () => {
+      requests++;
+      return new Response(createMockReadableStream(['data: [DONE]\n\n']));
+    },
+  });
+  controller.subscribe(snapshot => {
+    if (snapshot.state === GENERATION_STATES.VALIDATING) controller.dispose();
+  });
+  const result = await controller.submit(fixture.request);
+  assert.equal(result.cancelled, true);
+  assert.equal(controller.getState().state, GENERATION_STATES.CANCELLED);
+  assert.equal(requests, 0);
+});
+
+test('a replacement run started by a validation subscriber owns the final state', async () => {
+  const prompts = [];
+  const controller = new GenerationController({
+    fetch: async (url, options) => {
+      const prompt = JSON.parse(options.body).prompt;
+      prompts.push(prompt);
+      return new Response(createMockReadableStream([
+        `data: ${JSON.stringify({ choices: [{ text: prompt }] })}\n\n`,
+        'data: [DONE]\n\n',
+      ]));
+    },
+  });
+  let replacement;
+  let replaced = false;
+  controller.subscribe(snapshot => {
+    if (!replaced && snapshot.state === GENERATION_STATES.VALIDATING) {
+      replaced = true;
+      controller.cancel();
+      replacement = controller.submit({ ...fixture.request, prompt: 'Replacement' });
+    }
+  });
+  try {
+    const original = await controller.submit({ ...fixture.request, prompt: 'Original' });
+    const current = await replacement;
+    assert.equal(original.aborted, true);
+    assert.equal(current.success, true);
+    assert.deepEqual(prompts, ['Replacement']);
+    assert.equal(controller.getState().text, 'Replacement');
+    assert.equal(controller.getState().state, GENERATION_STATES.COMPLETED);
+  } finally {
+    controller.dispose();
+  }
+});
+
+test('later subscribers retain the current state after an earlier subscriber replaces the attempt', async () => {
+  const controller = new GenerationController();
+  let replaced = false;
+  let replacement;
+  let latest;
+  controller.subscribe(snapshot => {
+    if (!replaced && snapshot.state === GENERATION_STATES.VALIDATING) {
+      replaced = true;
+      controller.cancel();
+      replacement = controller.submit({ ...fixture.request, prompt: '   ' });
+    }
+  });
+  controller.subscribe(snapshot => { latest = snapshot; });
+  try {
+    const original = await controller.submit(fixture.request);
+    const invalid = await replacement;
+    assert.equal(original.aborted, true);
+    assert.equal(latest.state, GENERATION_STATES.FAILED);
+    assert.equal(latest.state, controller.getState().state);
+    assert.deepEqual(latest.validationErrors, invalid.errors);
+  } finally {
+    controller.dispose();
+  }
+});
+
+test('validation failure cannot be overwritten when an older cancelled request settles', async () => {
+  let rejectRequest;
+  const request = new Promise((resolve, reject) => { rejectRequest = reject; });
+  const controller = new GenerationController({ fetch: () => request });
+  try {
+    const pending = controller.submit(fixture.request);
+    controller.cancel();
+    const invalid = await controller.submit({ ...fixture.request, prompt: '   ' });
+    assert.equal(invalid.success, false);
+    const validationErrors = controller.getState().validationErrors;
+    assert.ok(validationErrors.prompt);
+    rejectRequest(new DOMException('Cancelled', 'AbortError'));
+    const oldResult = await pending;
+    assert.equal(controller.getState().state, GENERATION_STATES.FAILED);
+    assert.deepEqual(controller.getState().validationErrors, validationErrors);
+    assert.equal(oldResult.aborted, true);
+  } finally {
+    controller.dispose();
+  }
+});
+
+test('completion returns its own result when a terminal subscriber starts the next run', async () => {
+  const controller = new GenerationController({
+    fetch: async (url, options) => {
+      const prompt = JSON.parse(options.body).prompt;
+      return new Response(createMockReadableStream([
+        `data: ${JSON.stringify({ choices: [{ text: prompt, finish_reason: 'length' }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } })}\n\n`,
+        'data: [DONE]\n\n',
+      ]));
+    },
+  });
+  let completed;
+  let replacement;
+  controller.subscribe(snapshot => {
+    if (!completed && snapshot.state === GENERATION_STATES.COMPLETED) {
+      completed = snapshot;
+      replacement = controller.submit({ ...fixture.request, prompt: 'Replacement' });
+    }
+  });
+  try {
+    const original = await controller.submit({ ...fixture.request, prompt: 'Original' });
+    const current = await replacement;
+    assert.equal(original.success, true);
+    assert.equal(original.text, completed.text);
+    assert.equal(original.runId, completed.runId);
+    assert.equal(original.finishReason, completed.finishReason);
+    assert.deepEqual(original.usage, completed.usage);
+    assert.notEqual(original.runId, current.runId);
+    assert.equal(controller.getState().runId, current.runId);
+  } finally {
+    controller.dispose();
+  }
+});
+
+for (const scenario of [
+  { name: 'preparation', onGenerate: () => { throw new Error('Preparation failed'); } },
+  { name: 'network', failRequest: async () => { throw new TypeError('Failed to fetch'); } },
+  {
+    name: 'HTTP',
+    failRequest: async () => new Response(JSON.stringify({ error: { message: 'Service unavailable' } }), { status: 503 }),
+  },
+  {
+    name: 'stream',
+    failRequest: async () => new Response(createMockReadableStream([
+      'data: {"choices":[{"text":"Partial original"}]}\n\n',
+      'data: not-json\n\n',
+    ])),
+  },
+]) {
+  test(`${scenario.name} failure returns its own error when a terminal subscriber starts the next run`, async () => {
+    const controller = new GenerationController({
+      fetch: async (url, options) => {
+        if (JSON.parse(options.body).prompt === 'Original') return scenario.failRequest();
+        return new Response(createMockReadableStream(['data: [DONE]\n\n']));
+      },
+    });
+    let failed;
+    let replacement;
+    controller.subscribe(snapshot => {
+      if (!failed && snapshot.state === GENERATION_STATES.FAILED) {
+        failed = snapshot;
+        replacement = controller.submit({ ...fixture.request, prompt: 'Replacement' });
+      }
+    });
+    try {
+      const original = await controller.submit(
+        { ...fixture.request, prompt: 'Original' },
+        { onGenerate: scenario.onGenerate || null },
+      );
+      const current = await replacement;
+      assert.equal(original.success, false);
+      assert.equal(typeof original.error, 'string');
+      assert.equal(original.error, failed.error);
+      if (scenario.name === 'stream') assert.equal(original.text, failed.text);
+      assert.equal(current.success, true);
+      assert.equal(controller.getState().runId, current.runId);
+    } finally {
+      controller.dispose();
+    }
+  });
+}
+
+test('a disposed controller cannot start another generation', async () => {
+  let requests = 0;
+  const controller = new GenerationController({
+    fetch: async () => {
+      requests++;
+      return new Response(createMockReadableStream(['data: [DONE]\n\n']));
+    },
+  });
+  controller.dispose();
+  await assert.rejects(controller.submit(fixture.request), Error);
+  assert.throws(() => controller.startHealthPolling(), Error);
+  assert.equal(controller.getState().state, GENERATION_STATES.IDLE);
+  assert.equal(requests, 0);
+});
+
 test('GenerationController preserves partial text on user cancellation', async () => {
   let streamController;
   const stream = new ReadableStream({

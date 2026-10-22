@@ -82,13 +82,23 @@ node --test harness/app/test/*.test.js
 
 The browser-harness CI job also checks the [UI inference contract v1](../harness/app/inference-contract/v1/README.md).
 The shared fixture is exercised through `GenerationController` with fragmented
-Unicode SSE data. TypeScript validates the declarations, fixture, and consumer
-examples; no production bundle is generated:
+Unicode SSE data. TypeScript validates the actual service client, declarations,
+fixture, and consumer examples; no production bundle is generated:
 
 ```console
 npm --prefix harness/app ci --ignore-scripts
 npm --prefix harness/app run typecheck
 ```
+
+Lifecycle regressions cover late preparation failures after cancellation,
+validation subscribers that dispose or replace the run, and rejected submission
+or polling after disposal. They assert terminal state, request suppression, and
+new-run ownership rather than implementation wiring.
+They also preserve completion/error results when terminal subscribers start a
+new run, and prevent old cancellation callbacks from overwriting a newer
+validation failure.
+A nested notification also supersedes the older snapshot for remaining subscribers,
+so a later-mounted view cannot revert to an earlier attempt's state.
 
 | Suite | Scope covered |
 |---|---|
