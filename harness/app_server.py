@@ -22,12 +22,19 @@ This module provides a no-build, stdlib-only HTTP server combining:
    completes its in-progress token step and halts upon its next socket write or flush
    when BrokenPipeError/ConnectionResetError is raised, releasing the engine lock and
    generation resources.
+4. Optional model-server child launcher (--model-ckpt):
+   Distinguishes model loading (HTTP 503 model_loading) from child exit (HTTP 503
+   model_exited) when upstream connections are refused, and enriches GET /health responses
+   with checkpoint identity ({"name": "<basename>", "sha256": "<hex>"}) without exposing
+   full filesystem paths.
 
 Usage:
     python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
+    python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --model-ckpt <ckpt> --model-arg=--viz-port --model-arg=8767
 """
 
 import argparse
+import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
@@ -39,8 +46,10 @@ import posixpath
 import select
 import socket
 import struct
+import subprocess
 import sys
-from typing import Any, Dict, Optional, Tuple, Union
+import threading
+from typing import Any, Dict, List, Optional, Tuple, Union
 import urllib.parse
 
 DEFAULT_HOST = "127.0.0.1"
@@ -48,6 +57,7 @@ DEFAULT_PORT = 8772
 DEFAULT_API_URL = "http://127.0.0.1:8771"
 MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024  # 10 MB limit on incoming JSON payloads
 STREAM_SELECT_TIMEOUT = 0.25  # Bounded polling interval (seconds) for disconnect detection
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 PROXY_GET_ROUTES = frozenset({"/health", "/v1/models"})
 PROXY_POST_ROUTES = frozenset({"/v1/completions", "/v1/chat/completions"})
@@ -142,8 +152,82 @@ def resolve_static_asset(requested_path: str, assets_dir: Path) -> Optional[Path
     return None
 
 
+def _with_checkpoint(body: bytes, checkpoint: Dict[str, str]) -> bytes:
+    """Return a /health JSON object body with launcher checkpoint identity added.
+
+    Non-JSON or non-object bodies are returned unchanged.
+    """
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(data, dict):
+        return body
+    data["checkpoint"] = checkpoint
+    return json.dumps(data).encode("utf-8")
+
+
+class ModelProcess:
+    """Optional model-server child process launched by --model-ckpt.
+
+    Allows the proxy to distinguish between model loading and premature exit,
+    and reports checkpoint identity (name and sha256) via GET /health.
+    """
+
+    def __init__(self, argv: List[str], cwd: Path, ckpt_path: Path) -> None:
+        self.argv = list(argv)
+        self.cwd = Path(cwd)
+        self.ckpt_path = Path(ckpt_path)
+        self._proc: Optional[subprocess.Popen] = None
+        self._checkpoint: Optional[Dict[str, str]] = None
+
+    def start(self) -> None:
+        self._proc = subprocess.Popen(self.argv, cwd=str(self.cwd))
+        thread = threading.Thread(target=self._hash_checkpoint, name="checkpoint-sha256", daemon=True)
+        thread.start()
+
+    def _hash_checkpoint(self) -> None:
+        digest = hashlib.sha256()
+        try:
+            with open(self.ckpt_path, "rb") as f:
+                while chunk := f.read(1024 * 1024):
+                    digest.update(chunk)
+        except OSError:
+            return
+        self._checkpoint = {"name": self.ckpt_path.name, "sha256": digest.hexdigest()}
+
+    def poll(self) -> Optional[int]:
+        if self._proc is None:
+            return None
+        return self._proc.poll()
+
+    @property
+    def pid(self) -> Optional[int]:
+        if self._proc is None:
+            return None
+        return self._proc.pid
+
+    def checkpoint_info(self) -> Optional[Dict[str, str]]:
+        if self._checkpoint is None:
+            return None
+        return dict(self._checkpoint)
+
+    def stop(self, timeout: float = 10.0) -> None:
+        if self._proc is None or self.poll() is not None:
+            return
+        try:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait()
+        except OSError:
+            pass
+
+
 class AppHTTPServer(ThreadingHTTPServer):
-    """Threading HTTP server carrying configured upstream API URL and assets directory."""
+    """Threading HTTP server carrying configured upstream API URL, assets directory, and optional model launcher."""
 
     daemon_threads = True
 
@@ -153,11 +237,13 @@ class AppHTTPServer(ThreadingHTTPServer):
         RequestHandlerClass: type,
         api_url: str,
         assets_dir: Path,
+        model_process: Optional[ModelProcess] = None,
     ):
         super().__init__(server_address, RequestHandlerClass)
         self.api_url = api_url
         self.parsed_api_url = validate_loopback_url(api_url)
         self.assets_dir = assets_dir.resolve()
+        self.model_process = model_process
 
 
 class AppRequestHandler(BaseHTTPRequestHandler):
@@ -333,6 +419,14 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                     conn.close()
                 except Exception:
                     pass
+            model_process = self.server.model_process
+            if model_process is not None:
+                code = model_process.poll()
+                if code is None:
+                    self._send_json_error(503, "The model server is still loading its checkpoint.", "model_loading")
+                else:
+                    self._send_json_error(503, f"The model server process exited with code {code}.", "model_exited")
+                return
             self._send_json_error(503, "Upstream model server unavailable", "service_unavailable")
             return
         except (socket.timeout, TimeoutError):
@@ -358,7 +452,12 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         if "text/event-stream" in resp_content_type:
             self._forward_sse_stream(conn, resp, upstream_sock, resp_status)
         else:
-            self._forward_nonstream_response(conn, resp, resp_status, resp_content_type)
+            checkpoint = None
+            if norm_path == "/health" and self.server.model_process is not None:
+                checkpoint = self.server.model_process.checkpoint_info()
+            self._forward_nonstream_response(
+                conn, resp, resp_status, resp_content_type, checkpoint=checkpoint
+            )
 
     def _forward_nonstream_response(
         self,
@@ -366,6 +465,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         resp: http.client.HTTPResponse,
         status: int,
         content_type: str,
+        checkpoint: Optional[Dict[str, str]] = None,
     ) -> None:
         """Forward non-streaming response body and headers."""
         try:
@@ -390,6 +490,9 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         if status >= 500 and "application/json" not in content_type:
             self._send_json_error(status, "Upstream model server error", "upstream_error")
             return
+
+        if checkpoint is not None and status == 200:
+            body = _with_checkpoint(body, checkpoint)
 
         self.send_response(status)
         if content_type:
@@ -531,6 +634,7 @@ def make_server(
     port: int = DEFAULT_PORT,
     api_url: str = DEFAULT_API_URL,
     assets_dir: Optional[Union[str, Path]] = None,
+    model_process: Optional[ModelProcess] = None,
 ) -> AppHTTPServer:
     """Create and bind an AppHTTPServer instance.
 
@@ -539,6 +643,7 @@ def make_server(
         port: Port to bind (default: 8772). Passing port=0 binds an OS-assigned free port.
         api_url: Upstream model API URL (default: "http://127.0.0.1:8771"). Must be loopback.
         assets_dir: Directory containing harness assets (default: harness/ directory).
+        model_process: Optional ModelProcess child instance managing upstream model server.
 
     Returns:
         AppHTTPServer instance ready for serve_forever().
@@ -556,7 +661,13 @@ def make_server(
     if not resolved_assets.is_dir():
         raise ValueError(f"Assets directory does not exist: {resolved_assets}")
 
-    return AppHTTPServer((host, port), AppRequestHandler, api_url=api_url, assets_dir=resolved_assets)
+    return AppHTTPServer(
+        (host, port),
+        AppRequestHandler,
+        api_url=api_url,
+        assets_dir=resolved_assets,
+        model_process=model_process,
+    )
 
 
 def main() -> None:
@@ -565,15 +676,31 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port to bind (default: {DEFAULT_PORT})")
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help=f"Upstream model API URL (default: {DEFAULT_API_URL})")
     parser.add_argument("--assets-dir", default=None, help="Directory to serve harness assets from (default: harness/)")
+    parser.add_argument("--model-ckpt", default=None, help="Optional checkpoint: launch python -m model.serve.serve on the --api-url port and report its loading/exit state")
+    parser.add_argument("--model-arg", action="append", default=[], metavar="ARG", help="Extra argument for the launched model server (repeatable; use --model-arg=--viz-port --model-arg=8767 for dash-prefixed values)")
 
     args = parser.parse_args()
 
+    model_process = None
     try:
+        if args.model_ckpt:
+            ckpt_path = Path(args.model_ckpt).expanduser().resolve()
+            if not ckpt_path.is_file():
+                raise ValueError(f"checkpoint not found: {ckpt_path.name}")
+            parsed_api = validate_loopback_url(args.api_url)
+            api_port = parsed_api.port or (443 if parsed_api.scheme == "https" else 80)
+            model_process = ModelProcess(
+                [sys.executable, "-m", "model.serve.serve", "--ckpt", str(ckpt_path),
+                 "--host", "127.0.0.1", "--port", str(api_port), *args.model_arg],
+                cwd=REPO_ROOT,
+                ckpt_path=ckpt_path,
+            )
         server = make_server(
             host=args.host,
             port=args.port,
             api_url=args.api_url,
             assets_dir=args.assets_dir,
+            model_process=model_process,
         )
     except ValueError as e:
         sys.stderr.write(f"Error starting app server: {e}\n")
@@ -582,6 +709,9 @@ def main() -> None:
     bound_host, bound_port = server.server_address[:2]
     ready_url = f"http://{bound_host}:{bound_port}/app/"
     print(f"FlyBrain app server listening at {ready_url} (proxying {args.api_url})", flush=True)
+    if model_process is not None:
+        model_process.start()
+        print(f"Launched model server for checkpoint {model_process.ckpt_path.name} (pid {model_process.pid}); /health reports model_loading until it answers", flush=True)
 
     try:
         server.serve_forever()
@@ -590,6 +720,8 @@ def main() -> None:
     finally:
         server.shutdown()
         server.server_close()
+        if model_process is not None:
+            model_process.stop()
 
 
 if __name__ == "__main__":

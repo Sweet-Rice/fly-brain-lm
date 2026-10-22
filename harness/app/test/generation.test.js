@@ -1159,3 +1159,194 @@ test('mountPrompt announces completions and errors, never every streaming token'
   disposeError();
   dispose();
 });
+
+test('checkHealth maps model_loading to loading status and message', async () => {
+  const mockFetch = async () => ({
+    ok: false,
+    status: 503,
+    statusText: 'Service Unavailable',
+    json: async () => ({
+      error: {
+        type: 'model_loading',
+        message: 'The model server is still loading its checkpoint.',
+      },
+    }),
+  });
+
+  const controller = new GenerationController({ fetch: mockFetch });
+  const snapshots = [];
+  controller.subscribe(state => {
+    snapshots.push(state.health);
+  });
+
+  const health = await controller.checkHealth();
+  assert.ok(snapshots.length >= 2);
+  assert.equal(snapshots[0].status, 'checking');
+  assert.equal(snapshots[0].message, 'Checking whether the model service is ready…');
+
+  assert.equal(health.status, 'loading');
+  assert.equal(health.ready, false);
+  assert.equal(health.checkpoint, null);
+  assert.equal(
+    health.message,
+    'Model loading: the model server is loading its checkpoint. This page is ready; Generate unlocks automatically when the model answers.'
+  );
+});
+
+test('checkHealth maps model_exited and service_unavailable to actionable messages', async () => {
+  const controllerExited = new GenerationController({
+    fetch: async () => ({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      json: async () => ({
+        error: {
+          type: 'model_exited',
+          message: 'The model server process exited with code 1.',
+        },
+      }),
+    }),
+  });
+  const healthExited = await controllerExited.checkHealth();
+  assert.equal(healthExited.status, 'error');
+  assert.equal(healthExited.ready, false);
+  assert.equal(
+    healthExited.message,
+    'Model stopped: the model server process exited. Restart python -m harness.app_server to relaunch it.'
+  );
+
+  const controllerUnavailable = new GenerationController({
+    fetch: async () => ({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      json: async () => ({
+        error: {
+          type: 'service_unavailable',
+          message: 'Upstream model server unavailable',
+        },
+      }),
+    }),
+  });
+  const healthUnavailable = await controllerUnavailable.checkHealth();
+  assert.equal(healthUnavailable.status, 'error');
+  assert.equal(healthUnavailable.ready, false);
+  assert.equal(
+    healthUnavailable.message,
+    'Model service unavailable: the model server is not running or is still starting. This page is ready; it checks again every 10 seconds, or use Retry Health.'
+  );
+
+  const controllerJsonError = new GenerationController({
+    fetch: async () => ({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      json: async () => {
+        throw new SyntaxError('bad');
+      },
+    }),
+  });
+  const healthJsonError = await controllerJsonError.checkHealth();
+  assert.equal(healthJsonError.status, 'error');
+  assert.equal(healthJsonError.ready, false);
+  assert.match(healthJsonError.message, /503/);
+});
+
+test('ready health shows checkpoint identity or not reported', async () => {
+  const sha = 'ab'.repeat(32);
+  const controllerWithCkpt = new GenerationController({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'ok',
+        model: 'flybrain-untrained',
+        note: 'TEMPORARY, untrained',
+        checkpoint: {
+          name: 'scratch.pt',
+          sha256: sha,
+        },
+      }),
+    }),
+  });
+  const health1 = await controllerWithCkpt.checkHealth();
+  assert.equal(health1.status, 'ready');
+  assert.equal(health1.ready, true);
+  assert.deepEqual(health1.checkpoint, { name: 'scratch.pt', sha256: sha });
+  assert.equal(
+    health1.message,
+    'Model ready: flybrain-untrained (TEMPORARY, untrained) · checkpoint scratch.pt sha256:abababababab'
+  );
+
+  const controllerNoCkpt = new GenerationController({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'ok',
+        model: 'flybrain-untrained',
+        note: 'TEMPORARY, untrained',
+      }),
+    }),
+  });
+  const health2 = await controllerNoCkpt.checkHealth();
+  assert.equal(health2.status, 'ready');
+  assert.equal(health2.ready, true);
+  assert.equal(health2.checkpoint, null);
+  assert.equal(
+    health2.message,
+    'Model ready: flybrain-untrained (TEMPORARY, untrained) · checkpoint not reported'
+  );
+
+  const controllerMalformedCkpt = new GenerationController({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'ok',
+        model: 'flybrain-untrained',
+        note: 'TEMPORARY, untrained',
+        checkpoint: {
+          name: 'x.pt',
+          sha256: 'nothex',
+        },
+      }),
+    }),
+  });
+  const health3 = await controllerMalformedCkpt.checkHealth();
+  assert.equal(health3.status, 'ready');
+  assert.equal(health3.ready, true);
+  assert.equal(health3.checkpoint, null);
+  assert.equal(
+    health3.message,
+    'Model ready: flybrain-untrained (TEMPORARY, untrained) · checkpoint not reported'
+  );
+});
+
+test('sanitizeSafeMessage redacts Windows and POSIX paths, bearer tokens and api keys', async () => {
+  const controller = new GenerationController({
+    fetch: async () => ({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: async () => ({
+        error: {
+          message:
+            'Load failed for C:\\Users\\tai\\ckpt\\model.pt, /home/tai/ckpt/model.pt and \\\\fileserver\\share\\model.pt; Authorization: Bearer sk-live-abc123; api_key=XYZ987',
+        },
+      }),
+    }),
+  });
+
+  const result = await controller.submit({ prompt: 'p', maxTokens: 4, temperature: 1, topK: 50 });
+  assert.equal(result.success, false);
+  assert.equal(typeof result.error, 'string');
+  assert.ok(!result.error.includes('C:\\Users'));
+  assert.ok(!result.error.includes('/home/tai'));
+  assert.ok(!result.error.includes('fileserver'));
+  assert.ok(!result.error.includes('sk-live-abc123'));
+  assert.ok(!result.error.includes('XYZ987'));
+  assert.ok(result.error.includes('[path]'));
+  assert.ok(result.error.includes('[secret]'));
+  assert.ok(result.error.includes('Load failed for'));
+});

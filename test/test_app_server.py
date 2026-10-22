@@ -10,8 +10,10 @@ Tests meaningful real sockets:
 - Safe structured JSON error responses (no traceback or local filesystem paths leaked).
 - Incremental SSE streaming before upstream completes.
 - Propagation of downstream disconnect to cleanly close upstream connection.
+- Optional model-server launcher: loading vs exited 503 types and /health checkpoint identity.
 """
 
+import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -20,6 +22,7 @@ import select
 import socket
 import struct
 import sys
+import textwrap
 import threading
 import time
 from typing import Dict, List, Optional
@@ -34,6 +37,7 @@ from harness.app_server import (
     DEFAULT_PORT,
     MAX_REQUEST_BODY_SIZE,
     AppHTTPServer,
+    ModelProcess,
     is_loopback_host,
     make_server,
     resolve_static_asset,
@@ -626,3 +630,196 @@ def test_invalid_methods_and_routes():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _free_port() -> int:
+    """Return an available port on 127.0.0.1."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+_GATED_HEALTH_SERVER = textwrap.dedent("""
+    import http.server
+    import json
+    import os
+    import sys
+    import time
+
+    port = int(sys.argv[1])
+    gate = sys.argv[2]
+    deadline = time.monotonic() + 30.0
+
+    while not os.path.exists(gate):
+        if time.monotonic() > deadline:
+            sys.exit(2)
+        time.sleep(0.02)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass
+
+        def do_GET(self):
+            if self.path == "/health":
+                body = json.dumps({"status": "ok", "model": "fake", "note": "n"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_error(404)
+
+    http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+""")
+
+
+def test_launcher_reports_loading_then_ready_with_checkpoint(tmp_path):
+    """Verify proxy reports model_loading 503 until child is ready, then adds checkpoint identity."""
+    ckpt = tmp_path / "fake-model.pt"
+    payload = b"flybrain-checkpoint" * 4096
+    ckpt.write_bytes(payload)
+    gate = tmp_path / "gate"
+    port = _free_port()
+    mp = ModelProcess(
+        [sys.executable, "-c", _GATED_HEALTH_SERVER, str(port), str(gate)],
+        cwd=tmp_path,
+        ckpt_path=ckpt,
+    )
+    server = make_server(port=0, api_url=f"http://127.0.0.1:{port}", model_process=mp)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    app_port = server.server_address[1]
+
+    try:
+        mp.start()
+        # Assert GET /health -> 503, JSON error.type == "model_loading"
+        conn = http.client.HTTPConnection("127.0.0.1", app_port, timeout=10)
+        conn.request("GET", "/health")
+        resp = conn.getresponse()
+        assert resp.status == 503
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data["error"]["type"] == "model_loading"
+        assert data["error"]["message"] == "The model server is still loading its checkpoint."
+        conn.close()
+
+        # Assert POST /v1/completions -> 503 model_loading
+        conn = http.client.HTTPConnection("127.0.0.1", app_port, timeout=10)
+        conn.request(
+            "POST",
+            "/v1/completions",
+            body=json.dumps({"prompt": "hi", "stream": True}),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        assert resp.status == 503
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data["error"]["type"] == "model_loading"
+        conn.close()
+
+        # Release gate and poll GET /health
+        gate.write_text("go")
+        deadline = time.monotonic() + 10.0
+        resp_data = None
+        raw_text = ""
+        while time.monotonic() < deadline:
+            try:
+                poll_conn = http.client.HTTPConnection("127.0.0.1", app_port, timeout=10)
+                poll_conn.request("GET", "/health")
+                poll_resp = poll_conn.getresponse()
+                raw = poll_resp.read().decode("utf-8")
+                poll_conn.close()
+                if poll_resp.status == 200:
+                    parsed = json.loads(raw)
+                    if "checkpoint" in parsed:
+                        raw_text = raw
+                        resp_data = parsed
+                        break
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+        assert resp_data is not None, "Timed out waiting for 200 with checkpoint from /health"
+        assert resp_data["status"] == "ok"
+        assert resp_data["model"] == "fake"
+        assert resp_data["checkpoint"] == {
+            "name": "fake-model.pt",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        assert str(tmp_path) not in raw_text
+    finally:
+        server.shutdown()
+        server.server_close()
+        mp.stop()
+
+
+def test_launcher_reports_model_exited(tmp_path):
+    """Verify proxy returns model_exited 503 with exit code if child terminates prematurely."""
+    ckpt = tmp_path / "model.pt"
+    ckpt.write_bytes(b"dummy")
+    port = _free_port()
+    mp = ModelProcess(
+        [sys.executable, "-c", "import sys; sys.exit(3)"],
+        cwd=tmp_path,
+        ckpt_path=ckpt,
+    )
+    server = make_server(port=0, api_url=f"http://127.0.0.1:{port}", model_process=mp)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    app_port = server.server_address[1]
+
+    try:
+        mp.start()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if mp.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert mp.poll() is not None
+
+        conn = http.client.HTTPConnection("127.0.0.1", app_port, timeout=10)
+        conn.request("GET", "/health")
+        resp = conn.getresponse()
+        assert resp.status == 503
+        data = json.loads(resp.read().decode("utf-8"))
+        conn.close()
+
+        assert data["error"]["type"] == "model_exited"
+        message = data["error"]["message"]
+        assert "code 3" in message
+        assert "/" not in message
+        assert "\\" not in message
+    finally:
+        server.shutdown()
+        server.server_close()
+        mp.stop()
+
+
+def test_model_process_stop_terminates_child(tmp_path):
+    """Verify ModelProcess.stop() cleanly terminates running process and is idempotent."""
+    ckpt = tmp_path / "model.pt"
+    raw_bytes = b"model-bytes-for-stop"
+    ckpt.write_bytes(raw_bytes)
+    mp = ModelProcess(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        cwd=tmp_path,
+        ckpt_path=ckpt,
+    )
+    try:
+        mp.start()
+        assert mp.poll() is None
+        mp.stop(timeout=5.0)
+        assert mp.poll() is not None
+        mp.stop()
+
+        deadline = time.monotonic() + 5.0
+        info = None
+        while time.monotonic() < deadline:
+            info = mp.checkpoint_info()
+            if info is not None:
+                break
+            time.sleep(0.05)
+        assert info == {
+            "name": ckpt.name,
+            "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        }
+    finally:
+        mp.stop()
