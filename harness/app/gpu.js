@@ -46,18 +46,20 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({ colorAttachments: [{
       view: context.getCurrentTexture().createView(),
-      clearValue: { r: 0.04, g: 0.07, b: 0.1, a: 1 },
+      clearValue: { r: 0.039, g: 0.051, b: 0.071, a: 1 },
       loadOp: "clear", storeOp: "store",
     }] });
     renderer.draw(pass, camera, now, motion?.matches ?? false);
     pass.end();
     device.queue.submit([encoder.finish()]);
     if (labels && graph) {
+      // Grid labels stay within their group column; brain callouts sit in free space and stay whole.
+      const clampToColumn = !graph.regions?.length;
       graph.labels.forEach((label, index) => {
         const point = camera.worldToScreen(label.x, label.y);
         const element = labels.children[index];
         element.style.transform = `translate(${point.x}px, ${point.y}px) translate(-50%, -100%)`;
-        element.style.maxWidth = `${Math.max(48, label.width * camera.scale - 8)}px`;
+        element.style.maxWidth = clampToColumn ? `${Math.max(48, label.width * camera.scale - 8)}px` : "";
       });
     }
   }
@@ -96,12 +98,19 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     });
   }
 
+  // Lets the page show schematic-only chrome exactly when the brain template is drawn.
+  function markLayout(drawn) {
+    if (drawn) canvas.dataset.layout = drawn.regions?.length ? "brain" : "grid";
+    else delete canvas.dataset.layout;
+  }
+
   function installMapping() {
     if (disposed || !renderer) return;
     try {
       const next = mapping ? buildGraph(mapping) : null;
       renderer.setGraph(next, activity);
       graph = next;
+      markLayout(graph);
       if (selectedId !== null) {
         try {
           renderer.setSelectedNode(selectedId, graph);
@@ -113,6 +122,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
       if (labels) {
         labels.replaceChildren(...(graph?.labels ?? []).map((label) => {
           const element = document.createElement("span");
+          element.className = "graph-callout";
           element.textContent = label.name;
           element.title = label.name;
           element.style.color = `rgb(${label.color.map(value => Math.round(value * 255)).join(" ")})`;
@@ -125,6 +135,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     } catch (error) {
       renderer.setGraph(null);
       graph = null;
+      markLayout(null);
       labels?.replaceChildren();
       onStatus(`Cannot render this mapping: ${error.message}`);
     }
@@ -268,6 +279,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     context?.unconfigure?.();
     device?.destroy();
     labels?.replaceChildren();
+    markLayout(null);
   };
   if (!globalThis.isSecureContext || !navigator.gpu) {
     onStatus("WebGPU unavailable. Use a supported browser at http://127.0.0.1; stream inspection still works.");

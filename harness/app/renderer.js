@@ -33,6 +33,8 @@ struct Vertex {
   return input.color;
 }`;
 
+const NO_REGIONS = new Float32Array(0);
+
 export function createRenderer(device, format) {
   const module = device.createShaderModule({ code: shader });
   const pipeline = device.createRenderPipeline({
@@ -70,7 +72,7 @@ export function createRenderer(device, format) {
   return {
     setGraph(graph, nextActivity) {
       if (disposed) throw new Error('Renderer has been destroyed');
-      const arrays = graph ? [graph.edges, graph.nodes] : [];
+      const arrays = graph ? [graph.regions ?? NO_REGIONS, graph.edges, graph.nodes] : [];
       for (const data of arrays) {
         if (!(data instanceof Float32Array) || data.length % 21 !== 0) {
           throw new Error('Graph geometry must contain interleaved triangle vertices');
