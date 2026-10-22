@@ -21,6 +21,7 @@ export const PROMPT_DOM_IDS = Object.freeze({
   TEMPERATURE: 'prompt-temperature',
   TOP_K: 'prompt-top-k',
   API_KEY: 'prompt-api-key',
+  API_KEY_HELP: 'prompt-api-key-help',
   GENERATE_BTN: 'prompt-generate-btn',
   CANCEL_BTN: 'prompt-cancel-btn',
   CLEAR_BTN: 'prompt-clear-btn',
@@ -238,7 +239,12 @@ export function mountPrompt(root, options = {}) {
   apiKeyInput.className = PROMPT_CLASSES.INPUT_TEXT;
   apiKeyInput.placeholder = 'Optional bearer token';
   apiKeyInput.autocomplete = 'off';
-  apiKeyGroup.append(apiKeyLabel, apiKeyInput);
+  apiKeyInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.API_KEY_HELP);
+  const apiKeyHelp = doc.createElement('div');
+  apiKeyHelp.id = PROMPT_DOM_IDS.API_KEY_HELP;
+  apiKeyHelp.className = PROMPT_CLASSES.LABEL;
+  apiKeyHelp.textContent = 'Optional bearer token. Kept in memory for this tab only.';
+  apiKeyGroup.append(apiKeyLabel, apiKeyInput, apiKeyHelp);
 
   controlsGrid.append(maxTokensGroup, tempGroup, topKGroup, apiKeyGroup);
 

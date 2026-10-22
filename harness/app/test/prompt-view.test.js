@@ -606,3 +606,19 @@ test('health status exposes data-status for loading', () => {
 
   dispose();
 });
+
+test('API key input has an accessible description', () => {
+  const { root } = createDOM();
+
+  const controller = new GenerationController();
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+  const apiKeyInput = root.getElementById(PROMPT_DOM_IDS.API_KEY);
+  const apiKeyHelp = root.getElementById(PROMPT_DOM_IDS.API_KEY_HELP);
+
+  assert.equal(PROMPT_DOM_IDS.API_KEY_HELP, 'prompt-api-key-help');
+  assert.equal(apiKeyInput.getAttribute('aria-describedby'), 'prompt-api-key-help');
+  assert.ok(apiKeyHelp, 'API key help element must be rendered');
+  assert.equal(apiKeyHelp.textContent, 'Optional bearer token. Kept in memory for this tab only.');
+
+  dispose();
+});

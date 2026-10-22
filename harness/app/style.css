@@ -4,6 +4,7 @@
   --surface: #121720;
   --elevated: #18202c;
   --border: #1e2633;
+  --control-border: #5b6b84;
   --text: #e2e8f0;
   --muted: #8492a6;
   --focus: #38bdf8;
@@ -295,7 +296,7 @@ label {
 input, button, select, textarea {
   font: inherit;
   color: inherit;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   background: var(--elevated);
   padding: 6px 10px;
@@ -327,19 +328,18 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   transition: background 0.1s ease, border-color 0.1s ease;
 }
 
 button[type="submit"] {
   background: #1e293b;
-  border-color: #3b506d;
   color: #f1f5f9;
 }
 
 button:hover:not(:disabled) {
   background: #222c3d;
-  border-color: #2e3b4e;
+  border-color: var(--focus);
 }
 
 button[type="submit"]:hover:not(:disabled) {
@@ -349,6 +349,7 @@ button[type="submit"]:hover:not(:disabled) {
 
 button:active:not(:disabled) {
   background: #151c27;
+  border-color: var(--focus);
 }
 
 button:disabled,
@@ -808,7 +809,7 @@ textarea.prompt-input {
   font-size: 0.875rem;
   padding: 8px 10px;
   background: var(--canvas);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   color: var(--text);
   resize: vertical;
@@ -830,7 +831,7 @@ textarea.prompt-input {
   width: 100%;
   box-sizing: border-box;
   background: var(--canvas);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   color: var(--text);
   padding: 6px 8px;
@@ -852,7 +853,7 @@ textarea.prompt-input {
   font-weight: 600;
   font-size: 0.8125rem;
   padding: 6px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   display: inline-flex;
   align-items: center;
@@ -862,7 +863,6 @@ textarea.prompt-input {
 .prompt-btn-primary {
   background: #1e293b;
   color: #f1f5f9;
-  border-color: #3b506d;
 }
 
 .prompt-meta {
@@ -960,6 +960,12 @@ pre.prompt-output {
   border: 0 !important;
 }
 
+/* Placeholder text: the browser default (#757575) is below 4.5:1 on the dark inputs. */
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 /* Errors */
 .prompt-inline-error,
 .inspector-error {
@@ -1054,7 +1060,7 @@ pre.prompt-output {
   flex: 1 1 70px;
   min-width: 0;
   background: var(--canvas);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   color: var(--text);
   padding: 6px 8px;
@@ -1068,7 +1074,7 @@ pre.prompt-output {
   color: var(--text);
   font-weight: 600;
   padding: 6px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   font-size: 0.8125rem;
 }
@@ -1167,7 +1173,7 @@ pre.prompt-output {
   padding: 4px 8px;
   background: var(--canvas);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   cursor: pointer;
   display: inline-flex;
