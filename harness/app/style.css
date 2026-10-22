@@ -394,6 +394,14 @@ input:disabled {
   gap: 8px;
   user-select: none;
   padding: 4px 0;
+  min-height: 32px;
+}
+
+@media (max-width: 899px), (pointer: coarse) {
+  .source-summary,
+  .stream-summary {
+    min-height: 44px;
+  }
 }
 
 .source-summary::-webkit-details-marker,
