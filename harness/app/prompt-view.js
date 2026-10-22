@@ -1,8 +1,8 @@
 /**
  * Prompt and Generation View Module.
  *
- * Mounts the prompt form, model health indicator, parameter controls,
- * accessible announcements, and streamed text output into a root container.
+ * Mounts the compact tabbed prompt form, model health indicator, parameter controls,
+ * accessible announcements, and bounded paged output into a root container.
  */
 
 import {
@@ -38,6 +38,18 @@ export const PROMPT_DOM_IDS = Object.freeze({
   ERROR_TEMPERATURE: 'prompt-error-temperature',
   ERROR_TOP_K: 'prompt-error-top-k',
   ERROR_GENERAL: 'prompt-error-general',
+  TABLIST: 'prompt-tablist',
+  TAB_COMPOSE: 'prompt-tab-compose',
+  TAB_OUTPUT: 'prompt-tab-output',
+  TAB_SETTINGS: 'prompt-tab-settings',
+  PANEL_COMPOSE: 'prompt-panel-compose',
+  PANEL_OUTPUT: 'prompt-panel-output',
+  PANEL_SETTINGS: 'prompt-panel-settings',
+  PAGER: 'prompt-pager',
+  PAGER_PREV: 'prompt-pager-prev',
+  PAGER_NEXT: 'prompt-pager-next',
+  PAGER_LATEST: 'prompt-pager-latest',
+  PAGER_STATUS: 'prompt-pager-status',
 });
 
 export const PROMPT_CLASSES = Object.freeze({
@@ -65,7 +77,72 @@ export const PROMPT_CLASSES = Object.freeze({
   OUTPUT: 'prompt-output',
   OUTPUT_EMPTY: 'prompt-output-empty',
   ANNOUNCEMENT: 'prompt-announcement',
+  TABS: 'prompt-tabs',
+  TAB: 'prompt-tab',
+  TAB_ACTIVE: 'prompt-tab-active',
+  TABPANEL: 'prompt-tabpanel',
+  PANEL_COMPOSE: 'prompt-panel-compose',
+  PANEL_OUTPUT: 'prompt-panel-output',
+  PANEL_SETTINGS: 'prompt-panel-settings',
+  PAGER: 'prompt-pager',
+  PAGER_BTN: 'prompt-pager-btn',
+  PAGER_PREV: 'prompt-pager-prev',
+  PAGER_NEXT: 'prompt-pager-next',
+  PAGER_LATEST: 'prompt-pager-latest',
+  PAGER_STATUS: 'prompt-pager-status',
 });
+
+export const PAGER_LIMITS = Object.freeze({
+  MAX_LINES: 6,
+  MAX_CODEPOINTS: 240,
+});
+
+/**
+ * Splits text into bounded pages without splitting surrogate pairs.
+ * Concatenating all pages yields the exact original text.
+ *
+ * @param {string} text - Full text to paginate
+ * @param {number} [maxLines=6] - Max logical lines per page
+ * @param {number} [maxCodepoints=240] - Max code points per page
+ * @returns {string[]} Array of page text strings
+ */
+export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoints = PAGER_LIMITS.MAX_CODEPOINTS) {
+  if (!text) {
+    return [''];
+  }
+
+  const codepoints = Array.from(text);
+  const pages = [];
+  let currentPage = [];
+  let currentLines = 1;
+
+  for (let i = 0; i < codepoints.length; i++) {
+    const cp = codepoints[i];
+
+    if (currentPage.length >= maxCodepoints) {
+      pages.push(currentPage.join(''));
+      currentPage = [];
+      currentLines = 1;
+    }
+
+    currentPage.push(cp);
+
+    if (cp === '\n') {
+      currentLines++;
+      if (currentLines > maxLines && i + 1 < codepoints.length) {
+        pages.push(currentPage.join(''));
+        currentPage = [];
+        currentLines = 1;
+      }
+    }
+  }
+
+  if (currentPage.length > 0) {
+    pages.push(currentPage.join(''));
+  }
+
+  return pages.length > 0 ? pages : [''];
+}
 
 /**
  * Mounts the prompt generation UI into root.
@@ -118,6 +195,7 @@ export function mountPrompt(root, options = {}) {
   healthStatus.id = PROMPT_DOM_IDS.HEALTH_STATUS;
   healthStatus.className = PROMPT_CLASSES.HEALTH;
   healthStatus.textContent = 'Checking model status...';
+  healthStatus.title = 'Checking model status...';
   healthStatus.setAttribute('aria-live', 'polite');
 
   const healthRetryBtn = doc.createElement('button');
@@ -128,13 +206,79 @@ export function mountPrompt(root, options = {}) {
 
   header.append(healthStatus, healthRetryBtn);
 
-  // Form
+  // Metadata / Telemetry row (run ID, state, usage - never claims token/fire alignment)
+  const meta = doc.createElement('div');
+  meta.className = PROMPT_CLASSES.META;
+
+  const statusBadge = doc.createElement('span');
+  statusBadge.id = PROMPT_DOM_IDS.STATUS;
+  statusBadge.className = PROMPT_CLASSES.STATUS_BADGE;
+  statusBadge.textContent = 'State: idle';
+
+  const runIdBadge = doc.createElement('span');
+  runIdBadge.id = PROMPT_DOM_IDS.RUN_ID;
+  runIdBadge.className = PROMPT_CLASSES.RUN_ID;
+  runIdBadge.textContent = 'Run ID: -';
+
+  const usageBadge = doc.createElement('span');
+  usageBadge.id = PROMPT_DOM_IDS.USAGE;
+  usageBadge.className = PROMPT_CLASSES.USAGE;
+
+  const finishReasonBadge = doc.createElement('span');
+  finishReasonBadge.id = PROMPT_DOM_IDS.FINISH_REASON;
+  finishReasonBadge.className = PROMPT_CLASSES.FINISH_REASON;
+
+  meta.append(statusBadge, runIdBadge, usageBadge, finishReasonBadge);
+
+  // Form container
   const form = doc.createElement('form');
   form.id = PROMPT_DOM_IDS.FORM;
   form.className = PROMPT_CLASSES.FORM;
   form.noValidate = true;
 
-  // Prompt input
+  // Tabs navigation
+  const tablist = doc.createElement('div');
+  tablist.id = PROMPT_DOM_IDS.TABLIST;
+  tablist.className = PROMPT_CLASSES.TABS;
+  tablist.setAttribute('role', 'tablist');
+  tablist.setAttribute('aria-label', 'Prompt views');
+
+  const tabCompose = doc.createElement('button');
+  tabCompose.id = PROMPT_DOM_IDS.TAB_COMPOSE;
+  tabCompose.type = 'button';
+  tabCompose.setAttribute('role', 'tab');
+  tabCompose.className = `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`;
+  tabCompose.textContent = 'Compose';
+  tabCompose.setAttribute('aria-selected', 'true');
+  tabCompose.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_COMPOSE);
+
+  const tabOutput = doc.createElement('button');
+  tabOutput.id = PROMPT_DOM_IDS.TAB_OUTPUT;
+  tabOutput.type = 'button';
+  tabOutput.setAttribute('role', 'tab');
+  tabOutput.className = PROMPT_CLASSES.TAB;
+  tabOutput.textContent = 'Output';
+  tabOutput.setAttribute('aria-selected', 'false');
+  tabOutput.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_OUTPUT);
+
+  const tabSettings = doc.createElement('button');
+  tabSettings.id = PROMPT_DOM_IDS.TAB_SETTINGS;
+  tabSettings.type = 'button';
+  tabSettings.setAttribute('role', 'tab');
+  tabSettings.className = PROMPT_CLASSES.TAB;
+  tabSettings.textContent = 'Settings';
+  tabSettings.setAttribute('aria-selected', 'false');
+  tabSettings.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_SETTINGS);
+
+  tablist.append(tabCompose, tabOutput, tabSettings);
+
+  // Compose Panel
+  const composePanel = doc.createElement('div');
+  composePanel.id = PROMPT_DOM_IDS.PANEL_COMPOSE;
+  composePanel.className = `${PROMPT_CLASSES.TABPANEL} ${PROMPT_CLASSES.PANEL_COMPOSE}`;
+  composePanel.setAttribute('role', 'tabpanel');
+  composePanel.setAttribute('aria-labelledby', PROMPT_DOM_IDS.TAB_COMPOSE);
+
   const promptGroup = doc.createElement('div');
   promptGroup.className = PROMPT_CLASSES.FIELD_GROUP;
 
@@ -146,7 +290,7 @@ export function mountPrompt(root, options = {}) {
   const promptInput = doc.createElement('textarea');
   promptInput.id = PROMPT_DOM_IDS.INPUT;
   promptInput.className = PROMPT_CLASSES.TEXTAREA;
-  promptInput.rows = 4;
+  promptInput.rows = 3;
   promptInput.value = defaultPrompt;
   promptInput.placeholder = 'Enter prompt here...';
   promptInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_PROMPT);
@@ -157,8 +301,82 @@ export function mountPrompt(root, options = {}) {
   promptError.setAttribute('role', 'alert');
 
   promptGroup.append(promptLabel, promptInput, promptError);
+  composePanel.append(promptGroup);
 
-  // Controls grid
+  // Output Panel (with bounded paged view)
+  const outputPanel = doc.createElement('div');
+  outputPanel.id = PROMPT_DOM_IDS.PANEL_OUTPUT;
+  outputPanel.className = `${PROMPT_CLASSES.TABPANEL} ${PROMPT_CLASSES.PANEL_OUTPUT}`;
+  outputPanel.setAttribute('role', 'tabpanel');
+  outputPanel.setAttribute('aria-labelledby', PROMPT_DOM_IDS.TAB_OUTPUT);
+  outputPanel.hidden = true;
+
+  const outputContainer = doc.createElement('div');
+  outputContainer.className = PROMPT_CLASSES.OUTPUT_CONTAINER;
+
+  const outputLabel = doc.createElement('label');
+  outputLabel.htmlFor = PROMPT_DOM_IDS.OUTPUT;
+  outputLabel.className = PROMPT_CLASSES.LABEL;
+  outputLabel.textContent = 'Generated Output:';
+
+  const outputEmpty = doc.createElement('div');
+  outputEmpty.id = PROMPT_DOM_IDS.OUTPUT_EMPTY;
+  outputEmpty.className = PROMPT_CLASSES.OUTPUT_EMPTY;
+  outputEmpty.textContent = 'No output yet. Enter a prompt and press Generate (or Ctrl+Enter) once the model is ready.';
+
+  const outputPre = doc.createElement('pre');
+  outputPre.id = PROMPT_DOM_IDS.OUTPUT;
+  outputPre.className = PROMPT_CLASSES.OUTPUT;
+  outputPre.tabIndex = 0;
+  outputPre.setAttribute('aria-label', 'Model output');
+
+  const pager = doc.createElement('div');
+  pager.id = PROMPT_DOM_IDS.PAGER;
+  pager.className = PROMPT_CLASSES.PAGER;
+
+  const pagerPrevBtn = doc.createElement('button');
+  pagerPrevBtn.id = PROMPT_DOM_IDS.PAGER_PREV;
+  pagerPrevBtn.type = 'button';
+  pagerPrevBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.PAGER_BTN} ${PROMPT_CLASSES.PAGER_PREV}`;
+  pagerPrevBtn.textContent = 'Previous';
+  pagerPrevBtn.setAttribute('aria-label', 'Previous output page');
+  pagerPrevBtn.disabled = true;
+
+  const pagerStatus = doc.createElement('span');
+  pagerStatus.id = PROMPT_DOM_IDS.PAGER_STATUS;
+  pagerStatus.className = PROMPT_CLASSES.PAGER_STATUS;
+  pagerStatus.setAttribute('role', 'status');
+  pagerStatus.setAttribute('aria-live', 'polite');
+  pagerStatus.textContent = 'Page 1 of 1';
+
+  const pagerNextBtn = doc.createElement('button');
+  pagerNextBtn.id = PROMPT_DOM_IDS.PAGER_NEXT;
+  pagerNextBtn.type = 'button';
+  pagerNextBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.PAGER_BTN} ${PROMPT_CLASSES.PAGER_NEXT}`;
+  pagerNextBtn.textContent = 'Next';
+  pagerNextBtn.setAttribute('aria-label', 'Next output page');
+  pagerNextBtn.disabled = true;
+
+  const pagerLatestBtn = doc.createElement('button');
+  pagerLatestBtn.id = PROMPT_DOM_IDS.PAGER_LATEST;
+  pagerLatestBtn.type = 'button';
+  pagerLatestBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.PAGER_BTN} ${PROMPT_CLASSES.PAGER_LATEST}`;
+  pagerLatestBtn.textContent = 'Latest';
+  pagerLatestBtn.setAttribute('aria-label', 'Latest output page');
+  pagerLatestBtn.disabled = true;
+
+  pager.append(pagerPrevBtn, pagerStatus, pagerNextBtn, pagerLatestBtn);
+  outputContainer.append(outputLabel, outputEmpty, outputPre, pager);
+  outputPanel.append(outputContainer);
+
+  // Settings Panel
+  const settingsPanel = doc.createElement('div');
+  settingsPanel.id = PROMPT_DOM_IDS.PANEL_SETTINGS;
+  settingsPanel.className = `${PROMPT_CLASSES.TABPANEL} ${PROMPT_CLASSES.PANEL_SETTINGS}`;
+  settingsPanel.setAttribute('role', 'tabpanel');
+  settingsPanel.setAttribute('aria-labelledby', PROMPT_DOM_IDS.TAB_SETTINGS);
+  settingsPanel.hidden = true;
+
   const controlsGrid = doc.createElement('div');
   controlsGrid.className = PROMPT_CLASSES.CONTROLS_GRID;
 
@@ -247,6 +465,7 @@ export function mountPrompt(root, options = {}) {
   apiKeyGroup.append(apiKeyLabel, apiKeyInput, apiKeyHelp);
 
   controlsGrid.append(maxTokensGroup, tempGroup, topKGroup, apiKeyGroup);
+  settingsPanel.append(controlsGrid);
 
   // General error banner
   const generalError = doc.createElement('div');
@@ -285,53 +504,7 @@ export function mountPrompt(root, options = {}) {
   copyBtn.disabled = true;
 
   actions.append(generateBtn, cancelBtn, clearBtn, copyBtn);
-  form.append(promptGroup, controlsGrid, generalError, actions);
-
-  // Metadata / Telemetry row (run ID, state, usage - never claims token/fire alignment)
-  const meta = doc.createElement('div');
-  meta.className = PROMPT_CLASSES.META;
-
-  const statusBadge = doc.createElement('span');
-  statusBadge.id = PROMPT_DOM_IDS.STATUS;
-  statusBadge.className = PROMPT_CLASSES.STATUS_BADGE;
-  statusBadge.textContent = 'State: idle';
-
-  const runIdBadge = doc.createElement('span');
-  runIdBadge.id = PROMPT_DOM_IDS.RUN_ID;
-  runIdBadge.className = PROMPT_CLASSES.RUN_ID;
-  runIdBadge.textContent = 'Run ID: -';
-
-  const usageBadge = doc.createElement('span');
-  usageBadge.id = PROMPT_DOM_IDS.USAGE;
-  usageBadge.className = PROMPT_CLASSES.USAGE;
-
-  const finishReasonBadge = doc.createElement('span');
-  finishReasonBadge.id = PROMPT_DOM_IDS.FINISH_REASON;
-  finishReasonBadge.className = PROMPT_CLASSES.FINISH_REASON;
-
-  meta.append(statusBadge, runIdBadge, usageBadge, finishReasonBadge);
-
-  // Output display (preserves Unicode whitespace, rendered as textContent NOT innerHTML)
-  const outputContainer = doc.createElement('div');
-  outputContainer.className = PROMPT_CLASSES.OUTPUT_CONTAINER;
-
-  const outputLabel = doc.createElement('label');
-  outputLabel.htmlFor = PROMPT_DOM_IDS.OUTPUT;
-  outputLabel.className = PROMPT_CLASSES.LABEL;
-  outputLabel.textContent = 'Generated Output:';
-
-  const outputPre = doc.createElement('pre');
-  outputPre.id = PROMPT_DOM_IDS.OUTPUT;
-  outputPre.className = PROMPT_CLASSES.OUTPUT;
-  outputPre.tabIndex = 0;
-  outputPre.setAttribute('aria-label', 'Model output');
-
-  const outputEmpty = doc.createElement('div');
-  outputEmpty.id = PROMPT_DOM_IDS.OUTPUT_EMPTY;
-  outputEmpty.className = PROMPT_CLASSES.OUTPUT_EMPTY;
-  outputEmpty.textContent = 'No output yet. Enter a prompt and press Generate (or Ctrl+Enter) once the model is ready.';
-
-  outputContainer.append(outputLabel, outputEmpty, outputPre);
+  form.append(tablist, composePanel, outputPanel, settingsPanel, generalError, actions);
 
   // Live announcement region for screen readers (announces completions/errors, not every token)
   const announcement = doc.createElement('div');
@@ -340,7 +513,7 @@ export function mountPrompt(root, options = {}) {
   announcement.setAttribute('role', 'status');
   announcement.setAttribute('aria-live', 'polite');
 
-  container.append(header, form, meta, outputContainer, announcement);
+  container.append(header, meta, form, announcement);
 
   if (typeof root.replaceChildren === 'function') {
     root.replaceChildren(container);
@@ -348,6 +521,82 @@ export function mountPrompt(root, options = {}) {
     root.innerHTML = '';
     root.appendChild?.(container);
   }
+
+  // Tab switching state
+  let currentTab = 'compose'; // 'compose' | 'output' | 'settings'
+
+  function switchTab(tab) {
+    if (currentTab === tab) return;
+    currentTab = tab;
+
+    tabCompose.setAttribute('aria-selected', tab === 'compose' ? 'true' : 'false');
+    tabOutput.setAttribute('aria-selected', tab === 'output' ? 'true' : 'false');
+    tabSettings.setAttribute('aria-selected', tab === 'settings' ? 'true' : 'false');
+
+    tabCompose.className = tab === 'compose'
+      ? `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`
+      : PROMPT_CLASSES.TAB;
+    tabOutput.className = tab === 'output'
+      ? `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`
+      : PROMPT_CLASSES.TAB;
+    tabSettings.className = tab === 'settings'
+      ? `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`
+      : PROMPT_CLASSES.TAB;
+
+    composePanel.hidden = tab !== 'compose';
+    outputPanel.hidden = tab !== 'output';
+    settingsPanel.hidden = tab !== 'settings';
+  }
+
+  // Pager state
+  let userNavigatedPage = false;
+  let currentPageIndex = 0;
+  let cachedPages = [''];
+
+  function updatePagerDisplay() {
+    const totalPages = cachedPages.length;
+    if (currentPageIndex >= totalPages) {
+      currentPageIndex = Math.max(0, totalPages - 1);
+    }
+    if (currentPageIndex < 0) {
+      currentPageIndex = 0;
+    }
+
+    outputPre.textContent = cachedPages[currentPageIndex] || '';
+    pagerStatus.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
+    pagerPrevBtn.disabled = currentPageIndex <= 0;
+    pagerNextBtn.disabled = currentPageIndex >= totalPages - 1;
+    pagerLatestBtn.disabled = currentPageIndex >= totalPages - 1;
+  }
+
+  function handlePagerPrev() {
+    if (currentPageIndex > 0) {
+      currentPageIndex--;
+      userNavigatedPage = true;
+      updatePagerDisplay();
+    }
+  }
+
+  function handlePagerNext() {
+    const totalPages = cachedPages.length;
+    if (currentPageIndex < totalPages - 1) {
+      currentPageIndex++;
+      if (currentPageIndex >= totalPages - 1) {
+        userNavigatedPage = false;
+      } else {
+        userNavigatedPage = true;
+      }
+      updatePagerDisplay();
+    }
+  }
+
+  function handlePagerLatest() {
+    const totalPages = cachedPages.length;
+    currentPageIndex = Math.max(0, totalPages - 1);
+    userNavigatedPage = false;
+    updatePagerDisplay();
+  }
+
   // State synchronization and accessibility updates
   let previousState = controller.getState().state;
   let actionError = null;
@@ -366,13 +615,43 @@ export function mountPrompt(root, options = {}) {
     statusBadge.textContent = `State: ${state.state}`;
     statusBadge.setAttribute('data-state', state.state);
 
-    // Output rendered with textContent to preserve Unicode whitespace and avoid HTML injection
-    outputPre.textContent = state.text || '';
+    // Generation start automatically switches to Output tab and resets pager navigation
+    const active = isGenerationActive(state.state);
+    if (active && !isGenerationActive(previousState)) {
+      switchTab('output');
+      userNavigatedPage = false;
+      currentPageIndex = 0;
+    }
+
+    // Output pagination
+    const fullText = state.text || '';
+    cachedPages = paginateText(fullText);
+    const totalPages = cachedPages.length;
+
+    if (!userNavigatedPage) {
+      currentPageIndex = Math.max(0, totalPages - 1);
+    } else {
+      if (currentPageIndex >= totalPages) {
+        currentPageIndex = Math.max(0, totalPages - 1);
+      }
+      if (currentPageIndex < 0) {
+        currentPageIndex = 0;
+      }
+    }
+
+    outputPre.textContent = cachedPages[currentPageIndex] || '';
     outputPre.setAttribute('data-state', state.state);
-    outputEmpty.hidden = Boolean(state.text);
+    outputEmpty.hidden = Boolean(fullText);
+
+    pagerStatus.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
+    pagerPrevBtn.disabled = currentPageIndex <= 0;
+    pagerNextBtn.disabled = currentPageIndex >= totalPages - 1;
+    pagerLatestBtn.disabled = currentPageIndex >= totalPages - 1;
 
     // Health status display: checkpoint identity only when the launcher reports it
-    healthStatus.textContent = state.health.message || 'Model status unknown';
+    const healthMsg = state.health.message || 'Model status unknown';
+    healthStatus.textContent = healthMsg;
+    healthStatus.title = healthMsg;
     healthStatus.setAttribute('data-status', state.health.status);
 
     // Inline validation error presentation
@@ -390,9 +669,13 @@ export function mountPrompt(root, options = {}) {
 
     const hasValidationErrors = Object.keys(state.validationErrors || {}).length > 0;
 
-    // Hide generic validation banner whenever ANY validationErrors exist
-    // and avoid stale run metadata displayed as new failed validation
+    // Switch view to display relevant validation errors
     if (hasValidationErrors) {
+      if (state.validationErrors?.maxTokens || state.validationErrors?.temperature || state.validationErrors?.topK) {
+        switchTab('settings');
+      } else if (state.validationErrors?.prompt) {
+        switchTab('compose');
+      }
       generalError.textContent = '';
       runIdBadge.textContent = 'Run ID: -';
       usageBadge.textContent = '';
@@ -421,7 +704,6 @@ export function mountPrompt(root, options = {}) {
       }
     }
 
-    const active = isGenerationActive(state.state);
     const ready = Boolean(state.health?.ready);
     generateBtn.disabled = active || !ready;
     cancelBtn.disabled = !active;
@@ -476,7 +758,7 @@ export function mountPrompt(root, options = {}) {
     }
   }
 
-  // Copy output only (Unicode whitespace preserved)
+  // Copy full output (Unicode whitespace preserved across all pages)
   async function handleCopy() {
     const text = controller.getState().text || '';
     if (!text) return;
@@ -526,13 +808,29 @@ export function mountPrompt(root, options = {}) {
     if (controller.isActive()) return;
     actionError = null;
     promptInput.value = '';
+    userNavigatedPage = false;
+    currentPageIndex = 0;
+    cachedPages = [''];
     controller.clear();
+    switchTab('compose');
     announcement.textContent = 'Prompt and output cleared.';
   }
 
   function handleRetryHealth() {
     controller.setApiKey(apiKeyInput.value);
     controller.checkHealth();
+  }
+
+  function handleTabComposeClick() {
+    switchTab('compose');
+  }
+
+  function handleTabOutputClick() {
+    switchTab('output');
+  }
+
+  function handleTabSettingsClick() {
+    switchTab('settings');
   }
 
   form.addEventListener('submit', handleSubmit);
@@ -543,6 +841,14 @@ export function mountPrompt(root, options = {}) {
   clearBtn.addEventListener('click', handleClear);
   copyBtn.addEventListener('click', handleCopy);
   healthRetryBtn.addEventListener('click', handleRetryHealth);
+
+  tabCompose.addEventListener('click', handleTabComposeClick);
+  tabOutput.addEventListener('click', handleTabOutputClick);
+  tabSettings.addEventListener('click', handleTabSettingsClick);
+
+  pagerPrevBtn.addEventListener('click', handlePagerPrev);
+  pagerNextBtn.addEventListener('click', handlePagerNext);
+  pagerLatestBtn.addEventListener('click', handlePagerLatest);
 
   // Initialize health check
   if (options.pollHealth !== false) {
@@ -562,6 +868,14 @@ export function mountPrompt(root, options = {}) {
     clearBtn.removeEventListener('click', handleClear);
     copyBtn.removeEventListener('click', handleCopy);
     healthRetryBtn.removeEventListener('click', handleRetryHealth);
+
+    tabCompose.removeEventListener('click', handleTabComposeClick);
+    tabOutput.removeEventListener('click', handleTabOutputClick);
+    tabSettings.removeEventListener('click', handleTabSettingsClick);
+
+    pagerPrevBtn.removeEventListener('click', handlePagerPrev);
+    pagerNextBtn.removeEventListener('click', handlePagerNext);
+    pagerLatestBtn.removeEventListener('click', handlePagerLatest);
 
     clearTimeout(copyTimer);
     copyTimer = null;
