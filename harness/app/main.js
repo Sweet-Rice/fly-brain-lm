@@ -4,6 +4,7 @@ import { RecordingSource } from "./playback.js";
 import { initializeGPU } from "./gpu.js";
 import { mountPrompt } from "./prompt-view.js";
 import { mountInspector } from "./inspector.js";
+import { mountTimeline } from "./timeline-view.js";
 import { groupStyle } from "./brain-atlas.js";
 
 const receiver = new ProtocolReceiver();
@@ -87,6 +88,8 @@ function onEvent(event) {
     const lastFire = element("last-fire");
     if (lastFire) lastFire.textContent = `Step ${event.t}: ${event.pairs.length} accepted pairs${preview ? ` · ${preview}` : ""}${event.pairs.length > 8 ? ", …" : ""}.`;
     canvas?.dispatchEvent(new CustomEvent("fire", { detail: { t: event.t, pairs: event.pairs } }));
+  } else if (event.action === "accept_telemetry") {
+    canvas?.dispatchEvent(new CustomEvent("telemetry", { detail: event.message }));
   } else if (event.action === "drop_message") {
     dropped++;
   } else if (event.action === "close") {
@@ -177,6 +180,9 @@ if (inspectorWorkspace) {
   disposeInspector = mountInspector(inspectorWorkspace, canvas);
 }
 
+const timelineWorkspace = element("timeline-workspace");
+const disposeTimeline = timelineWorkspace ? mountTimeline(timelineWorkspace, canvas) : null;
+
 const endpointEl = element("endpoint");
 if (endpointEl) {
   endpointEl.value = new URLSearchParams(location.search).get("ws") || "ws://127.0.0.1:8765/stream";
@@ -219,6 +225,7 @@ window.addEventListener("pagehide", () => {
   gpuReady.then((dispose) => dispose?.());
   disposePrompt?.();
   disposeInspector?.();
+  disposeTimeline?.();
 });
 if (new URLSearchParams(location.search).has("ws") && element("endpoint")?.value) {
   live.connect(element("endpoint").value);

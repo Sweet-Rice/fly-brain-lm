@@ -1292,3 +1292,71 @@ pre.prompt-output[data-state="failed"] {
 .prompt-health-status[data-status="error"] {
   border-color: var(--error);
 }
+
+/* Token text and opaque run/request IDs must fit the narrow mobile column. */
+.timeline-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.timeline-panel p {
+  margin: 0;
+}
+
+#timeline-request {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+.timeline-identity,
+.timeline-token-meta {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.timeline-summary,
+.timeline-notice {
+  font-size: 0.8125rem;
+}
+
+.timeline-notice {
+  border-left: 2px solid var(--focus);
+  padding-left: 8px;
+}
+
+.timeline-tokens {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+}
+
+.timeline-tokens:empty {
+  display: none;
+}
+
+.timeline-token {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--canvas);
+}
+
+.timeline-token:last-child {
+  border-bottom: 0;
+}
+
+.timeline-token-text {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.8125rem/1.5 var(--font-mono);
+}
