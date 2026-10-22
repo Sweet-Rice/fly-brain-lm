@@ -622,3 +622,180 @@ test('API key input has an accessible description', () => {
 
   dispose();
 });
+
+const NATIVE_FOCUSABLE_TAGS = new Set(['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT']);
+
+// Browser defaults: only native controls are tabbable unless tabIndex is set explicitly.
+class FocusOrderDocument extends MockDocument {
+  createElement(tag) {
+    const el = super.createElement(tag);
+    el.tabIndex = NATIVE_FOCUSABLE_TAGS.has(el.tagName) ? 0 : -1;
+    return el;
+  }
+}
+
+function tabOrder(root) {
+  const ids = [];
+  const walk = el => {
+    if (el !== root && el.tabIndex >= 0 && el.type !== 'hidden') ids.push(el.id);
+    for (const child of el.children) walk(child);
+  };
+  walk(root);
+  return ids;
+}
+
+async function waitFor(predicate, message) {
+  for (let i = 0; i < 500; i++) {
+    if (predicate()) return;
+    await new Promise(r => setImmediate(r));
+  }
+  assert.fail(message);
+}
+
+function ctrlEnterKeydown() {
+  const event = new Event('keydown', { bubbles: true, cancelable: true });
+  event.key = 'Enter';
+  event.ctrlKey = true;
+  event.metaKey = false;
+  event.repeat = false;
+  event.isComposing = false;
+  return event;
+}
+
+test('keyboard-only workflow: Ctrl+Enter generates, Cancel, Clear and Copy are reachable and work', async t => {
+  let clipboardText = null;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async text => {
+          clipboardText = text;
+        },
+      },
+    },
+  });
+
+  t.after(() => {
+    if (originalNavigator) {
+      Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    } else {
+      delete globalThis.navigator;
+    }
+  });
+
+  let firstStream;
+  const finalText = 'Second run:\tkeyboard  output ✓\n';
+  const streams = [
+    new ReadableStream({
+      start(c) {
+        firstStream = c;
+      },
+    }),
+    createMockReadableStream([
+      `data: ${JSON.stringify({ choices: [{ text: 'Second run:\tkeyboard ' }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ text: ' output ✓\n', finish_reason: 'stop' }] })}\n\n`,
+      'data: [DONE]\n\n',
+    ]),
+  ];
+  const requests = [];
+
+  const controller = new GenerationController({
+    fetch: async (url, options = {}) => {
+      if (url === '/health') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            status: 'ok',
+            model: 'flybrain-untrained',
+            note: 'TEMPORARY, untrained',
+          }),
+        };
+      }
+      requests.push(JSON.parse(options.body));
+      return { ok: true, status: 200, body: streams.shift() };
+    },
+  });
+
+  const doc = new FocusOrderDocument();
+  const root = doc.createElement('div');
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+
+  try {
+    const promptInput = root.getElementById(PROMPT_DOM_IDS.INPUT);
+    const generateBtn = root.getElementById(PROMPT_DOM_IDS.GENERATE_BTN);
+    const cancelBtn = root.getElementById(PROMPT_DOM_IDS.CANCEL_BTN);
+    const clearBtn = root.getElementById(PROMPT_DOM_IDS.CLEAR_BTN);
+    const copyBtn = root.getElementById(PROMPT_DOM_IDS.COPY_BTN);
+    const output = root.getElementById(PROMPT_DOM_IDS.OUTPUT);
+    const status = root.getElementById(PROMPT_DOM_IDS.STATUS);
+    const announcement = root.getElementById(PROMPT_DOM_IDS.ANNOUNCEMENT);
+
+    assert.deepEqual(tabOrder(root), [
+      'prompt-health-retry-btn',
+      'prompt-input',
+      'prompt-max-tokens',
+      'prompt-temperature',
+      'prompt-top-k',
+      'prompt-api-key',
+      'prompt-generate-btn',
+      'prompt-cancel-btn',
+      'prompt-clear-btn',
+      'prompt-copy-btn',
+      'prompt-output',
+    ]);
+
+    await waitFor(() => controller.getState().health.ready, 'health never became ready');
+    assert.equal(generateBtn.disabled, false);
+    assert.equal(cancelBtn.disabled, true);
+    assert.equal(copyBtn.disabled, true);
+
+    promptInput.value = 'Keyboard prompt';
+    const submitKey = ctrlEnterKeydown();
+    promptInput.dispatchEvent(submitKey);
+    assert.equal(submitKey.defaultPrevented, true);
+    await waitFor(() => controller.getState().state === GENERATION_STATES.STREAMING, 'first run never started streaming');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].prompt, 'Keyboard prompt');
+    assert.equal(generateBtn.disabled, true);
+    assert.equal(cancelBtn.disabled, false);
+    assert.equal(clearBtn.disabled, true);
+
+    firstStream.enqueue(new TextEncoder().encode('data: {"choices":[{"text":"Partial keyboard "}]}\n\n'));
+    await waitFor(() => output.textContent === 'Partial keyboard ', 'partial output never rendered');
+
+    cancelBtn.click();
+    await waitFor(() => controller.getState().state === GENERATION_STATES.CANCELLED, 'cancel did not settle');
+    for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+    assert.equal(controller.getState().state, GENERATION_STATES.CANCELLED);
+    assert.equal(output.textContent, 'Partial keyboard ');
+    assert.equal(status.textContent, 'State: cancelled');
+    assert.equal(announcement.textContent, 'Generation cancelled. Preserved 17 characters.');
+    assert.equal(cancelBtn.disabled, true);
+    assert.equal(clearBtn.disabled, false);
+    assert.equal(generateBtn.disabled, false);
+    assert.equal(copyBtn.disabled, false);
+
+    clearBtn.click();
+    assert.equal(promptInput.value, '');
+    assert.equal(output.textContent, '');
+    assert.equal(controller.getState().state, GENERATION_STATES.IDLE);
+    assert.equal(copyBtn.disabled, true);
+
+    promptInput.value = 'Second keyboard prompt';
+    promptInput.dispatchEvent(ctrlEnterKeydown());
+    await waitFor(() => controller.getState().state === GENERATION_STATES.COMPLETED, 'second run never completed');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].prompt, 'Second keyboard prompt');
+    assert.equal(output.textContent, finalText);
+    assert.equal(copyBtn.disabled, false);
+
+    copyBtn.click();
+    await waitFor(() => clipboardText !== null, 'clipboard was never written');
+    assert.equal(clipboardText, finalText);
+    assert.equal(copyBtn.textContent, 'Copied!');
+  } finally {
+    dispose();
+  }
+});
