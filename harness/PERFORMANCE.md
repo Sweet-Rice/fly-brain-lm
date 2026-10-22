@@ -185,8 +185,8 @@ python -m harness.telemetry.benchmark --requests 5
 - Windows 11 (10.0.26200), Intel64 Family 6 Model 186 Stepping 2, Python 3.14.7,
   CPU PyTorch 2.14.1, one PyTorch thread. Other heavy processes shared the
   machine during the run, so differences of a few percent are within run-to-run
-  noise: an earlier 3-request run of the same command measured +2.7%, +0.2% and
-  −4.5% for the three telemetry modes.
+  noise: the run just before this one measured −2.0%, −8.5% and −6.6% for the
+  three telemetry modes (recording p95 47.90 ms in that run).
 - Full default untrained vibe2 model (12 blocks, width 384) built from
   `data/connectome/wiring.npz` with seed 0; a fresh model, stream and engine per
   mode. Greedy decoding of `Once upon a time, a fly`: one untimed warm-up request,
@@ -197,10 +197,10 @@ python -m harness.telemetry.benchmark --requests 5
 
 | Mode | tokens/s | p50 ms/token | p95 ms/token | tokens/s vs disabled |
 |---|---:|---:|---:|---:|
-| disabled | 27.37 | 32.42 | 36.41 | baseline |
-| adapter idle | 26.82 | 33.05 | 37.21 | -2.0% |
-| recording | 26.43 | 33.64 | 37.39 | -3.4% |
-| live client | 25.45 | 35.03 | 38.21 | -7.0% |
+| disabled | 27.17 | 32.52 | 37.19 | baseline |
+| adapter idle | 26.63 | 33.40 | 37.73 | -2.0% |
+| recording | 26.29 | 34.11 | 38.04 | -3.2% |
+| live client | 25.90 | 34.25 | 38.61 | -4.7% |
 
 - **disabled**: `stream_model` attached as in `model.serve.serve`, no adapter,
   nobody listening.

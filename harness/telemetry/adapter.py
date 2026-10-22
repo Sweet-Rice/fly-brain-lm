@@ -58,8 +58,11 @@ class TelemetryAdapter:
 
     run_id      this server run; request_id  the request stepping the model now (None between requests;
     a request still waiting for engine.lock does not change it); current_t  stream.t of the model step running
-    now, captured before any forward hook of the KC code module, kept until the next step or the end of the
-    request's model stream (-1 outside one); epoch  the stream's mapping epoch."""
+    now, captured before any forward hook of the KC code module and valid for the whole model step (every
+    block), -1 outside a step; epoch  the stream's mapping epoch.
+
+    To scope current_t to a step, model.step (which model.stream calls per token) is wrapped by an instance
+    attribute that remove() deletes again; a model without `step` gets current_t reset whenever it yields."""
 
     def __init__(self, model, stream, *, block=0, impl, model_id, ckpt_digest, run_id=None):
         self.model, self.stream, self.block = model, stream, block
@@ -67,13 +70,24 @@ class TelemetryAdapter:
         self.run_id = run_id if run_id is not None else f"run-{uuid.uuid4().hex[:12]}"
         self.request_id = None
         self.current_t = -1
-        self._seq = 0
         self._active = None                      # the _Request whose model stream is running
         self._local = threading.local()          # .request: the _Request driving the engine on this thread
         self._engine = self._engine_model = self._engine_run = None
         module = model.kc_code_module(block)
         self._hooks = (module.register_forward_pre_hook(self._before_step),
                        module.register_forward_hook(self._after_step))
+        self._wrapped_step = callable(getattr(model, "step", None))
+        if self._wrapped_step:
+            self._own_step = vars(model).get("step")     # None: the class's step
+            model_step = model.step
+
+            def step(*args, **kwargs):
+                try:
+                    return model_step(*args, **kwargs)
+                finally:
+                    self.current_t = -1                  # the whole model step is over
+
+            model.step = step
         stream.status_factory = self.make_stream_status
 
     @property
@@ -82,18 +96,21 @@ class TelemetryAdapter:
 
     # ---- wire -----------------------------------------------------------------------------------
     def emit(self, event):
-        """Give `event` the next seq and send it. seq assignment and queueing are one step under the stream's
-        event_lock, so every consumer sees strictly increasing seq across all extension message types."""
-        with self.stream.event_lock:
-            event["seq"] = self._seq
-            self._seq += 1
-            return self.stream.send_event(event)
+        """Give `event` the next seq and send it. Under the stream's event_lock: reserve the seq that a gap
+        marker in front of this message would use, give the message the next seq, and queue it, so every
+        consumer sees strictly increasing seq across all extension message types."""
+        stream = self.stream
+        with stream.event_lock:
+            gap_seq = stream.next_seq()
+            event["seq"] = stream.next_seq()
+            return stream.send_event(event, gap_seq=gap_seq)
 
-    def make_stream_status(self, event, dropped):
-        with self.stream.event_lock:
-            seq, self._seq = self._seq, self._seq + 1
-            return {"type": "stream_status", "run_id": self.run_id, "epoch": self.stream.epoch, "seq": seq,
-                    "event": event, "dropped_steps": dropped, "server_time_ms": time.time_ns() // 1_000_000}
+    def make_stream_status(self, event, dropped, seq=None):
+        """stream.status_factory: a stream_status message; seq is the value the stream reserved for a gap
+        marker, else the next one."""
+        return {"type": "stream_status", "run_id": self.run_id, "epoch": self.stream.epoch,
+                "seq": self.stream.next_seq() if seq is None else seq, "event": event,
+                "dropped_steps": dropped, "server_time_ms": time.time_ns() // 1_000_000}
 
     def _lifecycle(self, req, phase, finish_reason="none"):
         now = time.time_ns()
@@ -131,8 +148,15 @@ class TelemetryAdapter:
         for hook in self._hooks:
             hook.remove()
         self._hooks = ()
-        if self.stream.status_factory == self.make_stream_status:
-            self.stream.status_factory = None
+        if self._wrapped_step:
+            if self._own_step is None:
+                del self.model.step                  # the class's step again
+            else:
+                self.model.step = self._own_step
+            self._wrapped_step = False
+        with self.stream.event_lock:
+            if self.stream.status_factory == self.make_stream_status:
+                self.stream.status_factory = None
         if self._engine is not None:
             if self._engine_run is None:
                 del self._engine.run
@@ -209,6 +233,7 @@ class TelemetryAdapter:
 
     def _yielded(self, req, token):
         emit_ns = time.time_ns()
+        self.current_t = -1                          # sampling is over; no step runs while the token is out
         index = req.completion_tokens
         req.completion_tokens += 1
         raw = ENC.decode_single_token_bytes(token)

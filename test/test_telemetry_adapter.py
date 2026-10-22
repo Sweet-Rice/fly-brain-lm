@@ -37,25 +37,41 @@ def read_recording(path):
     return [json.loads(line) for line in lines]
 
 
-class StalledSend:
-    """One frame held inside the server's send to one client."""
+class SendGate:
+    """Holds the server's send of chosen fire steps to one client until each is released (the real I/O boundary)."""
 
-    def __init__(self):
-        self.target = None
-        self.reached = threading.Event()
-        self.release = threading.Event()
-        self.passed = threading.Event()
-        self.armed = True
+    def __init__(self, *steps):
+        self.target = None                   # the held client's address as the server sees it
+        self.reached = {t: threading.Event() for t in steps}
+        self.release = {t: threading.Event() for t in steps}
+
+    def install(self, monkeypatch):
+        original, gate = ServerConnection.send, self
+
+        async def send(conn, message, *args, **kwargs):
+            if gate.target is not None and conn.remote_address == gate.target and isinstance(message, str):
+                msg = json.loads(message)
+                t = msg.get("t") if msg.get("type") == "fire" else None
+                if t in gate.release:
+                    gate.reached[t].set()
+                    if not await asyncio.to_thread(gate.release[t].wait, TIMEOUT):
+                        raise TimeoutError(f"the test did not release the held send of t={t}")
+            return await original(conn, message, *args, **kwargs)
+
+        monkeypatch.setattr(ServerConnection, "send", send)
+
+    def release_all(self):
+        for event in self.release.values():
+            event.set()
 
 
-class StalledRecording:
-    """A file-like sink whose first write waits until released."""
+class HeldRecording:
+    """A file-like recording sink whose writes of chosen fire steps wait until each is released."""
 
-    def __init__(self):
-        self.started = threading.Event()
-        self.release = threading.Event()
+    def __init__(self, *steps):
         self.lines = []
-        self.closed = False
+        self.reached = {t: threading.Event() for t in steps}
+        self.release = {t: threading.Event() for t in steps}
 
     def open(self, *args, **kwargs):
         return self
@@ -64,17 +80,28 @@ class StalledRecording:
         return self
 
     def __exit__(self, *args):
-        self.closed = True
+        pass
 
     def write(self, text):
-        self.started.set()
-        if not self.release.wait(TIMEOUT):
-            raise TimeoutError("the test did not release the recording write")
-        self.lines.append(text)
+        lines = text.splitlines()            # a marker and the message it precedes arrive in one write
+        for line in lines:
+            msg = json.loads(line)
+            t = msg.get("t") if msg.get("type") == "fire" else None
+            if t in self.release:
+                self.reached[t].set()
+                if not self.release[t].wait(TIMEOUT):
+                    raise TimeoutError(f"the test did not release the held write of t={t}")
+        self.lines.extend(lines)
         return len(text)
 
-    def flush(self):
-        pass
+    def release_all(self):
+        for event in self.release.values():
+            event.set()
+
+
+def probe(adapter, n):
+    """One extension message through the adapter's shared sequence."""
+    return adapter.emit({"type": "probe", "run_id": adapter.run_id, "n": n})
 
 
 class MessageCollector(threading.Thread):
@@ -334,7 +361,7 @@ def test_lifecycle_phases_correlate_and_seq_monotonic(wiring, tmp_path):
     )
     seen = []
     orig_send_event = stream_c.send_event
-    stream_c.send_event = lambda e: (seen.append(dict(e)), orig_send_event(e))[1]
+    stream_c.send_event = lambda e, **kw: (seen.append(dict(e)), orig_send_event(e, **kw))[1]
 
     try:
         gen_a = engine_c.run("Async prompt A", 4, 0.0, None, [], {})
@@ -434,6 +461,45 @@ def test_generator_close_emits_cancelled_with_completion_count(wiring, tmp_path)
     engine.lock.release()
 
     assert adapter.request_id is None
+
+
+def test_current_t_is_set_only_inside_a_model_step(wiring, tmp_path):
+    """current_t is the pre-hook's stream.t for every write inside a model step (also in later blocks) and -1
+    while the engine holds a yielded completion token; remove() restores model.step."""
+    model, stream, graph, engine, adapter, rec_path = build_pipeline(wiring, tmp_path=tmp_path, ctx=128)
+    writes, later_block, suspended = [], [], []
+    mem = model.blocks[0].mem                # the memory written right after block 0's KC code
+    mem_step = mem.step
+
+    def observed_step(*args, **kwargs):
+        writes.append((adapter.current_t, stream.t, adapter.request_id))
+        return mem_step(*args, **kwargs)
+
+    mem.step = observed_step
+    hook = model.kc_code_module(1).register_forward_hook(lambda m, i, o: later_block.append(adapter.current_t))
+    try:
+        assert "step" in vars(model) and adapter.current_t == -1
+        for _ in engine.run("Memory writes happen inside steps", 4, 0.0, None, [], {}):
+            suspended.append((adapter.current_t, adapter.request_id))   # model stream suspended at a yield
+    finally:
+        hook.remove()
+        del mem.step
+        adapter.remove()
+        stream.close(drain_timeout=TIMEOUT)
+
+    events = read_recording(rec_path)
+    request_id = next(e["request_id"] for e in events if e.get("type") == "request_lifecycle")
+    stepped = [e["t"] for e in events if e.get("type") == "token_step" and e["t"] >= 0]
+    assert len(stepped) == len(ENC.encode_ordinary("Memory writes happen inside steps")) + 3
+    assert [current for current, _, _ in writes] == stepped        # one write per step, at that step's t
+    assert all(current == t - 1 for current, t, _ in writes)        # the fire hook already advanced stream.t
+    assert all(rid == request_id for _, _, rid in writes)
+    assert later_block == stepped
+    assert suspended and all(current == -1 for current, _ in suspended)
+    assert all(rid in (request_id, None) for _, rid in suspended)
+    assert any(rid == request_id for _, rid in suspended)         # suspended mid-request, between steps
+    assert adapter.current_t == -1 and adapter.request_id is None
+    assert "step" not in vars(model)                                # the class's step again
 
 
 def test_reconnect_keeps_server_t_and_sends_mapping_then_resync(wiring):
@@ -541,108 +607,231 @@ def test_replacement_mapping_increments_epoch_restarts_t_and_emits_epoch_reset(w
 
 
 def test_slow_client_gap_marker_reports_dropped_count(wiring, monkeypatch):
-    # Client part
+    """A consumer that lost messages gets gap(dropped=N) first, right before the next message it accepts, and only
+    when its queue has room for both; until then every further message is lost and counted."""
     torch.manual_seed(0)
     model = FlyLM(Config.from_wiring(wiring, d_model=64, n_layer=2), wiring).eval()
     stream, graph = stream_model(model, wiring, 0, port=0, queue_size=3)
-    adapter = TelemetryAdapter(
-        model, stream, block=0, impl="vibe", model_id="flybrain-test",
-        ckpt_digest="sha256:" + "0" * 12
-    )
+    adapter = TelemetryAdapter(model, stream, block=0, impl="vibe", model_id="flybrain-test",
+                               ckpt_digest="sha256:" + "0" * 12)
+    pairs = graph.fire_pairs([0])
+    gate = SendGate(0, 1, 2)                 # the writer holds the sends of t=0, then t=1, then t=2
+    gate.install(monkeypatch)
 
-    gate = StalledSend()
-    orig_send = ServerConnection.send
-
-    async def stalled_send(conn, message, *args, **kwargs):
-        if gate.armed and gate.target is not None and conn.remote_address == gate.target:
-            gate.armed = False
-            gate.reached.set()
-            if not await asyncio.to_thread(gate.release.wait, TIMEOUT):
-                raise TimeoutError("the test did not release the stalled send")
-            gate.passed.set()
-        return await orig_send(conn, message, *args, **kwargs)
-
-    monkeypatch.setattr(ServerConnection, "send", stalled_send)
+    def handed_off():                        # the loop moved everything handed off into the client queue
+        wait_until(lambda: not stream._pending and not stream._drain_scheduled, "the handoff to drain")
 
     try:
-        with connect(stream.url, max_size=None) as slow:
-            m1 = json.loads(slow.recv(timeout=TIMEOUT))
-            assert m1["type"] == "mapping"
-            m2 = json.loads(slow.recv(timeout=TIMEOUT))
-            assert m2["type"] == "stream_status" and m2["event"] == "resync"
+        with connect(stream.url, max_size=None) as ws:
+            mapping, resync = (json.loads(ws.recv(timeout=TIMEOUT)) for _ in range(2))
+            assert mapping == graph.mapping and resync["event"] == "resync"
+            gate.target = ws.local_address
 
-            gate.target = slow.local_address
-            pairs = graph.fire_pairs([0])
-
-            stream.fire(pairs)
-            assert gate.reached.wait(TIMEOUT), "the stalled send never started"
-            wait_until(lambda: not stream._pending, "pending fire to drain to in-flight")
-
-            while stream.dropped < 4:
+            stream.fire(pairs)               # t=0: taken by the writer, whose send is held
+            assert gate.reached[0].wait(TIMEOUT)
+            handed_off()
+            for _ in range(3):               # t=1..3 fill the queue (3)
                 stream.fire(pairs)
-                wait_until(lambda: not stream._pending, "pending fire to drain to client queue")
-            K = stream.dropped
-            assert K == 4 and not gate.passed.is_set()
+                handed_off()
+            for n in range(2):               # overflow: t=4, an extension message, t=5, another one
+                stream.fire(pairs)
+                handed_off()
+                assert probe(adapter, n)
+                handed_off()
+            assert stream.dropped == 4
 
-            gate.release.set()
-            assert gate.passed.wait(TIMEOUT), "stalled send did not finish passing"
+            gate.release[0].set()            # t=0 sent; the writer takes t=1 and is held: room for one
+            assert gate.reached[1].wait(TIMEOUT)
+            stream.fire(pairs)               # t=6 fits alone but not with its gap marker: lost and counted
+            handed_off()
+            assert stream.dropped == 5
 
-            queued_msgs = [json.loads(slow.recv(timeout=TIMEOUT)) for _ in range(1 + 3)]
-            assert [m["t"] for m in queued_msgs if m["type"] == "fire"] == [0, 1, 2, 3]
-
-            stream.fire(pairs)
-            wait_until(lambda: not stream._pending, "recovery fire to drain")
-
-            recovery_fire = json.loads(slow.recv(timeout=TIMEOUT))
-            assert recovery_fire["type"] == "fire" and recovery_fire["t"] == 4 + K   # t 4..4+K-1 were dropped
-            gap_marker = json.loads(slow.recv(timeout=TIMEOUT))
-            assert gap_marker["type"] == "stream_status"
-            assert gap_marker["event"] == "gap"
-            assert gap_marker["dropped_steps"] == K == stream.dropped
-            assert gap_marker["seq"] > m2["seq"] and gap_marker["run_id"] == adapter.run_id
+            gate.release[1].set()            # t=1 sent; the writer takes t=2 and is held: room for two
+            assert gate.reached[2].wait(TIMEOUT)
+            stream.fire(pairs)               # t=7 resumes behind gap(5)
+            handed_off()
+            gate.release_all()
+            received = [json.loads(ws.recv(timeout=TIMEOUT)) for _ in range(6)]   # the queue is empty again
+            assert probe(adapter, 2)
+            received.append(json.loads(ws.recv(timeout=TIMEOUT)))
     finally:
-        gate.release.set()
+        gate.release_all()
         adapter.remove()
         stream.close(drain_timeout=TIMEOUT)
 
-    # Recording part
-    sink = StalledRecording()
-    monkeypatch.setattr("harness.viz_stream.open", sink.open, raising=False)
+    assert [m["type"] for m in received] == ["fire"] * 4 + ["stream_status", "fire", "probe"]
+    assert [m["t"] for m in received[:4]] == [0, 1, 2, 3]          # accepted before the loss
+    gap, resumed, after = received[4:]
+    assert gap["event"] == "gap" and gap["dropped_steps"] == 5 == stream.dropped
+    assert gap["run_id"] == adapter.run_id and gap["epoch"] == 0
+    assert resumed == {"type": "fire", "t": 7, "pairs": pairs}
+    assert resync["seq"] < gap["seq"] < after["seq"] and after["n"] == 2
 
+    # The recording reports its own losses the same way.
+    sink = HeldRecording(0, 1, 2)
+    monkeypatch.setattr("harness.viz_stream.open", sink.open, raising=False)
     torch.manual_seed(0)
     rec_model = FlyLM(Config.from_wiring(wiring, d_model=64, n_layer=2), wiring).eval()
-    rec_stream = VizStream(port=0, record="rec_stalled.ndjson", record_queue_size=2)
+    rec_stream = VizStream(port=0, record="held.ndjson", record_queue_size=2)
     rec_stream.set_mapping(graph.mapping)
     rec_stream.start()
-    rec_adapter = TelemetryAdapter(
-        rec_model, rec_stream, block=0, impl="vibe", model_id="flybrain-test",
-        ckpt_digest="sha256:" + "0" * 12
-    )
-
+    rec_adapter = TelemetryAdapter(rec_model, rec_stream, block=0, impl="vibe", model_id="flybrain-test",
+                                   ckpt_digest="sha256:" + "0" * 12)
     try:
-        assert sink.started.wait(TIMEOUT), "recording writer never started"
-        for _ in range(6):
+        rec_stream.fire(pairs)               # t=0: taken by the writer, whose write is held
+        assert sink.reached[0].wait(TIMEOUT)
+        rec_stream.fire(pairs)               # t=1, 2 fill the queue (2)
+        rec_stream.fire(pairs)
+        for n in range(2):                   # overflow: t=3, an extension message, t=4, another one
             rec_stream.fire(pairs)
-        dropped_before = rec_stream.recording_dropped
-        assert dropped_before == 6 - 2            # two fires queued behind the held mapping write
+            assert probe(rec_adapter, n)
+        assert rec_stream.recording_dropped == 4
 
-        sink.release.set()
-        wait_until(lambda: rec_stream._recorder._queue.empty(), "recording queue to drain")
-        recovery_t = rec_stream.t
-        rec_stream.fire(pairs)                    # first message the recorder accepts again
+        sink.release[0].set()                # t=0 written; the writer takes t=1 and is held: room for one
+        assert sink.reached[1].wait(TIMEOUT)
+        rec_stream.fire(pairs)               # t=5: lost and counted
+        assert rec_stream.recording_dropped == 5
+
+        sink.release[1].set()                # t=1 written; the writer takes t=2 and is held: room for two
+        assert sink.reached[2].wait(TIMEOUT)
+        rec_stream.fire(pairs)               # t=6 resumes behind gap(5)
+        sink.release_all()
+        wait_until(lambda: len(sink.lines) == 6, "the recording to write t=6")   # the queue is empty again
+        assert probe(rec_adapter, 2)
     finally:
-        sink.release.set()
+        sink.release_all()
         rec_adapter.remove()
         rec_stream.close(drain_timeout=TIMEOUT)
 
-    rec_messages = [json.loads(line) for line in sink.lines if line.strip()]
-    gaps = [m for m in rec_messages if m.get("type") == "stream_status" and m.get("event") == "gap"]
-    assert len(gaps) == 1
-    gap = gaps[0]
-    assert gap["dropped_steps"] == dropped_before == rec_stream.recording_dropped
-    gap_idx = rec_messages.index(gap)
-    assert rec_messages[gap_idx - 1] == {"type": "fire", "t": recovery_t, "pairs": pairs}
-    assert [m["t"] for m in rec_messages if m["type"] == "fire"] == [0, 1, recovery_t]
+    recorded = [json.loads(line) for line in sink.lines]
+    assert [m["type"] for m in recorded] == ["mapping", "fire", "fire", "fire", "stream_status", "fire", "probe"]
+    assert [m["t"] for m in recorded if m["type"] == "fire"] == [0, 1, 2, 6]
+    gap, after = recorded[4], recorded[6]
+    assert gap["event"] == "gap" and gap["dropped_steps"] == 5 == rec_stream.recording_dropped
+    assert gap["seq"] < after["seq"] and after["n"] == 2
+
+
+def test_queue_size_one_keeps_control_markers_and_reports_discarded_messages(wiring, monkeypatch):
+    """With one-message queues, resync and epoch_reset still follow their mapping, a gap still precedes the
+    resumed message, and messages a replacement mapping discards are reported by the next gap."""
+    torch.manual_seed(0)
+    model = FlyLM(Config.from_wiring(wiring, d_model=64, n_layer=2), wiring).eval()
+    stream, graph = stream_model(model, wiring, 0, port=0, queue_size=1)
+    adapter = TelemetryAdapter(model, stream, block=0, impl="vibe", model_id="flybrain-test",
+                               ckpt_digest="sha256:" + "0" * 12)
+    pairs = graph.fire_pairs([0])
+    gate = SendGate(0, 4)
+    gate.install(monkeypatch)
+
+    def handed_off():
+        wait_until(lambda: not stream._pending and not stream._drain_scheduled, "the handoff to drain")
+
+    def fire(n=1):
+        for _ in range(n):
+            stream.fire(pairs)
+            handed_off()
+
+    try:
+        with connect(stream.url, max_size=None) as ws:
+            received = [json.loads(ws.recv(timeout=TIMEOUT)) for _ in range(2)]
+            gate.target = ws.local_address
+            fire()                               # t=0: held in the writer
+            assert gate.reached[0].wait(TIMEOUT)
+            fire()                               # t=1 fills the queue
+            fire()                               # t=2 lost
+            assert probe(adapter, 0)             # lost
+            handed_off()
+            assert stream.dropped == 2
+            gate.release[0].set()
+            received += [json.loads(ws.recv(timeout=TIMEOUT)) for _ in range(2)]   # t=0, t=1: queue empty
+            fire()                               # t=3 behind gap(2)
+            received += [json.loads(ws.recv(timeout=TIMEOUT)) for _ in range(2)]
+            fire()                               # t=4: held in the writer
+            assert gate.reached[4].wait(TIMEOUT)
+            fire()                               # t=5 queued, then discarded by the replacement mapping
+            replacement = graph.refresh()
+            stream.set_mapping(replacement)
+            handed_off()
+            gate.release_all()
+            received += [json.loads(ws.recv(timeout=TIMEOUT)) for _ in range(3)]   # t=4, mapping, epoch_reset
+            fire()                               # new epoch t=0 behind gap(1)
+            received += [json.loads(ws.recv(timeout=TIMEOUT)) for _ in range(2)]
+    finally:
+        gate.release_all()
+        adapter.remove()
+        stream.close(drain_timeout=TIMEOUT)
+
+    kinds = [m.get("event", m["type"]) if m["type"] == "stream_status" else m["type"] for m in received]
+    assert kinds == ["mapping", "resync", "fire", "fire", "gap", "fire", "fire", "mapping", "epoch_reset", "gap", "fire"]
+    assert received[0] == graph.mapping and received[7] == replacement
+    assert [m["t"] for m in received if m["type"] == "fire"] == [0, 1, 3, 4, 0]
+    assert received[4]["dropped_steps"] == 2 and received[9]["dropped_steps"] == 1
+    assert received[8]["epoch"] == received[9]["epoch"] == 1
+    seqs = [m["seq"] for m in received if m["type"] == "stream_status"]
+    assert seqs == sorted(set(seqs))
+
+    # The same through a one-message recording queue.
+    sink = HeldRecording(0, 4)
+    monkeypatch.setattr("harness.viz_stream.open", sink.open, raising=False)
+    rec_stream = VizStream(port=0, record="held.ndjson", record_queue_size=1, queue_size=1)
+    rec_stream.set_mapping(graph.mapping)
+    rec_stream.start()
+    rec_adapter = TelemetryAdapter(model, rec_stream, block=0, impl="vibe", model_id="flybrain-test",
+                                   ckpt_digest="sha256:" + "0" * 12)
+    try:
+        rec_stream.fire(pairs)                   # t=0: held in the writer
+        assert sink.reached[0].wait(TIMEOUT)
+        rec_stream.fire(pairs)                   # t=1 fills the queue
+        rec_stream.fire(pairs)                   # t=2 lost
+        assert probe(rec_adapter, 0)             # lost
+        assert rec_stream.recording_dropped == 2
+        sink.release[0].set()
+        wait_until(lambda: len(sink.lines) == 3, "t=0 and t=1 to be written")
+        rec_stream.fire(pairs)                   # t=3 behind gap(2)
+        wait_until(lambda: len(sink.lines) == 5, "gap and t=3 to be written")
+        rec_stream.fire(pairs)                   # t=4: held in the writer
+        assert sink.reached[4].wait(TIMEOUT)
+        rec_stream.fire(pairs)                   # t=5 queued, then discarded by the replacement mapping
+        rec_stream.set_mapping(replacement)
+        sink.release_all()
+        wait_until(lambda: len(sink.lines) == 8, "t=4, the mapping and epoch_reset to be written")
+        rec_stream.fire(pairs)                   # new epoch t=0 behind gap(1)
+    finally:
+        sink.release_all()
+        rec_adapter.remove()
+        rec_stream.close(drain_timeout=TIMEOUT)
+
+    recorded = [json.loads(line) for line in sink.lines]
+    kinds = [m.get("event", m["type"]) if m["type"] == "stream_status" else m["type"] for m in recorded]
+    assert kinds == ["mapping", "fire", "fire", "gap", "fire", "fire", "mapping", "epoch_reset", "gap", "fire"]
+    assert [m["t"] for m in recorded if m["type"] == "fire"] == [0, 1, 3, 4, 0]
+    assert recorded[3]["dropped_steps"] == 2 and recorded[8]["dropped_steps"] == 1
+    assert rec_stream.recording_dropped == 3
+    seqs = [m["seq"] for m in recorded if m["type"] == "stream_status"]
+    assert seqs == sorted(set(seqs))
+
+
+def test_streams_without_markers_send_plain_v1_even_with_one_message_queues(wiring):
+    """No adapter: no resync, epoch_reset or gap at any queue size; the wire is plain mapping and fire."""
+    torch.manual_seed(0)
+    model = FlyLM(Config.from_wiring(wiring, d_model=64, n_layer=2), wiring).eval()
+    stream, graph = stream_model(model, wiring, 0, port=0, queue_size=1)
+    pairs = graph.fire_pairs([0])
+    try:
+        with connect(stream.url, max_size=None) as ws:
+            assert json.loads(ws.recv(timeout=TIMEOUT)) == graph.mapping
+            stream.fire(pairs)
+            assert ws.recv(timeout=TIMEOUT) == json.dumps({"type": "fire", "t": 0, "pairs": pairs}, separators=(",", ":"))
+            replacement = graph.refresh()
+            stream.set_mapping(replacement)
+            assert json.loads(ws.recv(timeout=TIMEOUT)) == replacement
+            stream.fire(pairs)
+            assert json.loads(ws.recv(timeout=TIMEOUT)) == {"type": "fire", "t": 0, "pairs": pairs}
+            with pytest.raises(TimeoutError):
+                ws.recv(timeout=0.3)
+    finally:
+        stream.close(drain_timeout=TIMEOUT)
+    assert stream.epoch == 1 and stream.status_factory is None
 
 
 def test_payloads_have_no_floats_booleans_or_nulls(wiring, tmp_path):

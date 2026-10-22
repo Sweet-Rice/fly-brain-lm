@@ -188,7 +188,7 @@ All extension messages include the following envelope fields:
 | Field | Type | Meaning |
 |---|---|---|
 | `run_id` | string | Unique run identifier (e.g. `run-<12 hex>`). |
-| `seq` | integer | One per-run counter (≥ 0) shared by all extension types. Each consumer (every harness connection and the recording) receives strictly increasing `seq`; holes mean messages that consumer did not receive. A harness never receives a message sequenced before its `resync`. |
+| `seq` | integer | One per-run counter (≥ 0) shared by all extension types. Each consumer (every harness connection and the recording) receives strictly increasing `seq`. Values are not contiguous: the producer reserves the value just before every message it hands to consumers (including `fire`, which carries no `seq`) for a `gap` marker that may have to precede that message, so holes do not indicate loss; `gap` markers do. A harness never receives a message sequenced before its `resync`. |
 | `epoch` | integer | Mapping epoch (≥ 0): `0` for the first mapping, +1 for each replacement mapping, which also restarts `t` at 0. Reconnecting does not change it. |
 
 ### `request_lifecycle`
@@ -268,6 +268,6 @@ Emitted to communicate delivery queue gaps, harness resynchronization, or topolo
 | `server_time_ms` | integer | Server timestamp in milliseconds. |
 
 Semantics:
-- `resync`: Sent to a newly connected harness immediately after its mapping frame (`dropped_steps: 0`). Reconnecting never resets server `t`.
-- `epoch_reset`: Sent to all active consumers (harnesses and recording) immediately after a replacement mapping frame (`dropped_steps: 0`), signaling the incremented `epoch` and restart of `t` at 0.
-- `gap`: Per consumer. `dropped_steps` counts the messages (`fire` or extension) that consumer lost since its previous gap marker. The marker is sent once the consumer accepts messages again: the recording writes it right after the first message it accepts; a harness receives it behind the messages already handed off for it. It is ordered by `seq` like every extension message, so it follows, rather than precedes, the first message accepted after the loss.
+- `resync`: Sent to a newly connected harness immediately after its mapping frame (`dropped_steps: 0`), whatever the queue capacity. Reconnecting never resets server `t`.
+- `epoch_reset`: Sent to all active consumers (harnesses and recording) immediately after a replacement mapping frame (`dropped_steps: 0`), whatever the queue capacity, signaling the incremented `epoch` and restart of `t` at 0.
+- `gap`: Per consumer. `dropped_steps` counts the messages (`fire` or extension) that consumer lost since its previous gap marker, including queued messages a replacement mapping discarded. The marker comes first: it is queued immediately before the next message the consumer accepts, and only when the consumer's queue has room for both (an empty queue always has); otherwise that message is lost as well and counted in the same marker. Its `seq` is the value reserved for that message, so the consumer sees mapping, messages accepted before the loss, `gap`, then the resumed message, with strictly increasing `seq`.

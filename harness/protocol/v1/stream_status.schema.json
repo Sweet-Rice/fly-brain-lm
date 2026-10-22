@@ -26,10 +26,10 @@
   },
   "additionalProperties": {"$ref": "#/$defs/extensionValue"},
   "x-flybrain-semantic-rules": [
-    "seq strictly increases per consumer across all extension messages in a run",
+    "seq strictly increases per consumer across all extension messages in a run; values are not contiguous",
     "resync is sent to a newly connected harness immediately after its mapping with dropped_steps 0",
-    "epoch_reset is sent to every consumer immediately after a replacement mapping with dropped_steps 0",
-    "gap reports dropped_steps count of messages lost by that specific consumer since its previous gap marker"
+    "epoch_reset is sent to every consumer right after a replacement mapping with dropped_steps 0",
+    "gap precedes the next message its consumer accepts, queued only together with it, and reports dropped_steps messages lost by that consumer since its previous gap marker"
   ],
   "$defs": {
     "extensionValue": {
