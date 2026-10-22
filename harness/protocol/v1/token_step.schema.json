@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "token_step.schema.json",
+  "title": "Fly Brain Visualization Stream v1 extension token_step",
+  "type": "object",
+  "required": [
+    "type",
+    "run_id",
+    "request_id",
+    "seq",
+    "epoch",
+    "kind",
+    "token_index",
+    "token_id",
+    "token_text",
+    "token_bytes",
+    "step_status",
+    "t",
+    "step_rel_us",
+    "emit_rel_us",
+    "step_ns",
+    "emit_ns"
+  ],
+  "properties": {
+    "type": {"type": "string", "const": "token_step"},
+    "run_id": {"type": "string"},
+    "request_id": {"type": "string"},
+    "seq": {"type": "integer", "minimum": 0},
+    "epoch": {"type": "integer", "minimum": 0},
+    "kind": {
+      "type": "string",
+      "enum": ["prompt", "completion"]
+    },
+    "token_index": {"type": "integer", "minimum": 0},
+    "token_id": {"type": "integer", "minimum": 0},
+    "token_text": {"type": "string"},
+    "token_bytes": {"type": "string", "pattern": "^(?:[0-9a-f]{2})*$"},
+    "step_status": {
+      "type": "string",
+      "enum": ["stepped_fired", "stepped_silent", "unprocessed"]
+    },
+    "t": {"type": "integer", "minimum": -1},
+    "step_rel_us": {"type": "integer", "minimum": 0},
+    "emit_rel_us": {"type": "integer", "minimum": 0},
+    "step_ns": {"type": "string", "pattern": "^[0-9]+$"},
+    "emit_ns": {"type": "string", "pattern": "^[0-9]+$"}
+  },
+  "additionalProperties": {"$ref": "#/$defs/extensionValue"},
+  "x-flybrain-semantic-rules": [
+    "seq strictly increases per consumer across all extension messages in a run",
+    "t matches the fire message t of the same epoch when step_status is stepped_fired or stepped_silent",
+    "prompt tokens have contiguous t starting from t_start, with emit_rel_us equal to step_rel_us and emit_ns equal to step_ns",
+    "the final completion token is always unprocessed with t -1, step_rel_us 0, and step_ns \"0\"",
+    "token_step messages are only produced while the stream is listening"
+  ],
+  "$defs": {
+    "extensionValue": {
+      "anyOf": [
+        {"type": "integer"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/extensionValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/extensionValue"}}
+      ]
+    }
+  }
+}

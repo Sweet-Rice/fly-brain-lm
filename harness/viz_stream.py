@@ -6,6 +6,8 @@ Implements "Fly Brain Visualization Stream Spec" version 1:
   - Never blocks the model: a harness that falls behind has `fire` messages dropped (gaps in t allowed).
   - Runs normally with zero harnesses; serves several; a mid-run joiner gets the mapping, then live fires.
   - Optional recording: bounded background writer for the same messages as newline-delimited JSON.
+  - Optional extension messages (SPEC.md "Extension messages"): send_event() queues them in call order, and a
+    status_factory (set by harness.telemetry.adapter) adds stream_status markers; without one the wire is plain v1.
   - Full API: harness/API.md
 
 What the mapping describes (one block of the model, default block 0):
@@ -128,6 +130,16 @@ class _NDJSONRecorder:
             self.dropped += 1
             return False
 
+    def status(self, msg):
+        """A stream_status marker: queued only if there is room, never counted as a dropped message."""
+        if not self.active:
+            return False
+        try:
+            self._queue.put_nowait((False, msg))
+            return True
+        except queue.Full:
+            return False
+
     def close(self, timeout):
         self._stop.set()
         if self._done.wait(max(0.0, timeout)):
@@ -167,7 +179,12 @@ class _NDJSONRecorder:
 
 
 class VizStream:
-    """Model side. Call set_mapping() once, then fire(pairs) per step. Both return immediately."""
+    """Model side. Call set_mapping() once, then fire(pairs) per step. All calls return immediately.
+
+    send_event(event) adds an extension message. With status_factory set (event, dropped) -> stream_status dict,
+    every consumer also gets markers: resync after a new harness's mapping, epoch_reset after a replacement
+    mapping, and gap once a consumer that lost messages accepts messages again. Extension messages and markers
+    are sequenced under event_lock, so each consumer receives them in sequence order."""
 
     def __init__(self, host=LOOPBACK_HOST, port=8765, path="/stream", record=None, queue_size=64,
                  record_queue_size=256):
@@ -177,15 +194,23 @@ class VizStream:
             raise ValueError("queue_size must be a positive integer")
         self.host, self.port, self.path, self.queue_size = LOOPBACK_HOST, port, path, queue_size
         self.t = 0                       # next step index; restarts with each mapping
+        self.epoch = 0                   # mapping epoch: 0 for the first mapping, +1 per replacement
         self.dropped = 0                 # fire messages dropped for slow harnesses
         self.harnesses_seen = 0
+        self.status_factory = None       # (event, dropped) -> stream_status dict; None keeps the plain v1 wire
+        self.event_lock = threading.RLock()   # held while an extension message is sequenced and queued
         self._mapping_msg = None
         self._server_mapping_msg = None  # only published mappings may precede queued fires on a new socket
         self._pending = deque()
         self._handoff_lock = threading.Lock()
         self._drain_scheduled = False
         self._clients = set()            # one asyncio.Queue per connected harness (touched only on the loop thread)
-        self._n_clients = 0
+        self._n_clients = 0              # connected harnesses, including any still waiting to join
+        self._joining = set()            # queues waiting for their turn in the handoff (status markers on)
+        self._client_dropped = {}        # queue -> messages it lost since its last gap marker
+        self._gap_queued = set()         # queues with a gap marker waiting in the handoff
+        self._handoff_dropped = 0        # messages dropped before reaching any queue, not yet counted per queue
+        self._recording_reported = 0     # recorder drops already reported by a gap marker
         self._recorder = _NDJSONRecorder(record, record_queue_size) if record else None
         self._loop = None
         self._ready = threading.Event()
@@ -218,10 +243,16 @@ class VizStream:
         return self._recorder.error if self._recorder else None
 
     def set_mapping(self, mapping):
-        self._mapping_msg = json.dumps(mapping, separators=(",", ":"))
-        self.t = 0
-        self._record(self._mapping_msg, mapping=True)
-        self._call(self._broadcast_mapping, self._mapping_msg)
+        with self.event_lock:
+            replaced = self._mapping_msg is not None
+            self._mapping_msg = json.dumps(mapping, separators=(",", ":"))
+            self.t = 0
+            if replaced:
+                self.epoch += 1
+            self._record(self._mapping_msg, mapping=True)
+            self._call(self._broadcast_mapping, self._mapping_msg)
+            if replaced and self.status_factory is not None:
+                self.send_event(self.status_factory("epoch_reset", 0))
 
     def fire(self, pairs):
         """Send the pairs that fired at the current step, then advance the step."""
@@ -231,7 +262,20 @@ class VizStream:
         msg = json.dumps({"type": "fire", "t": t, "pairs": pairs}, separators=(",", ":"))
         self._record(msg)
         if self._n_clients:
-            self._call(self._broadcast_fire, msg)
+            self._call(self._broadcast_payload, msg)
+
+    def send_event(self, event):
+        """Send one extension message (a JSON object of integers and strings) to every harness and the
+        recording, ordered with the other messages; never blocks and does not advance t. Returns False when
+        no mapping is set or nobody is listening."""
+        if self._mapping_msg is None or not self.listening:
+            return False
+        msg = json.dumps(event, separators=(",", ":"))
+        with self.event_lock:
+            self._record(msg)
+            if self._n_clients:
+                self._call(self._broadcast_payload, msg)
+        return True
 
     def skip(self):
         self.t += 1
@@ -256,16 +300,33 @@ class VizStream:
 
     def _record(self, msg, mapping=False):
         if self._recorder:
-            (self._recorder.mapping if mapping else self._recorder.fire)(msg)
+            accepted = (self._recorder.mapping if mapping else self._recorder.fire)(msg)
+            if (accepted and not mapping and self.status_factory is not None
+                    and self._recorder.dropped > self._recording_reported):
+                self._record_gap()
+
+    def _record_gap(self):
+        """Report recorder drops after the first message it accepts again, sequenced like any extension message."""
+        with self.event_lock:
+            lost, factory = self._recorder.dropped - self._recording_reported, self.status_factory
+            if lost > 0 and factory is not None:
+                if self._recorder.status(json.dumps(factory("gap", lost), separators=(",", ":"))):
+                    self._recording_reported += lost
 
     def _call(self, fn, *args):
         if not self._loop or self._closed:
             return
         with self._handoff_lock:
             if fn == self._broadcast_mapping:
-                self._pending.clear()                    # queued fires belong to the old mapping
+                # Queued fires and extension messages belong to the old mapping; joins and gap markers keep their turn.
+                kept = [item for item in self._pending
+                        if item[0] != self._broadcast_payload and item[0] != self._broadcast_mapping]
+                self._pending.clear()
+                self._pending.extend(kept)
             elif len(self._pending) >= self.queue_size:
                 self.dropped += self._n_clients
+                if self.status_factory is not None:
+                    self._handoff_dropped += 1
                 return
             self._pending.append((fn, args))
             if not self._drain_scheduled:
@@ -311,10 +372,18 @@ class VizStream:
             await conn.close(1008, f"unknown path; use {self.path}")
             return
         q = asyncio.Queue(self.queue_size)
-        if self._server_mapping_msg:
-            q.put_nowait(self._server_mapping_msg)           # mapping is always the first message
-        self._clients.add(q)
-        self._n_clients = len(self._clients)
+        if self.status_factory is None:
+            if self._server_mapping_msg:
+                q.put_nowait(self._server_mapping_msg)       # mapping is always the first message
+            self._clients.add(q)
+        else:
+            # Join at this harness's turn in the handoff: its mapping and resync marker come after every message
+            # sequenced before the resync, and everything sequenced after it follows.
+            with self.event_lock:
+                self._joining.add(q)
+                self._n_clients = len(self._clients) + len(self._joining)
+                self._queue_status(self._join_client, q, "resync", 0)
+        self._n_clients = len(self._clients) + len(self._joining)
         self.harnesses_seen += 1
 
         async def write():
@@ -335,7 +404,10 @@ class VizStream:
             closed.cancel()
             await asyncio.gather(writer, closed, return_exceptions=True)
             self._clients.discard(q)
-            self._n_clients = len(self._clients)
+            self._joining.discard(q)
+            self._gap_queued.discard(q)
+            self._client_dropped.pop(q, None)
+            self._n_clients = len(self._clients) + len(self._joining)
 
     def _broadcast_mapping(self, msg):
         self._server_mapping_msg = msg
@@ -344,12 +416,65 @@ class VizStream:
                 q.get_nowait()
             q.put_nowait(msg)
 
-    def _broadcast_fire(self, msg):
+    def _broadcast_payload(self, msg):
+        """Queue one fire or extension message for every harness; a full queue drops it, never waits."""
+        handoff_lost = self._take_handoff_dropped()
         for q in self._clients:
             try:
                 q.put_nowait(msg)
+                lost = 0
             except asyncio.QueueFull:
                 self.dropped += 1                            # harness is behind: drop, never wait
+                lost = 1
+            if self.status_factory is None:
+                continue
+            unreported = self._client_dropped.pop(q, 0) + lost + handoff_lost
+            if not unreported:
+                continue
+            if lost or q in self._gap_queued:
+                self._client_dropped[q] = unreported         # report once it accepts messages again
+            else:
+                self._gap_queued.add(q)
+                self._queue_status(self._deliver_gap, q, "gap", unreported)
+
+    def _take_handoff_dropped(self):
+        if not self._handoff_dropped:
+            return 0
+        with self._handoff_lock:
+            lost, self._handoff_dropped = self._handoff_dropped, 0
+        return lost
+
+    def _queue_status(self, deliver, q, event, dropped):
+        """Loop thread: sequence a stream_status for one harness and queue it behind everything already handed
+        off, so that harness's extension messages keep increasing seq. deliver(q, msg, dropped) runs in turn."""
+        with self.event_lock:
+            factory = self.status_factory
+            msg = None if factory is None else json.dumps(factory(event, dropped), separators=(",", ":"))
+            with self._handoff_lock:
+                self._pending.append((deliver, (q, msg, dropped)))
+                if not self._drain_scheduled:
+                    self._drain_scheduled = True
+                    self._loop.call_soon(self._drain_pending)
+
+    def _join_client(self, q, msg, _dropped):
+        if q not in self._joining:
+            return                                           # disconnected before its turn
+        self._joining.discard(q)
+        if self._server_mapping_msg:
+            q.put_nowait(self._server_mapping_msg)           # mapping is always the first message
+            if msg is not None and not q.full():
+                q.put_nowait(msg)
+        self._clients.add(q)
+        self._n_clients = len(self._clients) + len(self._joining)
+
+    def _deliver_gap(self, q, msg, dropped):
+        self._gap_queued.discard(q)
+        if q not in self._clients:
+            return
+        if msg is None or q.full():
+            self._client_dropped[q] = self._client_dropped.get(q, 0) + dropped   # report with the next marker
+        else:
+            q.put_nowait(msg)
 
     async def _shutdown(self, timeout):
         end = self._loop.time() + timeout

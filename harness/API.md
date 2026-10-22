@@ -46,7 +46,8 @@ sequenceDiagram
 - **Lifetime.** The stream stays up across every message of `model.serve.ask` and every request of `model.serve.serve`. `t` keeps counting across them.
 - **Mid-run join.** A harness that connects later receives the current mapping and then only live fires. Earlier fires are not replayed.
 - **New mapping.** `set_mapping` called again starts a new epoch. Every connected harness receives the new mapping. Fires still queued for that harness are discarded (`VizStream._broadcast_mapping`). `t` restarts at 0. Fires already sent on a socket cannot be recalled.
-- **Several harnesses.** Each harness has its own queue (`queue_size`, default 64). A harness that falls behind has fires dropped (`VizStream._broadcast_fire`, counted in `VizStream.dropped`). It never blocks the model, and it never loses the mapping, because the mapping is queued only after that harness's backlog is discarded.
+- **Several harnesses.** Each harness has its own queue (`queue_size`, default 64). A harness that falls behind has fires dropped (`VizStream._broadcast_payload`, counted in `VizStream.dropped`). It never blocks the model, and it never loses the mapping, because the mapping is queued only after that harness's backlog is discarded.
+- **Extension messages.** `VizStream.send_event(event)` queues one extension message (integers and strings only) in order with the fires, without advancing `t`. The opt-in `harness.telemetry` adapter uses it for run and token telemetry and sets `VizStream.status_factory` for `stream_status` markers ([SPEC](protocol/v1/SPEC.md#extension-messages-additive)). Without the adapter the stream sends only `mapping` and `fire`.
 
 ## 4. `mapping` message
 
@@ -218,7 +219,7 @@ for n in m["nodes"]: n["name"] = f"n{n['id']}"
 s = VizStream(port=8768); s.set_mapping(m); s.start()
 assert s.wait_for_harness(30), "page never connected"
 for _ in range(3): s.fire(g.fire_pairs([0, 1, 2])); time.sleep(0.3)
-s._call(s._broadcast_fire, json.dumps({"type": "hello"}))       # unknown message type
+s.send_event({"type": "hello"})                                  # unknown message type
 time.sleep(0.5)
 m2 = copy.deepcopy(g.mapping); m2["version"] = 2; s.set_mapping(m2)
 time.sleep(0.5); s.fire(g.fire_pairs([0])); time.sleep(1); s.close()

@@ -174,3 +174,100 @@ Every mapping carries its version. A receiver MUST check every mapping, includin
 - Messages from the harness to the model.
 - Binary encodings.
 - Implicit topology inferred from fire events.
+
+## Extension messages (additive)
+
+The visualization stream optionally carries additive run and token telemetry messages from an opt-in producer (`python -m harness.telemetry.serve`, built on `harness/telemetry/adapter.py`). Existing `mapping` and `fire` messages are unchanged and keep their byte-for-byte form; legacy v1 receivers ignore the unknown types per [§6](#6-receiver-rules). Extension messages are sent only after a mapping, so the mapping is still the first message of every connection and recording.
+
+Scalar rules: extension messages carry integer and string scalars only; a producer MUST NOT emit floats, Booleans, or nulls. Nanosecond wall-clock timestamps (`*_ns`) exceed 2^53 − 1 and are decimal strings (`^[0-9]+$`). Relative latencies (`*_rel_us`) are non-negative integer microseconds since the request started. Server time (`server_time_ms`) is integer milliseconds (`time.time_ns() // 1_000_000`). Clocks of different machines and processes are not comparable, so consumers SHOULD correlate events by `seq`, `t`, and `request_id`, not by wall clocks.
+
+### Common fields
+
+All extension messages include the following envelope fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `run_id` | string | Unique run identifier (e.g. `run-<12 hex>`). |
+| `seq` | integer | One per-run counter (≥ 0) shared by all extension types. Each consumer (every harness connection and the recording) receives strictly increasing `seq`; holes mean messages that consumer did not receive. A harness never receives a message sequenced before its `resync`. |
+| `epoch` | integer | Mapping epoch (≥ 0): `0` for the first mapping, +1 for each replacement mapping, which also restarts `t` at 0. Reconnecting does not change it. |
+
+### `request_lifecycle`
+
+Schema: [`request_lifecycle.schema.json`](request_lifecycle.schema.json)
+
+Emitted as an inference request advances through lifecycle phases.
+
+```json
+{"type":"request_lifecycle","run_id":"run-0123456789ab","request_id":"req-0123456789ab","seq":0,"epoch":0,"impl":"vibe","model_id":"flybrain-untrained","ckpt_digest":"sha256:0123456789ab","phase":"queued","t_start":-1,"prompt_raw_tokens":12,"prompt_tokens":0,"max_tokens":32,"completion_tokens":0,"finish_reason":"none","server_time_ms":1729548000123,"timestamp_ns":"1729548000123456789"}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `type` | string | Always `"request_lifecycle"`. |
+| `request_id` | string | Unique request identifier (`req-<12 hex>`). |
+| `impl` | string | Model engine implementation (e.g. `"vibe"`, `"vibe2"`). |
+| `model_id` | string | Loaded model identifier string. |
+| `ckpt_digest` | string | Checkpoint SHA-256 digest prefix (`"sha256:"` + 12 hex digits). |
+| `phase` | string | Enum: `queued`, `prefill`, `decode`, `completed`, `cancelled`, `failed`. Phase progression order: `queued` (before engine lock) → `prefill` (first prompt step) → `decode` (first completion token) → exactly one terminal phase (`completed`, `cancelled`, or `failed`). Cancelled/failed requests may skip prefill/decode. |
+| `t_start` | integer | `t` of the first prompt token, or `-1` before prompt execution starts. |
+| `prompt_raw_tokens` | integer | Total token count in raw prompt before context window truncation (`len(ENC.encode_ordinary(prompt))`). |
+| `prompt_tokens` | integer | Prompt tokens accepted and stepped by the engine (`0` while `queued`). |
+| `max_tokens` | integer | Maximum completion tokens allowed for this request. |
+| `completion_tokens` | integer | Token ids the model has yielded so far, including a final EOT (one text piece of the SSE stream may cover several tokens). |
+| `finish_reason` | string | Enum: `none` for non-terminal phases; `stop`, `length`, `cancelled`, or `error` for terminal phases. |
+| `server_time_ms` | integer | Server timestamp in milliseconds (`time.time_ns() // 1_000_000`). |
+| `timestamp_ns` | string | Decimal string of nanosecond timestamp (`time.time_ns()`). |
+
+### `token_step`
+
+Schema: [`token_step.schema.json`](token_step.schema.json)
+
+Emitted for each prompt and completion token while the stream is actively listening (connected client or recording).
+
+```json
+{"type":"token_step","run_id":"run-0123456789ab","request_id":"req-0123456789ab","seq":1,"epoch":0,"kind":"prompt","token_index":0,"token_id":15496,"token_text":"Hello","token_bytes":"48656c6c6f","step_status":"stepped_fired","t":0,"step_rel_us":1200,"emit_rel_us":1200,"step_ns":"1729548000124656789","emit_ns":"1729548000124656789"}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `type` | string | Always `"token_step"`. |
+| `request_id` | string | Associated request identifier. |
+| `kind` | string | Enum: `prompt` or `completion`. |
+| `token_index` | integer | Position within its kind (`prompt`: 0..P-1, `completion`: 0..N-1). |
+| `token_id` | integer | Vocabulary token index (≥ 0). |
+| `token_text` | string | Incremental UTF-8 decoded text (`""` while a multi-byte sequence is incomplete). |
+| `token_bytes` | string | Lowercase hexadecimal string of raw token bytes. |
+| `step_status` | string | Enum: `stepped_fired` (step produced positive KC activations matching a `fire` at `t`), `stepped_silent` (step executed with silent KC activations), or `unprocessed` (token sampled without subsequent step). |
+| `t` | integer | Model step index matching `fire.t` within the same epoch, or `-1` if unprocessed. |
+| `step_rel_us` | integer | Microseconds from request start to the hook of the step that processed the token (`0` if unprocessed). |
+| `emit_rel_us` | integer | Microseconds from request start to when the model yielded the completion token to the engine (prompt tokens: equal to `step_rel_us`). |
+| `step_ns` | string | Decimal nanosecond time of that step hook (`"0"` if unprocessed). |
+| `emit_ns` | string | Decimal nanosecond time the model yielded the completion token (prompt tokens: equal to `step_ns`). |
+
+Semantics:
+- Prompt tokens are stepped with contiguous `t` starting at `t_start`; `emit_*` equals `step_*`.
+- A completion token is sampled from the previous step and processed by the next one, so its `token_step` is sent when that next step runs (`stepped_fired` or `stepped_silent`, with that step's `t`).
+- The final completion token (stop token, max tokens, EOT, or cancellation) is always `unprocessed` with `t: -1`, `step_rel_us: 0`, `step_ns: "0"` because the recurrent model samples it without executing a subsequent step.
+- `unprocessed` is distinct from `stepped_silent` (which executed a forward step but had no KC firings).
+
+### `stream_status`
+
+Schema: [`stream_status.schema.json`](stream_status.schema.json)
+
+Emitted to communicate delivery queue gaps, harness resynchronization, or topology epoch resets.
+
+```json
+{"type":"stream_status","run_id":"run-0123456789ab","epoch":0,"seq":0,"event":"resync","dropped_steps":0,"server_time_ms":1729548000123}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `type` | string | Always `"stream_status"`. |
+| `event` | string | Enum: `resync`, `epoch_reset`, `gap`. |
+| `dropped_steps` | integer | Count of dropped messages (`fire` or extension) for this consumer (`0` for `resync` and `epoch_reset`). |
+| `server_time_ms` | integer | Server timestamp in milliseconds. |
+
+Semantics:
+- `resync`: Sent to a newly connected harness immediately after its mapping frame (`dropped_steps: 0`). Reconnecting never resets server `t`.
+- `epoch_reset`: Sent to all active consumers (harnesses and recording) immediately after a replacement mapping frame (`dropped_steps: 0`), signaling the incremented `epoch` and restart of `t` at 0.
+- `gap`: Per consumer. `dropped_steps` counts the messages (`fire` or extension) that consumer lost since its previous gap marker. The marker is sent once the consumer accepts messages again: the recording writes it right after the first message it accepts; a harness receives it behind the messages already handed off for it. It is ordered by `seq` like every extension message, so it follows, rather than precedes, the first message accepted after the loss.

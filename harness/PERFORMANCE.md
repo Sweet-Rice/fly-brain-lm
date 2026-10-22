@@ -173,3 +173,47 @@ without changing the working checkout. Pass the saved Python file to
 profiler's positional argument or the browser benchmark's modules directory.
 Timing loops have finite sample counts; they are profiling tools, not services
 that accumulate a history indefinitely. Stop the static server with Ctrl-C.
+
+## Telemetry adapter overhead
+
+Measured on **2026-10-21** for issue #41 (`harness/telemetry/adapter.py`) with:
+
+```console
+python -m harness.telemetry.benchmark --requests 5
+```
+
+- Windows 11 (10.0.26200), Intel64 Family 6 Model 186 Stepping 2, Python 3.14.7,
+  CPU PyTorch 2.14.1, one PyTorch thread. Other heavy processes shared the
+  machine during the run, so differences of a few percent are within run-to-run
+  noise: an earlier 3-request run of the same command measured +2.7%, +0.2% and
+  −4.5% for the three telemetry modes.
+- Full default untrained vibe2 model (12 blocks, width 384) built from
+  `data/connectome/wiring.npz` with seed 0; a fresh model, stream and engine per
+  mode. Greedy decoding of `Once upon a time, a fly`: one untimed warm-up request,
+  then 5 timed requests of 48 completion tokens each.
+- tokens/s is completion tokens divided by the wall time of the timed requests
+  (prefill included). Per-token latency is the time between consecutive
+  generated tokens (prefill excluded).
+
+| Mode | tokens/s | p50 ms/token | p95 ms/token | tokens/s vs disabled |
+|---|---:|---:|---:|---:|
+| disabled | 27.37 | 32.42 | 36.41 | baseline |
+| adapter idle | 26.82 | 33.05 | 37.21 | -2.0% |
+| recording | 26.43 | 33.64 | 37.39 | -3.4% |
+| live client | 25.45 | 35.03 | 38.21 | -7.0% |
+
+- **disabled**: `stream_model` attached as in `model.serve.serve`, no adapter,
+  nobody listening.
+- **adapter idle**: adapter hooks and engine wrapper installed, nobody listening.
+  Lifecycle events are built but not sent; no `token_step` is built.
+- **recording**: adapter plus an NDJSON recording. Every step serializes its
+  `fire` and `token_step`.
+- **live client**: adapter plus one WebSocket harness reading every message
+  (678 messages over the 6 requests).
+
+Recording and live client are full telemetry load: they include the cost of the
+v1 `fire` stream as well as the extension messages. No mode dropped a message
+(stream and recording drop counters were 0). Per step the adapter decodes one
+token; while someone listens it also reduces over the KC code once and serializes
+one `token_step`. Its hooks only read tensors, so logits and model state are
+unchanged (`test_logits_identical_with_and_without_telemetry`).
