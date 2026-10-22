@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stream_status.schema.json",
+  "title": "Fly Brain Visualization Stream v1 extension stream_status",
+  "type": "object",
+  "required": [
+    "type",
+    "run_id",
+    "epoch",
+    "seq",
+    "event",
+    "dropped_steps",
+    "server_time_ms"
+  ],
+  "properties": {
+    "type": {"type": "string", "const": "stream_status"},
+    "run_id": {"type": "string"},
+    "epoch": {"type": "integer", "minimum": 0},
+    "seq": {"type": "integer", "minimum": 0},
+    "event": {
+      "type": "string",
+      "enum": ["gap", "resync", "epoch_reset"]
+    },
+    "dropped_steps": {"type": "integer", "minimum": 0},
+    "server_time_ms": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": {"$ref": "#/$defs/extensionValue"},
+  "x-flybrain-semantic-rules": [
+    "seq strictly increases per consumer across all extension messages in a run; values are not contiguous",
+    "resync is sent to a newly connected harness immediately after its mapping with dropped_steps 0",
+    "epoch_reset is sent to every consumer right after a replacement mapping with dropped_steps 0",
+    "gap precedes the next message its consumer accepts, queued only together with it, and reports dropped_steps messages lost by that consumer since its previous gap marker"
+  ],
+  "$defs": {
+    "extensionValue": {
+      "anyOf": [
+        {"type": "integer"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/extensionValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/extensionValue"}}
+      ]
+    }
+  }
+}

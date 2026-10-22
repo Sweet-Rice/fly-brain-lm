@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "request_lifecycle.schema.json",
+  "title": "Fly Brain Visualization Stream v1 extension request_lifecycle",
+  "type": "object",
+  "required": [
+    "type",
+    "run_id",
+    "request_id",
+    "seq",
+    "epoch",
+    "impl",
+    "model_id",
+    "ckpt_digest",
+    "phase",
+    "t_start",
+    "prompt_raw_tokens",
+    "prompt_tokens",
+    "max_tokens",
+    "completion_tokens",
+    "finish_reason",
+    "server_time_ms",
+    "timestamp_ns"
+  ],
+  "properties": {
+    "type": {"type": "string", "const": "request_lifecycle"},
+    "run_id": {"type": "string"},
+    "request_id": {"type": "string"},
+    "seq": {"type": "integer", "minimum": 0},
+    "epoch": {"type": "integer", "minimum": 0},
+    "impl": {"type": "string"},
+    "model_id": {"type": "string"},
+    "ckpt_digest": {"type": "string"},
+    "phase": {
+      "type": "string",
+      "enum": ["queued", "prefill", "decode", "completed", "cancelled", "failed"]
+    },
+    "t_start": {"type": "integer", "minimum": -1},
+    "prompt_raw_tokens": {"type": "integer", "minimum": 0},
+    "prompt_tokens": {"type": "integer", "minimum": 0},
+    "max_tokens": {"type": "integer", "minimum": 0},
+    "completion_tokens": {"type": "integer", "minimum": 0},
+    "finish_reason": {
+      "type": "string",
+      "enum": ["none", "stop", "length", "cancelled", "error"]
+    },
+    "server_time_ms": {"type": "integer", "minimum": 0},
+    "timestamp_ns": {"type": "string", "pattern": "^[0-9]+$"}
+  },
+  "additionalProperties": {"$ref": "#/$defs/extensionValue"},
+  "x-flybrain-semantic-rules": [
+    "seq strictly increases per consumer across all extension messages in a run",
+    "phase order per request is queued -> prefill -> decode -> exactly one terminal phase (completed, cancelled, or failed)",
+    "t_start is -1 until prompt tokens begin stepping, then the t of the first prompt token",
+    "prompt_tokens is 0 during queued phase and equals the tokens accepted by the engine in subsequent phases",
+    "finish_reason is none during non-terminal phases"
+  ],
+  "$defs": {
+    "extensionValue": {
+      "anyOf": [
+        {"type": "integer"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/extensionValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/extensionValue"}}
+      ]
+    }
+  }
+}

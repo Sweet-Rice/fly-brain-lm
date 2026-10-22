@@ -230,3 +230,141 @@ def test_semantic_id_and_reference_rules_are_enforced_beyond_json_schema():
         message = json.loads(cases[case_id]["frames"][0])
         mapping_validator.validate(message)
         assert not valid_mapping(message)
+
+
+def test_extension_schemas_accept_examples_and_reject_floats_booleans_and_nulls():
+    schema_names = ["request_lifecycle", "token_step", "stream_status"]
+    validators = {}
+    for name in schema_names:
+        schema = load_json(ROOT / f"{name}.schema.json")
+        Draft202012Validator.check_schema(schema)
+        validators[name] = Draft202012Validator(schema)
+
+    positive_examples = {
+        "request_lifecycle": {
+            "type": "request_lifecycle",
+            "run_id": "run-0123456789ab",
+            "request_id": "req-0123456789ab",
+            "seq": 0,
+            "epoch": 0,
+            "impl": "vibe",
+            "model_id": "flybrain-untrained",
+            "ckpt_digest": "sha256:0123456789ab",
+            "phase": "queued",
+            "t_start": -1,
+            "prompt_raw_tokens": 12,
+            "prompt_tokens": 0,
+            "max_tokens": 32,
+            "completion_tokens": 0,
+            "finish_reason": "none",
+            "server_time_ms": 1729548000123,
+            "timestamp_ns": "1729548000123456789",
+        },
+        "token_step": {
+            "type": "token_step",
+            "run_id": "run-0123456789ab",
+            "request_id": "req-0123456789ab",
+            "seq": 1,
+            "epoch": 0,
+            "kind": "prompt",
+            "token_index": 0,
+            "token_id": 15496,
+            "token_text": "Hello",
+            "token_bytes": "48656c6c6f",
+            "step_status": "stepped_fired",
+            "t": 0,
+            "step_rel_us": 1200,
+            "emit_rel_us": 1200,
+            "step_ns": "1729548000124656789",
+            "emit_ns": "1729548000124656789",
+        },
+        "stream_status": {
+            "type": "stream_status",
+            "run_id": "run-0123456789ab",
+            "epoch": 0,
+            "seq": 0,
+            "event": "resync",
+            "dropped_steps": 0,
+            "server_time_ms": 1729548000123,
+        },
+    }
+
+    token_step_unprocessed = {
+        "type": "token_step",
+        "run_id": "run-0123456789ab",
+        "request_id": "req-0123456789ab",
+        "seq": 4,
+        "epoch": 0,
+        "kind": "completion",
+        "token_index": 3,
+        "token_id": 50256,
+        "token_text": "<|endoftext|>",
+        "token_bytes": "3c7c656e646f66746578747c3e",
+        "step_status": "unprocessed",
+        "t": -1,
+        "step_rel_us": 0,
+        "emit_rel_us": 25000,
+        "step_ns": "0",
+        "emit_ns": "1729548000148456789",
+    }
+
+    all_positives = [
+        positive_examples["request_lifecycle"],
+        positive_examples["token_step"],
+        token_step_unprocessed,
+        positive_examples["stream_status"],
+    ]
+
+    for ex in all_positives:
+        assert_integer_or_string_scalars(ex)
+        validators[ex["type"]].validate(ex)
+
+    legacy_receiver = ContractReceiver()
+    for ex in all_positives:
+        assert legacy_receiver.process(json.dumps(ex)) == {"action": "ignore_message"}
+
+    null_fields = {
+        "request_lifecycle": "t_start",
+        "token_step": "t",
+        "stream_status": "dropped_steps",
+    }
+    ns_fields = {
+        "request_lifecycle": ["timestamp_ns"],
+        "token_step": ["step_ns", "emit_ns"],
+        "stream_status": [],
+    }
+
+    for name in schema_names:
+        validator = validators[name]
+        example = positive_examples[name]
+
+        bad_float = deepcopy(example)
+        bad_float["seq"] = 1.5
+        with pytest.raises(ValidationError):
+            validator.validate(bad_float)
+
+        bad_bool = deepcopy(example)
+        bad_bool["epoch"] = True
+        with pytest.raises(ValidationError):
+            validator.validate(bad_bool)
+
+        bad_null = deepcopy(example)
+        bad_null[null_fields[name]] = None
+        with pytest.raises(ValidationError):
+            validator.validate(bad_null)
+
+        bad_ext = deepcopy(example)
+        bad_ext["extra_field"] = 1.5
+        with pytest.raises(ValidationError):
+            validator.validate(bad_ext)
+
+        for ns_key in ns_fields[name]:
+            bad_ns_int = deepcopy(example)
+            bad_ns_int[ns_key] = 1729548000123456789
+            with pytest.raises(ValidationError):
+                validator.validate(bad_ns_int)
+
+            bad_ns_str = deepcopy(example)
+            bad_ns_str[ns_key] = "not_digits"
+            with pytest.raises(ValidationError):
+                validator.validate(bad_ns_str)
