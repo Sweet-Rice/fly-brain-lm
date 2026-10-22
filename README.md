@@ -32,19 +32,32 @@ than opening the HTML with `file://`. In this static offline mode, the prompt
 composer detects that the local model proxy is unavailable (static-page mode),
 while recording playback and graph controls continue to work normally.
 
+## Prompt laboratory (React)
+
+The presentable text-generation frontend is a React, TypeScript, and Vite app in
+[`frontend/`](frontend/README.md). It reuses the harness's tested
+`GenerationController` and versioned inference types rather than maintaining a
+second service client. With the model HTTP service running on port 8771:
+
+```console
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+Open **http://127.0.0.1:5173/**. The Vite server proxies `/health` and `/v1/*`
+to the loopback model API. See the frontend guide for production builds, quality
+commands, design-system boundaries, theme behavior, and alternate loopback ports.
+The WebGPU atlas remains available separately through the browser workspace below.
+
 ## Browser workspace: prompt composer and live inspection
 
-The browser workspace extends the no-build ES module architecture with public
-mount functions (`mountPrompt`, `mountInspector`) that return clean disposers, backed
-by DOM-free inference (`GenerationController`) and topology (`NeuronIndex`) classes.
-Future UI ports (such as React) can import and reuse the same state machines and
-indexing directly without provisional interface aliases (`.controller`, `.CLASSES`).
-Existing visualization sources and receivers are unaffected and operate normally even
-when the model API is missing or unstarted.
-
-The frontend consumes [UI inference contract v1](harness/app/inference-contract/v1/README.md),
-with portable TypeScript declarations and a checked, development-only session
-fixture. The browser remains no-build; TypeScript is only a development checker.
+The browser workspace remains a no-build ES module application for WebGPU activity
+inspection. Its public mount functions (`mountPrompt`, `mountInspector`) return clean
+disposers, backed by DOM-free inference (`GenerationController`) and topology
+(`NeuronIndex`) classes. The React prompt laboratory imports the same controller
+and [UI inference contract v1](harness/app/inference-contract/v1/README.md), while
+visualization sources and receivers remain independent when the model API is
+missing or unstarted.
 
 Checkpoints are gitignored and not bundled; initialize an untrained scratch checkpoint
 first (default `model.init_model` writes `model/checkpoints/<impl>.pt`, e.g. `vibe.pt`,
@@ -139,6 +152,7 @@ private trained checkpoint is bundled or independently verified here. See
 |---|---|
 | `harness/` | [End-to-end workflow](harness/WORKFLOW.md), [stream tools](harness/README.md), [measured limits](harness/PERFORMANCE.md) |
 | `harness/app/` | [Standalone WebGPU viewer, playback and controls](harness/app/README.md) |
+| `frontend/` | [React/TypeScript prompt laboratory and design system](frontend/README.md) |
 | `harness/example/` | [Separate legacy Canvas demo and fixed-prompt replay](harness/example/README.md) |
 | `model/` | [Checkpoint initialization and model prerequisites](model/README.md) |
 | `model/vibe/`, `model/vibe2/` | [Model implementations and selection](model/README.md#choosing-an-implementation) |
