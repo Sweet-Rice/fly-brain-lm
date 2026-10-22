@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 test("recording controls reset the graph and switch cleanly between files and live input", async t => {
   const elements = new Map();
@@ -319,6 +320,15 @@ test("recording controls reset the graph and switch cleanly between files and li
   assert.match(element("timeline-identity").textContent, /run-integration · epoch 7/);
   assert.equal(element("step").textContent, 88, "telemetry cannot advance graph time");
 
+  const memoryFrames = readFileSync(new URL('./fixtures/memory.ndjson', import.meta.url), 'utf8')
+    .trim().split('\n').map(JSON.parse).filter(message => message.type.startsWith('memory_'));
+  for (const message of memoryFrames) activeLiveSocket.onmessage({ data: JSON.stringify(message) });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(element("memory-identity").textContent, /run-memory-fixture · epoch 7/);
+  assert.match(element("memory-details").textContent, /req-fixture.*rev 0 → 1/);
+  assert.equal(element("timeline-identity").textContent, "Run run-integration · epoch 7");
+  assert.equal(element("step").textContent, 88, "memory cannot consume graph steps");
+
   const telemetryFile = new Blob([mapping, "\n", JSON.stringify(telemetry)]);
   telemetryFile.name = "telemetry.ndjson";
   element("recording").files = [telemetryFile];
@@ -331,6 +341,7 @@ test("recording controls reset the graph and switch cleanly between files and li
   click("disconnect");
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(element("timeline-identity").textContent, "No run telemetry received.");
+  assert.equal(element("memory-identity").textContent, "No memory telemetry received.");
 
   await settle(() => element("prompt-output").textContent.includes("Hello fly"));
   assert.ok(element("prompt-output").textContent.includes("Hello fly"));
