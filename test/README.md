@@ -37,7 +37,7 @@ download unless that data is cached.
 
 [GitHub Actions CI](../.github/workflows/ci.yml) runs independent checks on PRs,
 pushes to `main`, and manual dispatches. The Python checks use CPU-only PyTorch;
-the separate browser-harness check uses Node.js without model dependencies:
+the browser harness and React frontend checks use Node.js without model dependencies:
 
 | Check | Scope |
 |---|---|
@@ -47,6 +47,7 @@ the separate browser-harness check uses Node.js without model dependencies:
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
 | Smoke (vibe / vibe2 checkpoint, serve, record) | Independent jobs for both implementations: build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, run the finite workflow, then feed its fresh recording through the shipped JavaScript playback, receiver, graph layout and edge activity |
 | Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers, node picking and overlay selection, neuron inspector topology indexing and bounded fire history, prompt composer validation and rejection, state transitions, SSE stream parsing, and error handling; see [`harness/app/README.md`](../harness/app/README.md) |
+| React frontend | Clean dependency install, formatting, linting, TypeScript checks, and a Vite production build; see [`frontend/README.md`](../frontend/README.md) |
 The jobs have no dependency edges. A failed suite does not cancel the other
 suites or skip the smoke check. Each test job prints individual cases and adds
 their results, timings, and failure details to the run's **Summary** page;
