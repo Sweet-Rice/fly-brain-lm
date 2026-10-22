@@ -30,7 +30,7 @@ export function mountTimeline(root, canvas = null) {
   tokens.tabIndex = 0;
   tokens.setAttribute("aria-label", "Observed tokens in reception order");
   const help = element("p", "timeline-help", "hint",
-    "Timings are producer-reported microseconds since request start. Silent means a step ran with no positive KC activations. Unprocessed means a sampled token had no subsequent step; it has no t or step timing. Tokens are distinct from HTTP text chunks. This panel does not replay graph activity.");
+    "Match t to graph steps only in the same server run and epoch. Fired means positive KC activations; silent means a step ran without them, not biological spikes. Unprocessed means a sampled token had no subsequent step; it has no t or step timing. Timings are producer-reported microseconds since request start. Tokens are distinct from HTTP text chunks. This panel does not replay graph activity.");
   panel.append(identity, empty, label, select, summary, phases, notice, tokens, help);
   root.replaceChildren(panel);
 
@@ -79,7 +79,7 @@ export function mountTimeline(root, canvas = null) {
     } else {
       const latest = request.lifecycle;
       summary.textContent = latest
-        ? `${latest.phase} · ${latest.impl} / ${latest.model_id} · checkpoint ${latest.ckpt_digest} · prompt ${latest.prompt_tokens} accepted / ${latest.prompt_raw_tokens} raw · completion ${latest.completion_tokens} / ${latest.max_tokens} max · finish ${latest.finish_reason}`
+        ? `${latest.phase} · ${latest.impl} / ${latest.model_id} · checkpoint ${latest.ckpt_digest} · lifecycle counts: prompt ${latest.prompt_tokens} accepted / ${latest.prompt_raw_tokens} raw · completion ${latest.completion_tokens} / ${latest.max_tokens} max · finish ${latest.finish_reason}`
         : "Partial request: lifecycle, model identity and authoritative counts were not observed.";
       phases.textContent = request.phases.length
         ? `Observed phases: ${request.phases.map((phase) => phase.phase).join(" → ")}`

@@ -71,7 +71,8 @@ test("timeline explains legacy streams and safely renders token semantics", asyn
     assert.match(text(rows[0]), /t — · emit 1200 µs · step — \(unprocessed\)/);
     assert.match(text(rows[1]), /stepped_silent.*t 7.*raw bytes e2/);
     assert.equal(byId(root, "timeline-tokens").attributes.get("aria-live"), undefined);
-    assert.match(text(byId(root, "timeline-help")), /no positive KC activations/);
+    assert.match(text(byId(root, "timeline-help")), /same server run and epoch/);
+    assert.match(text(byId(root, "timeline-help")), /not biological spikes/);
   } finally { dispose(); }
 });
 

@@ -129,6 +129,72 @@ checkpoints/weights, model implementations, the model-side visualization stream
 (`harness/viz_stream.py`, `harness/protocol/v1/`) or `model/serve/` (frozen; the launcher
 only starts it unchanged).
 
+## Run / token timeline
+
+The timeline consumes the optional `request_lifecycle`, `token_step`, and
+`stream_status` extensions. The normal model server emits only mapping/fire;
+to populate the timeline, start the opt-in telemetry entry point instead:
+
+```console
+# Use an existing scratch checkpoint, or initialize a new untrained one first.
+python -m harness.telemetry.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767 --record /tmp/flybrain-run.ndjson
+
+# In a second terminal:
+python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
+```
+
+Open `http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream`, wait for
+Connected, and generate a prompt. On Windows use a writable scratch path such as
+`$env:TEMP/flybrain-scratch.pt` and `$env:TEMP/flybrain-run.ndjson` in place of `/tmp/...`.
+The `--model-ckpt` app-server launcher starts the normal server, so use the two
+terminals above for telemetry. No serving-engine files are changed.
+
+Choose a request to inspect its observed phases, model/checkpoint identity,
+authoritative token counts and finish reason. Counts reflect the latest lifecycle
+phase; token events can continue arriving before the next phase. The list shows prompt and completion
+token IDs, escaped text, processing status, model step `t`, and producer-reported
+emit/step times in microseconds since request start. Blank decoded text can be an
+incomplete UTF-8 sequence; its raw bytes are shown. Tokens are distinct from HTTP/SSE
+text chunks, and the prompt panel's local Run ID is separate from the producer run ID.
+
+- Match graph steps only within the same producer run and server epoch using `t`.
+  Reconnecting resets the graph receiver's local epoch, not the server's epoch.
+- `stepped_fired` means that step produced positive KC activations; `stepped_silent`
+  means the step ran without them. Neither is a claim of biological spikes.
+- The final sampled completion token is `unprocessed`: no subsequent model step ran,
+  so its `t` and step time display as unavailable. Emit time can precede step time.
+- Only explicit gap markers report lost messages; sequence holes are normal. A gap
+  count includes all dropped message types, not just tokens. Mid-request joins and
+  missing phases/indexes are marked partial without inventing missing events.
+- Retention is eight requests and 256 recent tokens per request, with omission counts.
+  Source changes, disconnects, restarts, replacement mappings and resync markers clear
+  the view. Request selection stays stable while other requests arrive.
+- Open a telemetry NDJSON recording through the existing file picker to inspect it
+  offline. Playback uses the existing synthetic fire cadence; this panel does not
+  replay or seek graph activity. Legacy mapping/fire recordings remain usable and
+  explain why their timeline is empty.
+
+The native request selector and focusable token list work with a keyboard. Token
+updates are batched per animation frame and are not announced one by one.
+
+### Timeline verification
+
+`npm test` covers wire validation, duplicate/regressing sequence and token indexes,
+explicit gaps, partial joins, lifecycle phases, timestamp precision, retention,
+source switching/restart and disposer cleanup; `npm run typecheck` continues to
+check the existing inference contract. No new dependencies or frontend build are needed.
+
+Browser checked on 2026-10-22 in the in-app Chromium browser against a real,
+untrained `vibe2` checkpoint and `harness.telemetry.serve`: keyboard submission,
+completed and cancelled requests, retained request selection, matching graph steps,
+and final unprocessed token. The captured real request replayed through the file
+picker at 4×, restarted without accumulating rows, and cleared on source changes.
+A synthetic recording checked server epoch 7, explicit gap/partial notices, a silent
+step, empty decoded text and HTML-like Unicode text displayed literally. A legacy
+mapping/fire recording showed the empty-timeline explanation. Keyboard focus reached
+the token list and End scrolled it; 390×844 and 1024×768 layouts had no horizontal
+overflow. This is functional browser evidence, not a native-GPU performance benchmark.
+
 ## Run from a fresh checkout (offline review)
 
 Python 3 serves the static application; there are no frontend dependencies, build
