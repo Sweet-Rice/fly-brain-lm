@@ -11,8 +11,8 @@ and receivers are unaffected and operate normally even when the model API is mis
 or unstarted. The existing `harness/example/` Canvas demo is unchanged.
 
 For the canonical real-model reference, clean-checkout setup and all integration
-scenarios, use the [end-to-end workflow](../WORKFLOW.md). For visual redesign
-plans and cockpit layout specifications, see the
+scenarios, use the [end-to-end workflow](../WORKFLOW.md). For the planned
+fly-brain dashboard layout, see the
 [dashboard visual redesign plan](dashboard-visual-redesign-plan.md).
 
 ## Run the live workspace (real model + app server)
