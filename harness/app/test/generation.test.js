@@ -6,6 +6,7 @@ import {
   validateParams,
   SSELineParser,
 } from '../generation.js';
+import { fixture } from '../inference-contract/v1/fixture.js';
 
 function createMockReadableStream(chunks) {
   let index = 0;
@@ -137,61 +138,42 @@ test('SSELineParser handles CRLF line endings and SSE comments', () => {
   assert.equal(JSON.parse(events[1]).text, 'two');
 });
 
-test('GenerationController runs serve.py compatible text-completion stream with usage and [DONE]', async () => {
-  const sseChunks = [
-    'data: {"id":"cmpl-101","object":"text_completion","choices":[{"index":0,"text":"First","finish_reason":null}]}\n\n',
-    'data: {"id":"cmpl-101","object":"text_completion","choices":[{"index":0,"text":" Second","finish_reason":null}]}\n\n',
-    'data: {"id":"cmpl-101","object":"text_completion","choices":[{"index":0,"text":"","finish_reason":"stop"}]}\n\n',
-    'data: {"id":"cmpl-101","object":"text_completion","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n',
-    'data: [DONE]\n\n',
-  ];
+test('versioned inference fixture preserves text, identity, usage and terminal state across byte boundaries', async () => {
+  const wire = fixture.stream.events.map(event =>
+    `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\n\n`).join('');
+  const bytes = new TextEncoder().encode(wire);
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += 3) chunks.push(bytes.slice(offset, offset + 3));
 
-  let fetchCalls = 0;
-  const mockFetch = async (url, options) => {
-    fetchCalls++;
-    assert.equal(options.method, 'POST');
-    const body = JSON.parse(options.body);
-    assert.equal(body.prompt, 'Once upon a time');
-    assert.equal(body.stream, true);
-    assert.equal(body.stream_options.include_usage, true);
+  const controller = new GenerationController({
+    fetch: async url => url === '/health'
+      ? new Response(JSON.stringify(fixture.health), { status: 200 })
+      : new Response(createMockReadableStream(chunks), {
+        status: fixture.stream.status, headers: { 'Content-Type': fixture.stream.content_type },
+      }),
+  });
+  const snapshots = [];
+  controller.subscribe(snapshot => snapshots.push(snapshot));
+  try {
+    await controller.checkHealth();
+    assert.equal(controller.getState().health.ready, true);
+    const result = await controller.submit(fixture.request);
 
-    return {
-      ok: true,
-      status: 200,
-      body: createMockReadableStream(sseChunks),
-    };
-  };
-
-  const controller = new GenerationController({ fetch: mockFetch });
-  const observedStates = [];
-  controller.subscribe(st => observedStates.push(st.state));
-
-  let onGenerateCalled = false;
-  const result = await controller.submit(
-    { prompt: 'Once upon a time', maxTokens: 64, temperature: 1.0, topK: 50 },
-    {
-      onGenerate: async info => {
-        onGenerateCalled = true;
-        assert.equal(info.prompt, 'Once upon a time');
-        assert.ok(info.runId.startsWith('run-'));
-      },
-    }
-  );
-
-  assert.equal(onGenerateCalled, true);
-  assert.equal(fetchCalls, 1);
-  assert.equal(result.success, true);
-  assert.equal(result.text, 'First Second');
-  assert.equal(result.finishReason, 'stop');
-  assert.deepEqual(result.usage, { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 });
-
-  const finalState = controller.getState();
-  assert.equal(finalState.state, GENERATION_STATES.COMPLETED);
-  assert.equal(finalState.text, 'First Second');
-  assert.equal(finalState.modelCompletionId, 'cmpl-101');
-  assert.ok(observedStates.includes(GENERATION_STATES.SUBMITTING));
-  assert.ok(observedStates.includes(GENERATION_STATES.STREAMING));
-  assert.ok(observedStates.includes(GENERATION_STATES.COMPLETED));
+    assert.equal(result.success, true);
+    assert.equal(result.text, fixture.expected.text);
+    assert.equal(result.finishReason, fixture.expected.finish_reason);
+    assert.deepEqual(result.usage, fixture.expected.usage);
+    const final = controller.getState();
+    assert.equal(final.state, GENERATION_STATES.COMPLETED);
+    assert.equal(final.modelCompletionId, fixture.expected.completion_id);
+    assert.equal(final.runId, result.runId);
+    assert.ok(snapshots.some(snapshot => snapshot.text === 'A fly\n'));
+    assert.ok(snapshots.some(snapshot => snapshot.state === GENERATION_STATES.SUBMITTING));
+    assert.ok(snapshots.some(snapshot => snapshot.state === GENERATION_STATES.STREAMING));
+    assert.ok(snapshots.filter(snapshot => snapshot.runId).every(snapshot => snapshot.runId === result.runId));
+  } finally {
+    controller.dispose();
+  }
 });
 
 test('GenerationController rejects duplicate submit when already active', async () => {

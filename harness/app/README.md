@@ -321,89 +321,16 @@ the checked-in contract.
 
 ## Versioned inference contract
 
-The workspace communicates with the local model via same-origin reverse-proxy routes
-provided by `harness.app_server`. Note that no OpenAPI specifications or TypeScript
-type definitions exist; this is a minimal HTTP/1.1 and Server-Sent Events contract
-implemented using Python stdlib and vanilla ES modules.
+The workspace implements [UI inference contract v1](inference-contract/v1/README.md):
+typed health/model metadata, prompt requests, completion/SSE events, terminal usage,
+structured errors, and best-effort cancellation through the same-origin proxy.
+[`types.d.ts`](inference-contract/v1/types.d.ts) is the portable TypeScript boundary;
+[`fixture.js`](inference-contract/v1/fixture.js) is checked development/test data,
+never a production model fallback.
 
-### Endpoints
-
-- **`GET /health`**:
-  - **Response (200 OK)**:
-    ```json
-    {"status": "ok", "model": "flybrain-untrained", "note": "TEMPORARY, untrained"}
-    ```
-  - **Upstream unavailable (503 Service Unavailable)**:
-    ```json
-    {"error": {"message": "upstream model server unavailable", "type": "server_error"}}
-    ```
-- **`GET /v1/models`**:
-  - **Response (200 OK)**:
-    ```json
-    {"object": "list", "data": [{"id": "flybrain-untrained", "object": "model", "created": 0, "owned_by": "flybrainlm"}]}
-    ```
-- **`POST /v1/completions`**:
-  - **Request Body (JSON)**:
-    ```json
-    {
-      "prompt": "Once upon a time",
-      "max_tokens": 64,
-      "temperature": 1.0,
-      "top_k": 50,
-      "stream": true,
-      "stream_options": {"include_usage": true}
-    }
-    ```
-  - **Settings**: `prompt` must be a non-empty string; `max_tokens` must be an integer
-    in 1..128 (validated and rejected if out of bounds; upstream server cap is separate,
-    default cap 128); `temperature` is a finite float in 0.0..2.0; `top_k` is an integer
-    in 1..50257 (defaults to 50).
-  - **Non-streaming (`stream: false`)**:
-    Returns HTTP 200 JSON with `object: "text_completion"`, `choices: [{"text": "...", "index": 0, "finish_reason": "length"|"stop"}]`,
-    and `usage: {"prompt_tokens": N, "completion_tokens": M, "total_tokens": N+M}`.
-  - **Streaming (`stream: true`)**:
-    Returns HTTP 200 with `Content-Type: text/event-stream`, `Cache-Control: no-cache`,
-    `Connection: close`.
-
-### SSE chunk sequence and delimiter
-
-When `stream: true`, the server emits a sequence of SSE data frames formatted as
-`data: <JSON>\n\n`:
-
-1. **Text chunks**: Emitted as tokens are decoded:
-   ```
-   data: {"id": "cmpl-...", "created": 1700000000, "model": "flybrain-untrained", "object": "text_completion", "choices": [{"index": 0, "text": " token", "logprobs": null, "finish_reason": null}]}
-
-   ```
-2. **Terminal finish chunk**: Empty text with a finish reason (`length` or `stop`):
-   ```
-   data: {"id": "cmpl-...", "created": 1700000000, "model": "flybrain-untrained", "object": "text_completion", "choices": [{"index": 0, "text": "", "logprobs": null, "finish_reason": "length"}]}
-
-   ```
-3. **Optional usage chunk** (if `stream_options.include_usage` was requested):
-   ```
-   data: {"id": "cmpl-...", "created": 1700000000, "model": "flybrain-untrained", "object": "text_completion", "choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 16, "total_tokens": 20}}
-
-   ```
-4. **Terminal stream delimiter**:
-   ```
-   data: [DONE]
-
-   ```
-
-### Disconnect and cancellation limits
-
-- When the user cancels generation via **Cancel**, the browser's `AbortController`
-  aborts the fetch request, closing the client HTTP socket.
-- `harness.app_server` detects the closed socket during SSE forwarding and immediately
-  closes its upstream HTTP connection to `model.serve.serve`.
-- Upstream `model.serve.serve` executes generation synchronously in a generator loop.
-  It discovers the severed connection on its next `wfile.write()` attempt when
-  `BrokenPipeError` or `ConnectionResetError` is raised. The generator loop terminates,
-  `pieces.close()` runs in a `finally` block, and the engine generation lock is released.
-- **Cancellation is best-effort at the next token write**: Upstream does not poll
-  for socket disconnect mid-compute, and there is no out-of-band wire cancel frame
-  or authoritative cancellation acknowledgment.
+The contract distinguishes local run ids from server completion ids, and decoded text
+chunks from model tokens. It does not fabricate loading phases, checkpoint identity,
+cancel acknowledgments, or token/fire alignment. Frozen `model/serve/` code is unchanged.
 
 ## Verify
 
@@ -417,6 +344,15 @@ Or from the repository root:
 
 ```console
 npm --prefix harness/app test
+```
+
+The pinned TypeScript checker validates the inference declarations, shared fixture,
+and positive/negative consumer examples. It is development-only; running the
+browser or the JavaScript tests still needs no npm installation:
+
+```console
+npm --prefix harness/app ci --ignore-scripts
+npm --prefix harness/app run typecheck
 ```
 
 To verify the app server reverse proxy, run pytest from the repository root:

@@ -29,6 +29,11 @@ jobs:
       - name: Harness tests (no dependency installation)
         working-directory: harness/app
         run: npm test
+      - name: Typecheck the inference contract and fixture
+        working-directory: harness/app
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck
 
   tests:
     name: ${{ matrix.name }}

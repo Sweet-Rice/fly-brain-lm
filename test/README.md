@@ -80,6 +80,16 @@ Or directly with Node's native test runner:
 node --test harness/app/test/*.test.js
 ```
 
+The browser-harness CI job also checks the [UI inference contract v1](../harness/app/inference-contract/v1/README.md).
+The shared fixture is exercised through `GenerationController` with fragmented
+Unicode SSE data. TypeScript validates the declarations, fixture, and consumer
+examples; no production bundle is generated:
+
+```console
+npm --prefix harness/app ci --ignore-scripts
+npm --prefix harness/app run typecheck
+```
+
 | Suite | Scope covered |
 |---|---|
 | `generation.test.js` | Parameter validation and rejection (empty/whitespace rejection, bounds validation for `max_tokens` [1..128], `temperature` [0..2], and `top_k` [1..50257]; upstream server cap is separate), inference state machine transitions (`idle`, `validating`, `submitting`, `streaming`, `cancelling`, `completed`, `cancelled`, `failed`), SSE line and JSON chunk parser, usage chunk handling, terminal `[DONE]` detection, UTF-8 multi-byte split handling across chunk boundaries, malformed/truncated stream error recovery with preserved partial text, cancellation abort signal handling, reader lock release, health readiness checks and retry, normalized API key header sync, actionable proxy errors (501/405/503), traceback sanitization, and terminal accessibility announcements |

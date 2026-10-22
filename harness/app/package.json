@@ -3,5 +3,9 @@
   "private": true,
   "type": "module",
   "engines": {"node": ">=22"},
-  "scripts": {"test": "node --test"}
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc -p tsconfig.inference.json"
+  },
+  "devDependencies": {"typescript": "5.9.3"}
 }

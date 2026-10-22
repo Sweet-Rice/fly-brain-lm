@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "types": []
+  },
+  "files": [
+    "inference-contract/v1/types.d.ts",
+    "inference-contract/v1/fixture.js",
+    "inference-contract/v1/type-checks.ts"
+  ]
+}

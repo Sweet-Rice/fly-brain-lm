@@ -8,3 +8,6 @@ data/connectome/*.feather
 __pycache__/
 .pytest_cache/
 model/checkpoints/
+
+# Development-only TypeScript checker; the browser app remains no-build.
+/harness/app/node_modules/
