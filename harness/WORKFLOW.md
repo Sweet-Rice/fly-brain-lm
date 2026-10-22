@@ -66,7 +66,9 @@ python3 -m venv .venv
 
 For other PyTorch builds use the [installation selector](https://pytorch.org/get-started/locally/).
 Optional data preparation is documented in [`../data/README.md`](../data/README.md).
-The browser has no npm dependencies. Node.js 22+ is needed only to run its tests.
+The browser has no runtime npm dependencies or build step. Node.js 22+ runs its
+tests; the optional development-only TypeScript checker verifies the
+[UI inference contract v1](app/inference-contract/v1/README.md).
 
 ## 3. Run the headless smoke command
 

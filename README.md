@@ -42,6 +42,10 @@ indexing directly without provisional interface aliases (`.controller`, `.CLASSE
 Existing visualization sources and receivers are unaffected and operate normally even
 when the model API is missing or unstarted.
 
+The frontend consumes [UI inference contract v1](harness/app/inference-contract/v1/README.md),
+with portable TypeScript declarations and a checked, development-only session
+fixture. The browser remains no-build; TypeScript is only a development checker.
+
 Checkpoints are gitignored and not bundled; initialize an untrained scratch checkpoint
 first (default `model.init_model` writes `model/checkpoints/<impl>.pt`, e.g. `vibe.pt`,
 not `init.pt`; do not overwrite private trained checkpoints):
