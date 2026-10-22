@@ -6,6 +6,29 @@
  * Reusable directly in React or other UI frameworks.
  */
 
+/**
+ * @typedef {import('./inference-contract/v1/types.js').GenerationInput} GenerationInput
+ * @typedef {import('./inference-contract/v1/types.js').ValidationErrors} ValidationErrors
+ * @typedef {import('./inference-contract/v1/types.js').GenerationState} GenerationState
+ * @typedef {import('./inference-contract/v1/types.js').HealthSnapshot} HealthSnapshot
+ * @typedef {import('./inference-contract/v1/types.js').GenerationClientSnapshot} GenerationClientSnapshot
+ * @typedef {import('./inference-contract/v1/types.js').GenerationClientOptions} GenerationClientOptions
+ * @typedef {import('./inference-contract/v1/types.js').GenerationSubmitOptions} GenerationSubmitOptions
+ * @typedef {import('./inference-contract/v1/types.js').GenerationResult} GenerationResult
+ * @typedef {import('./inference-contract/v1/types.js').TokenUsage} TokenUsage
+ * @typedef {import('./inference-contract/v1/types.js').FinishReason} FinishReason
+ *
+ * Fields consumed from compatible SSE JSON events. Absent metadata remains absent,
+ * and error payloads are supported without requiring a successful-completion envelope.
+ * @typedef {Partial<import('./inference-contract/v1/types.js').CompletionEnvelope> & {
+ *   choices?: import('./inference-contract/v1/types.js').TextChunk['choices'] |
+ *     import('./inference-contract/v1/types.js').FinishChunk['choices'] |
+ *     import('./inference-contract/v1/types.js').UsageChunk['choices'],
+ *   usage?: TokenUsage,
+ *   error?: string | {message?: string}
+ * }} StreamMessage
+ */
+
 export const GENERATION_STATES = Object.freeze({
   IDLE: 'idle',
   VALIDATING: 'validating',
@@ -19,6 +42,7 @@ export const GENERATION_STATES = Object.freeze({
 
 /**
  * Returns true if the generation controller is in an active, non-terminal state.
+ * @param {GenerationState} state
  */
 export function isGenerationActive(state) {
   return (
@@ -32,8 +56,11 @@ export function isGenerationActive(state) {
 /**
  * Validates prompt and sampling parameters.
  * Produces specific inline error messages for accessible display.
+ * @param {GenerationInput} [params]
+ * @returns {{valid: boolean, errors: ValidationErrors}}
  */
 export function validateParams(params = {}) {
+  /** @type {ValidationErrors} */
   const errors = {};
 
   const prompt = params.prompt;
@@ -71,6 +98,7 @@ export function validateParams(params = {}) {
   };
 }
 
+/** @param {unknown} msg */
 function sanitizeSafeMessage(msg) {
   if (!msg || typeof msg !== 'string') return '';
   const trimmed = msg.trim();
@@ -83,6 +111,8 @@ function sanitizeSafeMessage(msg) {
 /**
  * Formats user-facing errors without technical stack traces.
  * Offers helpful guidance if static python -m http.server is run without app_server proxy.
+ * @param {unknown} error
+ * @param {Pick<Response, 'status' | 'statusText'> | null} [response]
  */
 function formatSafeError(error, response = null) {
   const proxyInstruction = 'In static http.server mode, run python -m harness.app_server to proxy /health and /v1/completions.';
@@ -110,10 +140,10 @@ function formatSafeError(error, response = null) {
   }
 
   if (error && typeof error === 'object') {
-    if (error.name === 'AbortError') {
+    if ('name' in error && error.name === 'AbortError') {
       return 'Generation was cancelled.';
     }
-    if (error.message) {
+    if ('message' in error && typeof error.message === 'string') {
       const msg = error.message;
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch failed')) {
         return 'Network connection failed. Ensure the model server or app_server proxy is running.';
@@ -131,13 +161,16 @@ function formatSafeError(error, response = null) {
  * supports both CRLF and LF delimiters, and ignores SSE comments.
  */
 export class SSELineParser {
+  /** @param {{onEvent?: (data: string) => unknown}} [options] */
   constructor({ onEvent = () => {} } = {}) {
     this.onEvent = onEvent;
     this.buffer = '';
     this.decoder = new TextDecoder('utf-8');
+    /** @type {string[]} */
     this.currentData = [];
   }
 
+  /** @param {string | Uint8Array | null} chunk */
   feed(chunk, isDone = false) {
     if (chunk) {
       if (typeof chunk === 'string') {
@@ -168,6 +201,7 @@ export class SSELineParser {
     }
   }
 
+  /** @param {string} str @param {boolean} isDone */
   findNewline(str, isDone) {
     for (let i = 0; i < str.length; i++) {
       const char = str[i];
@@ -188,6 +222,7 @@ export class SSELineParser {
     return null;
   }
 
+  /** @param {string} line */
   processLine(line) {
     if (line === '') {
       this.flushEvent();
@@ -216,6 +251,8 @@ export class SSELineParser {
 
 /**
  * Consumes a ReadableStream of byte chunks or strings and invokes onEvent for SSE payloads.
+ * @param {ReadableStream<Uint8Array | string> | null} stream
+ * @param {{onEvent?: (data: string) => {done?: boolean} | void, signal?: AbortSignal | null}} [options]
  */
 async function parseSSEStream(stream, { onEvent = () => {}, signal = null } = {}) {
   if (!stream || typeof stream.getReader !== 'function') {
@@ -284,6 +321,7 @@ async function parseSSEStream(stream, { onEvent = () => {}, signal = null } = {}
  * Manages model readiness, input submission, SSE parsing, cancellation, and telemetry state.
  */
 export class GenerationController {
+  /** @param {GenerationClientOptions} [options] */
   constructor({
     endpoint = '/v1/completions',
     healthEndpoint = '/health',
@@ -295,15 +333,23 @@ export class GenerationController {
     this.fetch = fetch || globalThis.fetch?.bind(globalThis);
     this.apiKey = typeof apiKey === 'string' && apiKey.trim().length > 0 ? apiKey.trim() : null;
 
+    /** @type {GenerationState} */
     this.state = GENERATION_STATES.IDLE;
+    /** @type {string | null} */
     this.currentRunId = null;
+    /** @type {string | null} */
     this.modelCompletionId = null;
     this.text = '';
+    /** @type {FinishReason | null} */
     this.finishReason = null;
+    /** @type {TokenUsage | null} */
     this.usage = null;
+    /** @type {string | null} */
     this.error = null;
+    /** @type {ValidationErrors} */
     this.validationErrors = {};
 
+    /** @type {HealthSnapshot} */
     this.health = {
       status: 'unknown',
       modelId: null,
@@ -312,14 +358,19 @@ export class GenerationController {
       ready: false,
     };
 
+    /** @type {Set<(snapshot: GenerationClientSnapshot) => void>} */
     this.listeners = new Set();
+    /** @type {AbortController | null} */
     this.abortController = null;
+    /** @type {AbortController | null} */
     this.healthAbortController = null;
+    /** @type {ReturnType<typeof setInterval> | null} */
     this.healthTimer = null;
     this.healthRequestId = 0;
     this.disposed = false;
   }
 
+  /** @returns {GenerationClientSnapshot} */
   getState() {
     return {
       state: this.state,
@@ -334,6 +385,7 @@ export class GenerationController {
     };
   }
 
+  /** @param {(snapshot: GenerationClientSnapshot) => void} listener */
   subscribe(listener) {
     if (typeof listener !== 'function') return () => {};
     this.listeners.add(listener);
@@ -356,6 +408,7 @@ export class GenerationController {
     return isGenerationActive(this.state);
   }
 
+  /** @param {string | null | undefined} key */
   setApiKey(key) {
     this.apiKey = typeof key === 'string' && key.trim().length > 0 ? key.trim() : null;
   }
@@ -364,6 +417,7 @@ export class GenerationController {
     return this.apiKey;
   }
 
+  /** @returns {Promise<HealthSnapshot>} */
   async checkHealth() {
     if (this.disposed) return this.health;
 
@@ -382,6 +436,7 @@ export class GenerationController {
     }
 
     try {
+      /** @type {Record<string, string>} */
       const headers = {};
       if (this.apiKey) {
         headers['Authorization'] = `Bearer ${this.apiKey}`;
@@ -460,7 +515,7 @@ export class GenerationController {
       if (this.disposed || this.healthRequestId !== requestId) {
         return this.health;
       }
-      if (err.name === 'AbortError') return this.health;
+      if (err && typeof err === 'object' && 'name' in err && err.name === 'AbortError') return this.health;
       const message = formatSafeError(err);
       const hasChanged = this.health.status !== 'error' ||
         this.health.ready !== false ||
@@ -479,7 +534,9 @@ export class GenerationController {
     }
   }
 
+  /** @param {{intervalMs?: number}} [options] */
   startHealthPolling({ intervalMs = 10000 } = {}) {
+    if (this.disposed) throw new Error('Cannot poll health after disposal');
     this.stopHealthPolling();
     this.checkHealth();
     this.healthTimer = setInterval(() => {
@@ -493,15 +550,31 @@ export class GenerationController {
     }
   }
 
+  /**
+   * @param {GenerationInput} [params]
+   * @param {GenerationSubmitOptions} [options]
+   * @returns {Promise<GenerationResult>}
+   */
   async submit(params = {}, { onGenerate = null } = {}) {
+    if (this.disposed) throw new Error('Cannot submit after disposal');
     if (this.isActive()) {
       throw new Error(`Cannot submit: generation already in progress (state: ${this.state})`);
     }
+
+    // A validation subscriber may cancel, dispose, or replace this attempt synchronously.
+    const abortController = new AbortController();
+    this.abortController = abortController;
+    // The captured signal owns cancellation even if a subscriber starts a newer run.
+    // Attempt identity also rejects stale work when failed validation retains the previous run id.
+    const signal = abortController.signal;
 
     this.state = GENERATION_STATES.VALIDATING;
     this.validationErrors = {};
     this.error = null;
     this.notify();
+
+    if (this.abortController !== abortController) return { success: false, aborted: true };
+    if (signal.aborted) return { success: false, cancelled: true };
 
     // Validate inputs prior to callback and network call
     const validation = validateParams(params);
@@ -520,11 +593,7 @@ export class GenerationController {
     this.finishReason = null;
     this.modelCompletionId = null;
 
-    const abortController = new AbortController();
-    this.abortController = abortController;
-    const signal = abortController.signal;
-
-    const prompt = params.prompt;
+    const prompt = /** @type {string} */ (params.prompt); // validateParams rejected missing or non-string prompts.
     const maxTokens = Number(params.maxTokens ?? params.max_tokens);
     const temperature = Number(params.temperature);
     const topK = Number(params.topK ?? params.top_k);
@@ -532,25 +601,31 @@ export class GenerationController {
     this.state = GENERATION_STATES.SUBMITTING;
     this.notify();
 
+    if (this.abortController !== abortController || this.currentRunId !== runId) return { success: false, aborted: true };
+    if (signal.aborted) return { success: false, cancelled: true };
+
     if (typeof onGenerate === 'function') {
       try {
         await onGenerate({ prompt, maxTokens, temperature, topK, runId });
       } catch (cbErr) {
-        if (this.currentRunId !== runId) return { success: false, aborted: true };
+        if (this.abortController !== abortController || this.currentRunId !== runId) return { success: false, aborted: true };
+        if (signal.aborted) return { success: false, cancelled: true };
         this.state = GENERATION_STATES.FAILED;
-        this.error = formatSafeError(cbErr);
+        const error = formatSafeError(cbErr);
+        this.error = error;
         this.notify();
-        return { success: false, error: this.error };
+        return { success: false, error };
       }
     }
 
-    if (this.currentRunId !== runId) {
+    if (this.abortController !== abortController || this.currentRunId !== runId) {
       return { success: false, aborted: true };
     }
-    if (signal.aborted || this.state === GENERATION_STATES.CANCELLED) {
+    if (signal.aborted) {
       return { success: false, cancelled: true };
     }
 
+    /** @type {Record<string, string>} */
     const headers = {
       'Content-Type': 'application/json',
     };
@@ -558,6 +633,7 @@ export class GenerationController {
       headers['Authorization'] = `Bearer ${this.apiKey}`;
     }
 
+    /** @type {import('./inference-contract/v1/types.js').StreamingCompletionRequest} */
     const payload = {
       prompt,
       max_tokens: maxTokens,
@@ -578,19 +654,20 @@ export class GenerationController {
         signal,
       });
     } catch (netErr) {
-      if (this.currentRunId !== runId) return { success: false, aborted: true };
-      if (signal.aborted || this.state === GENERATION_STATES.CANCELLING) {
+      if (this.abortController !== abortController || this.currentRunId !== runId) return { success: false, aborted: true };
+      if (signal.aborted) {
         this.state = GENERATION_STATES.CANCELLED;
         this.notify();
         return { success: false, cancelled: true };
       }
       this.state = GENERATION_STATES.FAILED;
-      this.error = formatSafeError(netErr);
+      const error = formatSafeError(netErr);
+      this.error = error;
       this.notify();
-      return { success: false, error: this.error };
+      return { success: false, error };
     }
 
-    if (this.currentRunId !== runId) return { success: false, aborted: true };
+    if (this.abortController !== abortController || this.currentRunId !== runId) return { success: false, aborted: true };
     if (signal.aborted) {
       this.state = GENERATION_STATES.CANCELLED;
       this.notify();
@@ -606,7 +683,7 @@ export class GenerationController {
         // non-JSON error
       }
 
-      if (this.currentRunId !== runId) return { success: false, aborted: true };
+      if (this.abortController !== abortController || this.currentRunId !== runId) return { success: false, aborted: true };
       if (signal.aborted) {
         this.state = GENERATION_STATES.CANCELLED;
         this.notify();
@@ -614,9 +691,10 @@ export class GenerationController {
       }
 
       this.state = GENERATION_STATES.FAILED;
-      this.error = formatSafeError(errMsg || `HTTP ${response.status}: ${response.statusText}`, response);
+      const error = formatSafeError(errMsg || `HTTP ${response.status}: ${response.statusText}`, response);
+      this.error = error;
       this.notify();
-      return { success: false, error: this.error };
+      return { success: false, error };
     }
     this.state = GENERATION_STATES.STREAMING;
     this.notify();
@@ -628,13 +706,14 @@ export class GenerationController {
       await parseSSEStream(response.body, {
         signal,
         onEvent: (rawData) => {
-          if (this.currentRunId !== runId || signal.aborted) return { done: true };
+          if (this.abortController !== abortController || this.currentRunId !== runId || signal.aborted) return { done: true };
 
           if (rawData === '[DONE]') {
             receivedDone = true;
             return { done: true };
           }
 
+          /** @type {StreamMessage} */
           let chunkObj;
           try {
             chunkObj = JSON.parse(rawData);
@@ -672,11 +751,11 @@ export class GenerationController {
         },
       });
 
-      if (this.currentRunId !== runId) return { success: false, aborted: true };
+      if (this.abortController !== abortController || this.currentRunId !== runId) return { success: false, aborted: true };
       if (signal.aborted) {
         this.state = GENERATION_STATES.CANCELLED;
         this.notify();
-        return { success: false, cancelled: true, text: this.text };
+        return { success: false, cancelled: true, text: accumulatedText };
       }
 
       if (!receivedDone) {
@@ -684,27 +763,31 @@ export class GenerationController {
       }
 
       this.state = GENERATION_STATES.COMPLETED;
-      this.notify();
-      return {
+      // Subscribers may synchronously start another run; capture this result first.
+      /** @type {GenerationResult} */
+      const result = {
         success: true,
         text: this.text,
-        runId: this.currentRunId,
+        runId,
         usage: this.usage,
         finishReason: this.finishReason,
       };
+      this.notify();
+      return result;
     } catch (streamErr) {
-      if (this.currentRunId !== runId) return { success: false, aborted: true };
+      if (this.abortController !== abortController || this.currentRunId !== runId) return { success: false, aborted: true };
 
-      if (signal.aborted || this.state === GENERATION_STATES.CANCELLING) {
+      if (signal.aborted) {
         this.state = GENERATION_STATES.CANCELLED;
         this.notify();
-        return { success: false, cancelled: true, text: this.text };
+        return { success: false, cancelled: true, text: accumulatedText };
       }
 
       this.state = GENERATION_STATES.FAILED;
-      this.error = formatSafeError(streamErr);
+      const error = formatSafeError(streamErr);
+      this.error = error;
       this.notify();
-      return { success: false, error: this.error, text: this.text };
+      return { success: false, error, text: accumulatedText };
     }
   }
 

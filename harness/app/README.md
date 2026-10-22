@@ -375,6 +375,12 @@ structured errors, and best-effort cancellation through the same-origin proxy.
 [`fixture.js`](inference-contract/v1/fixture.js) is checked development/test data,
 never a production model fallback.
 
+The DOM-free `GenerationController` is checked directly against that boundary with
+JSDoc types; consumers import the running client from `generation.js`. The
+[client lifecycle](inference-contract/v1/README.md#consume-and-verify) covers
+subscriptions, validated asynchronous preparation, cancellation, replacement-run
+ownership, and final disposal. No frontend build step is introduced.
+
 The contract distinguishes local run ids from server completion ids, and decoded text
 chunks from model tokens. It does not fabricate loading phases, checkpoint identity,
 cancel acknowledgments, or token/fire alignment. Frozen `model/serve/` code is unchanged.
@@ -393,9 +399,9 @@ Or from the repository root:
 npm --prefix harness/app test
 ```
 
-The pinned TypeScript checker validates the inference declarations, shared fixture,
-and positive/negative consumer examples. It is development-only; running the
-browser or the JavaScript tests still needs no npm installation:
+The pinned TypeScript checker validates the actual service client, inference
+declarations, shared fixture, and positive/negative consumer examples. It is
+development-only; running the browser or JavaScript tests still needs no npm installation:
 
 ```console
 npm --prefix harness/app ci --ignore-scripts
@@ -425,6 +431,10 @@ python -m pytest test/test_app_server.py
   text, cancellation abort signal handling, reader lock release on terminal `[DONE]` or cancellation,
   health readiness checks and retry, normalized API key header sync, actionable proxy errors
   (501/405/503), traceback sanitization, and terminal accessibility announcements.
+  Regressions also cover late preparation errors after cancellation, disposal and
+  replacement during validation, stale cancellation after a newer validation
+  failure, terminal-result preservation during subscriber re-entry, and rejection
+  of disposed-client reuse.
 - **`prompt-view.test.js`**: DOM rendering with stable `prompt-*` IDs and accessible announcements,
   keyboard shortcut `Ctrl+Enter` / `Cmd+Enter` (ignores repeat keydown, preserves newlines and
   IME composition), Generate, Cancel, Clear, and Copy buttons lifecycle, Copy button clipboard

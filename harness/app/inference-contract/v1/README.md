@@ -92,6 +92,14 @@ Static `python -m http.server` still supports recording/graph inspection but doe
 
 ## Consume and verify
 
+`GenerationController` is the DOM-free service client in [`generation.js`](../../generation.js). Its actual implementation is checked against these types through JSDoc; there is no second controller declaration or generated runtime bundle.
+
+- `submit(GenerationInput, GenerationSubmitOptions)` validates form values, converts numeric strings, and returns a `Promise<GenerationResult>`. Camel-case controls and snake-case request names are accepted. An optional asynchronous `onGenerate` callback receives validated numeric settings and the local run id before HTTP submission.
+- `subscribe` and `getState` expose `GenerationClientSnapshot`: generation state, partial output, local/server identities, usage, safe errors, field validation errors, and readiness. The subscription returns an unsubscribe function.
+- Cancellation also applies during validation notifications and asynchronous preparation, before a request exists. A cancelled/replaced attempt cannot start HTTP work or overwrite a newer run; a late preparation rejection cannot change cancellation into failure.
+- `dispose()` aborts generation and health checks, stops polling, and removes listeners. Disposal is final: subsequent submission or polling throws. Create a new controller when remounting an owned client.
+- Terminal results are captured before notifying subscribers. A subscriber may immediately clear or start another run without changing the completed/failed call's returned text, identity, usage, finish reason, or error.
+
 TypeScript consumers import the declarations with a type-only import, for example from a module next to `generation.js`:
 
 ```typescript
@@ -108,6 +116,6 @@ npm --prefix harness/app ci --ignore-scripts
 npm --prefix harness/app run typecheck
 ```
 
-Type checking validates the declarations, fixture, and positive/negative consumer examples. CI runs both runtime tests and contract checks. Backend implementation, model/training internals, graph topology, recurrent-memory telemetry, and dashboard design are outside this contract.
+Type checking validates the actual service client, declarations, fixture, and positive/negative consumer examples. CI runs both runtime tests and contract checks. Backend implementation, model/training internals, graph topology, recurrent-memory telemetry, and dashboard design are outside this contract.
 
 Additive optional fields remain compatible with this version. Removing or changing a field's type or meaning requires a new contract version and coordinated client migration; do not silently reinterpret v1 events.
