@@ -709,16 +709,17 @@ def main() -> None:
     bound_host, bound_port = server.server_address[:2]
     ready_url = f"http://{bound_host}:{bound_port}/app/"
     print(f"FlyBrain app server listening at {ready_url} (proxying {args.api_url})", flush=True)
-    if model_process is not None:
-        model_process.start()
-        print(f"Launched model server for checkpoint {model_process.ckpt_path.name} (pid {model_process.pid}); /health reports model_loading until it answers", flush=True)
 
     try:
+        if model_process is not None:
+            model_process.start()
+            print(f"Launched model server for checkpoint {model_process.ckpt_path.name} (pid {model_process.pid}); /health reports model_loading until it answers", flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.shutdown()
+        # serve_forever runs on this thread and has already returned here; shutdown() would block
+        # forever if an interrupt arrived before serve_forever started, so only close the socket.
         server.server_close()
         if model_process is not None:
             model_process.stop()

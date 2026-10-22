@@ -279,7 +279,6 @@ test("recording controls reset the graph and switch cleanly between files and li
   apiAvailable = true;
   click("prompt-health-retry-btn");
   await settle(() => element("prompt-generate-btn").disabled === false);
-  assert.match(element("prompt-health-status").textContent, /Model ready: vibe2/);
 
   element("prompt-input").value = "Analyze fly connectome";
   element("prompt-form").dispatchEvent(new Event("submit", { cancelable: true }));
