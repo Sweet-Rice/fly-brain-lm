@@ -419,6 +419,9 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         completes its in-progress token step and halts upon its next socket write or flush
         when BrokenPipeError/ConnectionResetError is raised, releasing the engine generation
         lock and resources.
+        Upstream failure semantics: if the upstream socket is reset or otherwise fails while
+        streaming, the loop ends and the downstream response is closed without `[DONE]`, so
+        the browser client reports a truncated stream instead of waiting indefinitely.
         """
         self.send_response(status)
         self.send_header("Content-Type", "text/event-stream")
@@ -484,8 +487,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 if up_target in r:
                     try:
                         chunk = resp.read1(4096)
-                    except (BlockingIOError, OSError):
+                    except BlockingIOError:
                         chunk = None
+                    except OSError:
+                        break
 
                     if chunk is not None:
                         if not chunk:

@@ -100,6 +100,13 @@ def dummy_upstream():
                     elif getattr(self.server, "delay_before_second_chunk", 0.0) > 0:
                         time.sleep(self.server.delay_before_second_chunk)
 
+                    if getattr(self.server, "reset_after_first_chunk", False):
+                        # Simulate the model process dying mid-stream: abort with an RST
+                        # instead of writing the next chunk.
+                        self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                        self.connection.close()
+                        return
+
                     try:
                         self.wfile.write(b"data: {\"choices\": [{\"delta\": {\"content\": \" world\"}}]}\n\n")
                         self.wfile.flush()
@@ -134,6 +141,7 @@ def dummy_upstream():
     server.resume_second_chunk_event = threading.Event()
     server.completion_event = threading.Event()
     server.active_client_sock = None
+    server.reset_after_first_chunk = False
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
@@ -486,6 +494,49 @@ def test_disconnect_propagates_to_upstream_cleanup(dummy_upstream):
 
         # Upstream encountered connection error when attempting next write
         assert upstream_srv.write_error in ("BrokenPipeError", "ConnectionResetError")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_upstream_reset_terminates_downstream_sse_stream(dummy_upstream):
+    """Verify an upstream reset mid-stream ends the downstream SSE response promptly.
+
+    The client keeps the chunks already forwarded and sees EOF without `[DONE]`, which the
+    browser generation client reports as a truncated (failed) stream.
+    """
+    upstream_srv, upstream_url = dummy_upstream
+    upstream_srv.reset_after_first_chunk = True
+    # Hold the reset until the client has the first chunk: on Windows an RST discards
+    # received-but-unread bytes, so resetting immediately could drop the first chunk.
+    upstream_srv.hold_second_chunk = True
+
+    server = make_server(port=0, api_url=upstream_url)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+        req_body = json.dumps({"stream": True, "prompt": "Reset test"}).encode("utf-8")
+        conn.request("POST", "/v1/completions", body=req_body, headers={"Content-Type": "application/json"})
+
+        resp = conn.getresponse()
+        assert resp.status == 200
+        assert "text/event-stream" in resp.getheader("Content-Type")
+
+        first_chunk = resp.read1(1024)
+        assert b"hello" in first_chunk
+        assert upstream_srv.second_chunk_held_event.wait(timeout=2.0)
+
+        # Model process dies: upstream resets the connection instead of sending more chunks
+        t0 = time.time()
+        upstream_srv.resume_second_chunk_event.set()
+        rest = resp.read()
+        elapsed = time.time() - t0
+        conn.close()
+
+        assert elapsed < 2.0
+        assert b"[DONE]" not in first_chunk + rest
     finally:
         server.shutdown()
         server.server_close()
