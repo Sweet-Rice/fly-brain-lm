@@ -98,6 +98,10 @@ export function validateParams(params = {}) {
   };
 }
 
+// Redact credentials and local filesystem paths from server-provided error text.
+const SECRET_PATTERN = /(?:bearer\s+[A-Za-z0-9._~+/-]+|(?:api[_-]?key|token|password|secret)\s*[:=]\s*['"]?[A-Za-z0-9._~+/-]+['"]?)/gi;
+const PATH_PATTERN = /(?:\\\\[A-Za-z0-9._-]+\\[^\s:;'"<>)]+|\b[A-Za-z]:[\\/][^\s:;'"<>)]+|\/(?:home|Users|usr|var|tmp|etc|opt|root|mnt|private|workspace)[^\s:;'"<>)]*)/g;
+
 /** @param {unknown} msg */
 function sanitizeSafeMessage(msg) {
   if (!msg || typeof msg !== 'string') return '';
@@ -105,7 +109,7 @@ function sanitizeSafeMessage(msg) {
   if (trimmed.includes('Traceback (most recent call last)') || /<[a-z][\s\S]*>/i.test(trimmed)) {
     return 'Model server returned an internal error.';
   }
-  return trimmed;
+  return trimmed.replace(SECRET_PATTERN, '[secret]').replace(PATH_PATTERN, '[path]');
 }
 
 /**
@@ -153,6 +157,30 @@ function formatSafeError(error, response = null) {
   }
 
   return 'An unexpected error occurred during generation.';
+}
+
+const MODEL_LOADING_MESSAGE =
+  'Model loading: the model server is loading its checkpoint. This page is ready; Generate unlocks automatically when the model answers.';
+const MODEL_EXITED_MESSAGE =
+  'Model stopped: the model server process exited. Restart python -m harness.app_server to relaunch it.';
+const SERVICE_UNAVAILABLE_MESSAGE =
+  'Model service unavailable: the model server is not running or is still starting. This page is ready; it checks again every 10 seconds, or use Retry Health.';
+
+/**
+ * @param {HealthSnapshot} a
+ * @param {HealthSnapshot} b
+ * @returns {boolean}
+ */
+function sameHealth(a, b) {
+  return (
+    a.status === b.status &&
+    a.ready === b.ready &&
+    a.modelId === b.modelId &&
+    a.note === b.note &&
+    a.message === b.message &&
+    a.checkpoint?.name === b.checkpoint?.name &&
+    a.checkpoint?.sha256 === b.checkpoint?.sha256
+  );
 }
 
 /**
@@ -356,6 +384,7 @@ export class GenerationController {
       note: null,
       message: 'Model status unknown',
       ready: false,
+      checkpoint: null,
     };
 
     /** @type {Set<(snapshot: GenerationClientSnapshot) => void>} */
@@ -382,7 +411,10 @@ export class GenerationController {
       usage: this.usage ? { ...this.usage } : null,
       error: this.error,
       validationErrors: { ...this.validationErrors },
-      health: { ...this.health },
+      health: {
+        ...this.health,
+        checkpoint: this.health.checkpoint ? { ...this.health.checkpoint } : null,
+      },
     };
   }
 
@@ -434,7 +466,7 @@ export class GenerationController {
       this.health = {
         ...this.health,
         status: 'checking',
-        message: 'Checking model status...',
+        message: 'Checking whether the model service is ready…',
       };
       this.notify();
     }
@@ -457,21 +489,40 @@ export class GenerationController {
       }
 
       if (!res.ok) {
-        const message = formatSafeError(null, res);
-        const hasChanged = this.health.status !== 'error' ||
-          this.health.ready !== false ||
-          this.health.message !== message;
-        this.health = {
-          status: 'error',
+        let errorType = null;
+        try {
+          const body = await res.json();
+          errorType = body?.error?.type;
+        } catch {
+          /* non-JSON error body: fall back to HTTP status guidance */
+        }
+
+        if (this.disposed || this.healthRequestId !== requestId) {
+          return this.health;
+        }
+
+        /** @type {HealthSnapshot['status']} */
+        let status = 'error';
+        let message;
+        if (errorType === 'model_loading') {
+          status = 'loading';
+          message = MODEL_LOADING_MESSAGE;
+        } else if (errorType === 'model_exited') {
+          message = MODEL_EXITED_MESSAGE;
+        } else if (errorType === 'service_unavailable') {
+          message = SERVICE_UNAVAILABLE_MESSAGE;
+        } else {
+          message = formatSafeError(null, res);
+        }
+
+        return this.applyHealth({
+          status,
           modelId: null,
           note: null,
           message,
           ready: false,
-        };
-        if (hasChanged) {
-          this.notify();
-        }
-        return this.health;
+          checkpoint: null,
+        });
       }
 
       const data = await res.json();
@@ -483,59 +534,67 @@ export class GenerationController {
       const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : null;
       const isReady = data.status === 'ok';
 
+      /** @type {{ name: string; sha256: string } | null} */
+      let checkpoint = null;
+      if (
+        isReady &&
+        data.checkpoint &&
+        typeof data.checkpoint === 'object' &&
+        typeof data.checkpoint.name === 'string' &&
+        data.checkpoint.name.trim().length > 0 &&
+        typeof data.checkpoint.sha256 === 'string' &&
+        /^[0-9a-f]{64}$/i.test(data.checkpoint.sha256)
+      ) {
+        checkpoint = {
+          name: data.checkpoint.name.trim(),
+          sha256: data.checkpoint.sha256.toLowerCase(),
+        };
+      }
+
       let message;
       if (isReady) {
-        if (modelId && note) {
-          message = `Model: ${modelId} (${note})`;
-        } else if (modelId) {
-          message = `Model: ${modelId}`;
-        } else {
-          message = 'Model ready (metadata unavailable)';
-        }
+        message = `Model ready: ${modelId ?? 'label not reported'}${note ? ` (${note})` : ''} · checkpoint ${checkpoint ? `${checkpoint.name} sha256:${checkpoint.sha256.slice(0, 12)}` : 'not reported'}`;
       } else {
         message = data.status ? `Model reported status: ${data.status}` : 'Model status unavailable';
       }
 
-      const nextStatus = isReady ? 'ready' : 'error';
-      const hasChanged = this.health.status !== nextStatus ||
-        this.health.ready !== isReady ||
-        this.health.modelId !== modelId ||
-        this.health.note !== note ||
-        this.health.message !== message;
-
-      this.health = {
-        status: nextStatus,
+      return this.applyHealth({
+        status: isReady ? 'ready' : 'error',
         modelId,
         note,
         message,
         ready: isReady,
-      };
-
-      if (hasChanged) {
-        this.notify();
-      }
-      return this.health;
+        checkpoint,
+      });
     } catch (err) {
       if (this.disposed || this.healthRequestId !== requestId) {
         return this.health;
       }
       if (err && typeof err === 'object' && 'name' in err && err.name === 'AbortError') return this.health;
       const message = formatSafeError(err);
-      const hasChanged = this.health.status !== 'error' ||
-        this.health.ready !== false ||
-        this.health.message !== message;
-      this.health = {
+      return this.applyHealth({
         status: 'error',
         modelId: null,
         note: null,
         message,
         ready: false,
-      };
-      if (hasChanged) {
-        this.notify();
-      }
-      return this.health;
+        checkpoint: null,
+      });
     }
+  }
+
+  /**
+   * Stores a health snapshot, notifying subscribers only when it changed (no polling churn).
+   * @param {HealthSnapshot} next
+   * @returns {HealthSnapshot}
+   */
+  applyHealth(next) {
+    const changed = !sameHealth(this.health, next);
+    this.health = next;
+    if (changed) {
+      this.notify();
+    }
+    return next;
   }
 
   /** @param {{intervalMs?: number}} [options] */

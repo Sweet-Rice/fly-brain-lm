@@ -2,11 +2,13 @@
 export type InferenceContractVersion = 1;
 export type FinishReason = 'length' | 'stop';
 
-/** Only readiness and model label are available; no loading phase or checkpoint identity is exported. */
+/** Readiness and model label; checkpoint identity only when harness.app_server launched the model. */
 export interface HealthResponse {
   status: 'ok';
   model: string;
   note: string;
+  /** Present only when harness.app_server launched the model (--model-ckpt): file name (never a path) and full sha256. */
+  checkpoint?: { name: string; sha256: string };
 }
 
 export interface ModelListResponse {
@@ -82,6 +84,8 @@ export type KnownErrorType =
   | 'invalid_request_error'
   | 'authentication_error'
   | 'service_unavailable'
+  | 'model_loading'
+  | 'model_exited'
   | 'timeout_error'
   | 'upstream_error';
 
@@ -132,11 +136,12 @@ export interface ValidationErrors {
 }
 
 export interface HealthSnapshot {
-  status: 'unknown' | 'checking' | 'ready' | 'error';
+  status: 'unknown' | 'checking' | 'loading' | 'ready' | 'error';
   modelId: string | null;
   note: string | null;
   message: string;
   ready: boolean;
+  checkpoint: { name: string; sha256: string } | null;
 }
 
 export interface GenerationClientSnapshot extends GenerationSnapshot {

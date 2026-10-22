@@ -15,7 +15,7 @@ This version is a source-level compatibility contract. The current server does n
 
 Requests use `Content-Type: application/json`. A configured API key is sent as `Authorization: Bearer <key>` on both health and completion requests. The browser keeps the key in memory only. Keys, prompt content, and credentials do not belong in fixtures or committed configuration.
 
-`HealthResponse.status = "ok"` means the loaded service is ready. The service exposes a model label and note, but **no checkpoint digest, implementation identity, loading phase, queue position, or training state**. A model-loading process that has not opened its HTTP listener is indistinguishable from a stopped service. The proxy reports unavailability; the UI must not fabricate a `loading` response or known checkpoint revision.
+`HealthResponse.status = "ok"` means the loaded service is ready. The model server exposes a model label and note, but no implementation identity, queue position, or training state. Loading and exit are reported only when `harness.app_server` launched the model itself via `--model-ckpt`: while that child process runs but does not yet answer, the proxy returns 503 `model_loading`; after it exits, 503 `model_exited`; and a successful `/health` gains `checkpoint: {name, sha256}` (file name and full SHA-256, never a path) once hashing finishes. Without the launcher an unavailable service is indistinguishable from a stopped or still-loading one (503 `service_unavailable`); the UI must not fabricate a loading phase or checkpoint identity.
 
 The workspace consumes text completions only. The proxy also forwards `/v1/chat/completions`, but its chat-delta format is not part of this client contract and is not an interchangeable input to `GenerationController`.
 
@@ -73,6 +73,8 @@ HTTP failures use `ErrorResponse` where available. The stable classification is 
 | 411 | `invalid_request_error` | Missing request-body length; browser `fetch` supplies this automatically for the JSON request. |
 | 413 | `invalid_request_error` | Proxy request-body limit exceeded; shorten the request. |
 | 503 | `service_unavailable` | Model service unreachable or communication failed. It may be stopped or still loading; retry readiness, not generation automatically. |
+| 503 | `model_loading` | Launcher mode only: the launched model process is running but not answering yet. Show a model-loading state; Generate stays disabled until readiness is reported. |
+| 503 | `model_exited` | Launcher mode only: the launched model process exited. Restart `python -m harness.app_server`; do not retry generation. |
 | 504 | `timeout_error` | Upstream response timed out; check the service before submitting a new run. |
 | 5xx | `upstream_error`, another type, or no usable body | Runtime/service failure. Retain partial output and present generic recovery guidance. |
 

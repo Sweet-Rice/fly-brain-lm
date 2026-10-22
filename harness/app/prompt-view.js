@@ -30,6 +30,7 @@ export const PROMPT_DOM_IDS = Object.freeze({
   USAGE: 'prompt-usage',
   FINISH_REASON: 'prompt-finish-reason',
   OUTPUT: 'prompt-output',
+  OUTPUT_EMPTY: 'prompt-output-empty',
   ANNOUNCEMENT: 'prompt-announcement',
   ERROR_PROMPT: 'prompt-error-prompt',
   ERROR_MAX_TOKENS: 'prompt-error-max-tokens',
@@ -61,6 +62,7 @@ export const PROMPT_CLASSES = Object.freeze({
   FINISH_REASON: 'prompt-finish-reason',
   OUTPUT_CONTAINER: 'prompt-output-container',
   OUTPUT: 'prompt-output',
+  OUTPUT_EMPTY: 'prompt-output-empty',
   ANNOUNCEMENT: 'prompt-announcement',
 });
 
@@ -318,7 +320,12 @@ export function mountPrompt(root, options = {}) {
   outputPre.tabIndex = 0;
   outputPre.setAttribute('aria-label', 'Model output');
 
-  outputContainer.append(outputLabel, outputPre);
+  const outputEmpty = doc.createElement('div');
+  outputEmpty.id = PROMPT_DOM_IDS.OUTPUT_EMPTY;
+  outputEmpty.className = PROMPT_CLASSES.OUTPUT_EMPTY;
+  outputEmpty.textContent = 'No output yet. Enter a prompt and press Generate (or Ctrl+Enter) once the model is ready.';
+
+  outputContainer.append(outputLabel, outputEmpty, outputPre);
 
   // Live announcement region for screen readers (announces completions/errors, not every token)
   const announcement = doc.createElement('div');
@@ -351,12 +358,16 @@ export function mountPrompt(root, options = {}) {
 
   function render(state) {
     statusBadge.textContent = `State: ${state.state}`;
+    statusBadge.setAttribute('data-state', state.state);
 
     // Output rendered with textContent to preserve Unicode whitespace and avoid HTML injection
     outputPre.textContent = state.text || '';
+    outputPre.setAttribute('data-state', state.state);
+    outputEmpty.hidden = Boolean(state.text);
 
-    // Health status display (honest: no fabricated checkpoint metadata)
+    // Health status display: checkpoint identity only when the launcher reports it
     healthStatus.textContent = state.health.message || 'Model status unknown';
+    healthStatus.setAttribute('data-status', state.health.status);
 
     // Inline validation error presentation
     promptError.textContent = state.validationErrors?.prompt || '';

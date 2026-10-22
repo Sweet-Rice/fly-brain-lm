@@ -1250,3 +1250,39 @@ pre.prompt-output {
     scroll-behavior: auto !important;
   }
 }
+
+/* Generation and model status states */
+.prompt-output-empty {
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-style: italic;
+}
+
+.prompt-status[data-state="cancelled"] {
+  border: 1px dashed #94a3b8;
+  color: var(--text);
+}
+
+.prompt-status[data-state="failed"] {
+  border: 1px solid var(--error);
+  color: var(--error);
+}
+
+pre.prompt-output[data-state="cancelled"] {
+  border-left: 3px dashed #94a3b8;
+}
+
+pre.prompt-output[data-state="failed"] {
+  border-left: 3px solid var(--error);
+}
+
+.prompt-health-status[data-status="loading"] {
+  border-color: var(--focus);
+}
+
+.prompt-health-status[data-status="error"] {
+  border-color: var(--error);
+}

@@ -514,3 +514,95 @@ test('Terminal announcement counts Unicode codepoints accurately and ignores hea
 
   dispose();
 });
+
+test('empty state is visible initially, hidden with output, visible after clear', () => {
+  const { root } = createDOM();
+  const controller = new GenerationController();
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+
+  const empty = root.getElementById(PROMPT_DOM_IDS.OUTPUT_EMPTY);
+  assert.ok(empty);
+  assert.equal(empty.hidden, false);
+  assert.equal(
+    empty.textContent,
+    'No output yet. Enter a prompt and press Generate (or Ctrl+Enter) once the model is ready.'
+  );
+
+  controller.text = 'Fly output';
+  controller.state = GENERATION_STATES.COMPLETED;
+  controller.notify();
+  assert.equal(empty.hidden, true);
+
+  const clearBtn = root.getElementById(PROMPT_DOM_IDS.CLEAR_BTN);
+  clearBtn.click();
+  assert.equal(empty.hidden, false);
+
+  dispose();
+});
+
+test('cancelled and failed set distinct data-state on status and output', () => {
+  const { root } = createDOM();
+  const controller = new GenerationController();
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+
+  const statusBadge = root.getElementById(PROMPT_DOM_IDS.STATUS);
+  const outputPre = root.getElementById(PROMPT_DOM_IDS.OUTPUT);
+
+  controller.text = 'partial';
+  controller.state = GENERATION_STATES.CANCELLED;
+  controller.notify();
+
+  assert.equal(statusBadge.getAttribute('data-state'), 'cancelled');
+  assert.equal(outputPre.getAttribute('data-state'), 'cancelled');
+  assert.equal(statusBadge.textContent, 'State: cancelled');
+
+  controller.state = GENERATION_STATES.FAILED;
+  controller.error = 'Stream truncated: connection closed before [DONE]';
+  controller.notify();
+
+  assert.equal(statusBadge.getAttribute('data-state'), 'failed');
+  assert.equal(outputPre.getAttribute('data-state'), 'failed');
+  assert.equal(statusBadge.textContent, 'State: failed');
+  assert.equal(outputPre.textContent, 'partial');
+
+  dispose();
+});
+
+test('health status exposes data-status for loading', () => {
+  const { root } = createDOM();
+  const controller = new GenerationController();
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+
+  const healthStatus = root.getElementById(PROMPT_DOM_IDS.HEALTH_STATUS);
+  const generateBtn = root.getElementById(PROMPT_DOM_IDS.GENERATE_BTN);
+
+  controller.health = {
+    status: 'loading',
+    ready: false,
+    modelId: null,
+    note: null,
+    checkpoint: null,
+    message:
+      'Model loading: the model server is loading its checkpoint. This page is ready; Generate unlocks automatically when the model answers.',
+  };
+  controller.notify();
+
+  assert.equal(healthStatus.getAttribute('data-status'), 'loading');
+  assert.ok(healthStatus.textContent.startsWith('Model loading:'));
+  assert.equal(generateBtn.disabled, true);
+
+  controller.health = {
+    status: 'ready',
+    ready: true,
+    modelId: 'm',
+    note: null,
+    checkpoint: null,
+    message: 'Model ready: m · checkpoint not reported',
+  };
+  controller.notify();
+
+  assert.equal(healthStatus.getAttribute('data-status'), 'ready');
+  assert.equal(generateBtn.disabled, false);
+
+  dispose();
+});
