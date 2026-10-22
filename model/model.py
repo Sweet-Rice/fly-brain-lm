@@ -5,6 +5,7 @@ implementation under "impl" (checkpoints written before that key existed are LEG
 follows the checkpoint's "impl". See model/README.md.
 """
 import importlib
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -42,6 +43,20 @@ def implementation(name: str):
     if missing:
         raise TypeError(f"{IMPLEMENTATIONS[name]} is missing {', '.join(missing)}; see model/README.md#personal-model")
     return module
+
+
+def supports_capability(impl_name: str, capability: str) -> bool:
+    """Whether implementation `impl_name` offers an optional feature such as "kc_mbon_memory". Implementations
+    declare tuples CAPABILITIES (offered) and UNSUPPORTED_CAPABILITIES (explicitly not offered) in their package
+    or its `model` submodule; a missing tuple is empty. Explicitly unsupported always wins."""
+    package = implementation(impl_name)
+    modules = [package]
+    submodule = f"{package.__name__}.model"
+    if hasattr(package, "__path__") and importlib.util.find_spec(submodule) is not None:
+        modules.append(importlib.import_module(submodule))
+    offered = {c for m in modules for c in getattr(m, "CAPABILITIES", ())}
+    unsupported = {c for m in modules for c in getattr(m, "UNSUPPORTED_CAPABILITIES", ())}
+    return capability in offered and capability not in unsupported
 
 
 def check_model(model, name: str) -> None:

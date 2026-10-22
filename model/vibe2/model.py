@@ -56,6 +56,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 NOTE = "fly-dopamine port of fly-brain-lm vibes (DopamineMixer)"
+CAPABILITIES = ("kc_mbon_memory",)               # optional features; see model.model.supports_capability
 
 
 @dataclass
@@ -136,7 +137,9 @@ class Dopamine(nn.Module):
 
 
 class DopamineMixer(nn.Module):
-    """The memory block. Port of fly_dopamine.py::DopamineMixer."""
+    """The memory block. Port of fly_dopamine.py::DopamineMixer.
+    memory_observer: None (default, no extra work) or a callable that _memory() calls once per token
+    with detached tensors (see _memory); set through FlyDopamineLM.set_memory_observer."""
 
     def __init__(self, cfg: Config, wiring):
         super().__init__()
@@ -163,6 +166,7 @@ class DopamineMixer(nn.Module):
         self.out_norm = nn.RMSNorm(self.C, eps=1e-5)
         self.out_proj = nn.Linear(self.C, d, bias=False)
         nn.init.normal_(self.out_proj.weight, std=0.02 / math.sqrt(2 * cfg.n_layer))
+        self.memory_observer = None
 
     def recovery(self):                                              # (H,) keep-factor r = exp(-ln2 / h)
         h = 1.0 + torch.exp(self.psi)
@@ -179,12 +183,18 @@ class DopamineMixer(nn.Module):
     def _memory(self, k, d, x, S):
         """One token of READ-then-WRITE for all heads.
         k (B, K) normalized code; d (B, H) dopamine; x (B, H, P) values; S: 3 x (B, hpl, K_l, P) states.
-        Returns y (B, H, P) and the new states."""
+        Returns y (B, H, P) and the new states.
+        With memory_observer set, it is called before returning, under no_grad, with keyword tensors:
+        S_before, S_after, delta_raw (gated write before recovery), delta_net (S_after - S_before): 3 x (B, hpl, K_l, P);
+        y_read (B, H, P) readout before the D * x skip; d_t (B, H) capped gate; cap, half_life, recovery: (H,);
+        k_code (B, K) the normalized code k."""
         dtype = S[0].dtype
+        observer = self.memory_observer
         with torch.autocast(device_type=k.device.type, enabled=False):
             k, d, x = k.to(dtype), d.to(dtype), x.to(dtype)
             r = self.recovery().to(dtype)
             ys, new = [], []
+            deltas = [] if observer is not None else None
             for lobe in range(3):
                 sl = slice(lobe * self.hpl, (lobe + 1) * self.hpl)
                 idx = getattr(self, f"lobe{lobe}")
@@ -193,10 +203,21 @@ class DopamineMixer(nn.Module):
                 S_l = S[lobe]
                 ys.append(torch.einsum("bk,bhkp->bhp", q, S_l))                  # READ first
                 dk = d[:, sl, None] * k_l[:, None, :]                            # (B, hpl, K_l)
+                if deltas is not None:                                           # telemetry only: the raw gated write
+                    deltas.append(dk[..., None] * (x[:, sl, None, :] - S_l))
                 S_l = r[sl][None, :, None, None] * (
                     S_l + dk[..., None] * (x[:, sl, None, :] - S_l))             # WRITE, then recovery
                 new.append(S_l)
-            return torch.cat(ys, 1), new
+            y = torch.cat(ys, 1)
+            if observer is not None:
+                with torch.no_grad():
+                    observer(S_before=[s.detach() for s in S], y_read=y.detach(),
+                             delta_raw=[t.detach() for t in deltas],
+                             delta_net=[a.detach() - b.detach() for a, b in zip(new, S)],
+                             S_after=[s.detach() for s in new], d_t=d.detach(), cap=self.cap,
+                             half_life=(1.0 + torch.exp(self.psi.detach())).to(dtype), recovery=r.detach(),
+                             k_code=k.detach())
+            return y, new
 
     def forward(self, u):                                            # u (B, T, d) -> (B, T, d)
         B, T, _ = u.shape
@@ -270,6 +291,10 @@ class FlyDopamineLM(nn.Module):
         """(mask (K, G) bool, lobes: 3 x 1-D long tensors partitioning range(K)) of `block`, read live."""
         mixer = self.blocks[block].mixer
         return mixer.addr.mask, (mixer.lobe0, mixer.lobe1, mixer.lobe2)
+
+    def set_memory_observer(self, observer, block: int = 0) -> None:
+        """Install (or with None remove) the memory observer of `block`'s DopamineMixer; see DopamineMixer._memory."""
+        self.blocks[block].mixer.memory_observer = observer
 
     def forward(self, idx, targets=None):                            # idx (B, T) int64
         h = self.embed(idx)

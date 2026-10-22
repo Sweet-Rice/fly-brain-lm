@@ -1,8 +1,10 @@
 """Opt-in telemetry server: same OpenAI-compatible API and visualization stream as
-model.serve.serve, plus request_lifecycle/token_step/stream_status extension messages.
+model.serve.serve, plus request_lifecycle/token_step/stream_status extension messages
+(also emits memory_summary/memory_slice with --memory-telemetry).
 
 Usage:
     python -m harness.telemetry.serve --ckpt model/checkpoints/init.pt --port 8000 --viz-port 8765 --record run.ndjson
+    python -m harness.telemetry.serve --ckpt model/checkpoints/init.pt --record run.ndjson --memory-telemetry
 """
 import argparse
 import hashlib
@@ -19,6 +21,7 @@ def checkpoint_digest(path) -> str:
 
 def main(argv=None):
     from harness.telemetry.adapter import TelemetryAdapter
+    from harness.telemetry.memory import MemoryTelemetry, MemoryTelemetryConfig
     from harness.viz_stream import stream_model
     from model.model import LEGACY_IMPL, load_checkpoint
     from model.serve.serve import Engine, make_server
@@ -36,7 +39,13 @@ def main(argv=None):
     p.add_argument("--viz-port", type=int, default=8765, help="visualization stream port (loopback only)")
     p.add_argument("--block", type=int, default=0, help="which of the 12 blocks to visualize")
     p.add_argument("--record", default=None, help="also write the visualization stream to this .ndjson file")
+    p.add_argument("--memory-telemetry", action="store_true",
+                   help="also emit KC-MBON memory_summary / memory_slice messages for --block (kc_mbon_memory models)")
+    p.add_argument("--memory-max-kc-slices", type=int, default=4,
+                   help="most active KCs sliced per step, one memory_slice per head of the KC's lobe; 0 = summaries only")
     a = p.parse_args(argv)
+    if a.memory_max_kc_slices < 0:
+        p.error("--memory-max-kc-slices must be >= 0")
 
     model, wiring, ck = load_checkpoint(a.ckpt, a.device)
     digest = checkpoint_digest(a.ckpt)
@@ -46,6 +55,12 @@ def main(argv=None):
     stream = stream_model(model, wiring, a.block, port=a.viz_port, record=a.record)[0]
     adapter = TelemetryAdapter(model, stream, block=a.block, impl=impl, model_id=a.model_id, ckpt_digest=digest)
     adapter.wrap_engine(engine)
+    memory = None
+    if a.memory_telemetry:
+        memory = MemoryTelemetry()
+        if not memory.attach(adapter, model, impl,
+                             MemoryTelemetryConfig(max_kc_slices=a.memory_max_kc_slices, block=a.block)):
+            memory = None
     note = ck.get("note", "")
     lines = []
     if note:
@@ -57,6 +72,11 @@ def main(argv=None):
     lines.append(f"OpenAI-compatible API at http://{a.host}:{srv.server_address[1]}/v1  (Ctrl-C to stop)")
     lines.append(f"visualization stream: {stream.url}  (block {a.block})")
     lines.append(f"telemetry: run {adapter.run_id} impl {impl} ckpt {digest}")
+    if a.memory_telemetry:
+        if memory is None:
+            lines.append(f"memory telemetry: unsupported by {impl}")
+        else:
+            lines.append(f"memory telemetry: block {a.block}, up to {a.memory_max_kc_slices} KC slices per step")
     if a.record:
         lines.append(f"recording: {a.record}")
     print("\n".join(lines), flush=True)
@@ -67,6 +87,8 @@ def main(argv=None):
         pass
     finally:
         srv.server_close()
+        if memory is not None:
+            memory.detach()
         adapter.remove()
         stream.close()
 

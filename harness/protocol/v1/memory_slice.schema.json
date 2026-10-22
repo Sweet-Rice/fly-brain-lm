@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "memory_slice.schema.json",
+  "title": "Fly Brain Visualization Stream v1 memory_slice",
+  "type": "object",
+  "required": [
+    "type",
+    "seq",
+    "run_id",
+    "request_id",
+    "epoch",
+    "t",
+    "scale",
+    "block",
+    "lobe",
+    "kc_id",
+    "head",
+    "k_activation",
+    "prev_rev",
+    "rev",
+    "s_before",
+    "s_after",
+    "read_vector",
+    "delta_raw",
+    "delta_net"
+  ],
+  "properties": {
+    "type": {"type": "string", "const": "memory_slice"},
+    "seq": {"type": "integer", "minimum": 0},
+    "run_id": {"type": "string", "minLength": 1},
+    "request_id": {"type": "string", "minLength": 1},
+    "epoch": {"type": "integer", "minimum": 0},
+    "t": {"type": "integer", "minimum": 0},
+    "scale": {"type": "integer", "minimum": 1},
+    "block": {"type": "integer", "minimum": 0},
+    "lobe": {"type": "integer", "minimum": 0, "maximum": 2},
+    "kc_id": {"type": "integer", "minimum": 0},
+    "head": {"type": "integer", "minimum": 0},
+    "k_activation": {"$ref": "#/$defs/quantized"},
+    "prev_rev": {"type": "integer", "minimum": 0},
+    "rev": {"type": "integer", "minimum": 1},
+    "s_before": {"$ref": "#/$defs/quantizedVector"},
+    "s_after": {"$ref": "#/$defs/quantizedVector"},
+    "read_vector": {"$ref": "#/$defs/quantizedVector"},
+    "delta_raw": {"$ref": "#/$defs/quantizedVector"},
+    "delta_net": {"$ref": "#/$defs/quantizedVector"}
+  },
+  "additionalProperties": {"$ref": "#/$defs/extensionValue"},
+  "x-flybrain-semantic-rules": [
+    "real value = integer / scale for quantized values",
+    "rev = prev_rev + 1",
+    "rev counts observed writes of this block since the request started and S at rev 0 is the zero initial state",
+    "t equals the token_step t of the same request_id",
+    "vector lengths equal head_dim"
+  ],
+  "$defs": {
+    "quantized": {
+      "anyOf": [
+        {"type": "integer"},
+        {"type": "string", "enum": ["nan", "inf", "-inf", "missing"]}
+      ]
+    },
+    "quantizedVector": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/quantized"},
+      "minItems": 1
+    },
+    "extensionValue": {
+      "anyOf": [
+        {"type": "integer"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/extensionValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/extensionValue"}}
+      ]
+    }
+  }
+}

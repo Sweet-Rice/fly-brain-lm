@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from model.wiring import Wiring
 
 TEMPORARY_NOTE = "TEMPORARY scaffold: untrained, placeholder architecture details"
+CAPABILITIES = ("kc_mbon_memory",)               # optional features; see model.model.supports_capability
 
 
 @dataclass
@@ -83,7 +84,9 @@ class FlyAddress(nn.Module):
 
 class FlyMemory(nn.Module):
     """Per token: READ the memory, then WRITE it. Each lobe has its own KC columns and its own
-    5 heads. State per lobe: S (B, 5, K_lobe, 48). Math runs in at least fp32."""
+    5 heads. State per lobe: S (B, 5, K_lobe, 48). Math runs in at least fp32.
+    memory_observer: None (default, no extra work) or a callable that step() calls once per token
+    with detached tensors (see step); set through FlyLM.set_memory_observer."""
 
     def __init__(self, cfg: Config, kc_class: torch.Tensor):
         super().__init__()
@@ -92,6 +95,7 @@ class FlyMemory(nn.Module):
             self.register_buffer(f"lobe{l}", (kc_class == l).nonzero().squeeze(1), persistent=False)
         hl = torch.tensor(cfg.half_life_init).repeat_interleave(self.hpl)   # (15,)
         self.psi = nn.Parameter(torch.log(hl - 1.0))         # half-life h = 1 + exp(psi)
+        self.memory_observer = None
 
     def recovery(self):                                      # (15,) per-token keep-factor r
         h = 1.0 + torch.exp(self.psi)
@@ -102,12 +106,17 @@ class FlyMemory(nn.Module):
                 for l in range(3)]
 
     def step(self, code_t, v_t, d_t, S):
-        """code_t (B, K), v_t (B, 15, 48), d_t (B, 15), S: 3 x (B, 5, K_l, 48) -> y_t (B, 15, 48), new S"""
+        """code_t (B, K), v_t (B, 15, 48), d_t (B, 15), S: 3 x (B, 5, K_l, 48) -> y_t (B, 15, 48), new S
+        With memory_observer set, it is called before returning, under no_grad, with keyword tensors:
+        S_before, S_after, delta_raw (gated write before recovery), delta_net (S_after - S_before): 3 x (B, 5, K_l, 48);
+        y_read (B, 15, 48) readout; d_t (B, 15) gate used; cap, half_life, recovery: (15,); k_code (B, K) code used."""
         dt, H = S[0].dtype, self.hpl
+        observer = self.memory_observer
         with torch.autocast(device_type=code_t.device.type, enabled=False):
             code_t, v_t, d_t = code_t.to(dt), v_t.to(dt), d_t.to(dt)
             r = self.recovery().to(dt)
             ys, S_new = [], []
+            deltas = [] if observer is not None else None
             for l in range(3):
                 k = code_t[:, getattr(self, f"lobe{l}")]          # (B, K_l)
                 vl = v_t[:, l * H:(l + 1) * H]                    # (B, 5, 48)
@@ -119,8 +128,20 @@ class FlyMemory(nn.Module):
                 ys.append(num / den[:, None, None])
                 # WRITE: move active columns toward the new value, then recover
                 dk = dl[:, :, None] * k[:, None, :]               # (B, 5, K_l)
+                if deltas is not None:                            # telemetry only: the raw gated write
+                    deltas.append(dk[..., None] * (vl[:, :, None, :] - S[l]))
                 S_new.append(rl[None, :, None, None] * (S[l] + dk[..., None] * (vl[:, :, None, :] - S[l])))
-        return torch.cat(ys, dim=1), S_new                        # (B, 15, 48)
+            y = torch.cat(ys, dim=1)                              # (B, 15, 48)
+            if observer is not None:
+                with torch.no_grad():
+                    observer(S_before=[s.detach() for s in S], y_read=y.detach(),
+                             delta_raw=[x.detach() for x in deltas],
+                             delta_net=[a.detach() - b.detach() for a, b in zip(S_new, S)],
+                             S_after=[s.detach() for s in S_new], d_t=d_t.detach(),
+                             cap=torch.full((3 * H,), 0.99, dtype=dt, device=d_t.device),
+                             half_life=(1.0 + torch.exp(self.psi.detach())).to(dt), recovery=r.detach(),
+                             k_code=code_t.detach())
+        return y, S_new
 
     def forward(self, code, v, d):
         """Slow loop. code (B, T, K), v (B, T, 15, 48), d (B, T, 15) -> y (B, T, 15, 48)"""
@@ -214,6 +235,10 @@ class FlyLM(nn.Module):
         if addr.theta.shape != addr.mask.shape or addr.receptors.out_features != addr.mask.shape[1]:
             raise ValueError("address mask must match KC weights and the glomerulus projection")
         return addr.mask, (mem.lobe0, mem.lobe1, mem.lobe2)
+
+    def set_memory_observer(self, observer, block: int = 0) -> None:
+        """Install (or with None remove) the memory observer of `block`'s FlyMemory; see FlyMemory.step."""
+        self.blocks[block].mem.memory_observer = observer
 
     def forward(self, idx, targets=None):                     # idx: (B, T) int64
         x = self.emb(idx)                                     # (B, T, d)
