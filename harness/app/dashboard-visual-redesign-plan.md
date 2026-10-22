@@ -1,6 +1,6 @@
 # Dashboard Visual Redesign Plan
 
-- **Status**: Plan only; this change implements nothing.
+- **Status**: Implemented in [#46](https://github.com/Sweet-Rice/fly-brain-lm/pull/46). The selection overlay uses fuchsia (incoming) and coral (outgoing) because the planned cyan and amber matched KC and MBON nodes. Rendering gates were checked on the SwiftShader software WebGPU adapter; no hardware adapter was available. Measurements and smoke evidence are in the [app README](README.md#fly-brain-schematic).
 - **Date**: 2026-10-21
 - **Related**: [#41](https://github.com/Sweet-Rice/fly-brain-lm/issues/41) run/token telemetry and [#42](https://github.com/Sweet-Rice/fly-brain-lm/issues/42) KC–MBON memory/dopamine telemetry. Both are future backend work and not prerequisites.
 
