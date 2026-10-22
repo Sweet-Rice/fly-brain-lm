@@ -271,3 +271,93 @@ Semantics:
 - `resync`: Sent to a newly connected harness immediately after its mapping frame (`dropped_steps: 0`), whatever the queue capacity. Reconnecting never resets server `t`.
 - `epoch_reset`: Sent to all active consumers (harnesses and recording) immediately after a replacement mapping frame (`dropped_steps: 0`), whatever the queue capacity, signaling the incremented `epoch` and restart of `t` at 0.
 - `gap`: Per consumer. `dropped_steps` counts the messages (`fire` or extension) that consumer lost since its previous gap marker, including queued messages a replacement mapping discarded. The marker comes first: it is queued immediately before the next message the consumer accepts, and only when the consumer's queue has room for both (an empty queue always has); otherwise that message is lost as well and counted in the same marker. Its `seq` is the value reserved for that message, so the consumer sees mapping, messages accepted before the loss, `gap`, then the resumed message, with strictly increasing `seq`.
+
+The normative memory schemas are [`memory_summary.schema.json`](memory_summary.schema.json) and [`memory_slice.schema.json`](memory_slice.schema.json).
+
+### `memory_summary` message
+
+A `memory_summary` message reports recurrent memory norms, gating levels, and decay dynamics across all computational heads for a block at step `t`.
+
+```json
+{"type":"memory_summary","seq":12,"run_id":"run-4f8a12","request_id":"req-001","epoch":0,"t":5,"scale":10000,"block":0,"heads":3,"head_dim":4,"dtype":"float32","prev_rev":4,"rev":5,"dopamine_gate":[1200,4500,3100],"dopamine_cap":[9900,9900,9900],"recovery_half_life":[150000,120000,200000],"recovery_factor":[9548,9439,9659],"s_norm_before":[12340,8560,10420],"s_norm_after":[12850,8910,10790],"s_delta_norm":[1420,950,1120]}
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---:|---|
+| `type` | string | yes | Always `"memory_summary"`. |
+| `seq` | integer | yes | Strictly increasing sequence number within `run_id`. |
+| `run_id` | string | yes | Generation run identifier. |
+| `request_id` | string | yes | Generation request identifier. |
+| `epoch` | integer | yes | Mapping epoch of the stream at emission time, as reported with the run's token telemetry. |
+| `t` | integer | yes | Model step index at which this write happened; equals the `t` of the token telemetry for the same step and `request_id`. |
+| `scale` | integer | yes | Fixed-point scale factor (real value = integer / `scale`). |
+| `block` | integer | yes | Model layer/block index. |
+| `heads` | integer | yes | Total number of computational heads ($H = 3 \times \text{heads\_per\_lobe}$). |
+| `head_dim` | integer | yes | Feature dimension per head ($P$). |
+| `dtype` | string | yes | Memory tensor data type without `"torch."` prefix (e.g. `"float32"`). |
+| `prev_rev` | integer | yes | Revision number before this update. |
+| `rev` | integer | yes | Revision number after this update (`prev_rev + 1`). |
+| `dopamine_gate` | array of Quantized | yes | Dopamine gate $d_t$ actually used for the write, per head, after the ceiling (length `heads`). |
+| `dopamine_cap` | array of Quantized | yes | Gate ceiling per head: `vibe` 0.99 for every head; `vibe2` 0.99 except the α/β heads, which use `ab_dopamine_max` (length `heads`). |
+| `recovery_half_life` | array of Quantized | yes | Recovery half-life $h = 1 + e^{\psi}$ per head, in steps (length `heads`). |
+| `recovery_factor` | array of Quantized | yes | Per-step keep factor $r = 2^{-1/h}$ per head (length `heads`). |
+| `s_norm_before` | array of Quantized | yes | Frobenius norm of $S$ before update per head (length `heads`). |
+| `s_norm_after` | array of Quantized | yes | Frobenius norm of $S$ after update per head (length `heads`). |
+| `s_delta_norm` | array of Quantized | yes | Frobenius norm of net update $S_{\text{after}} - S_{\text{before}}$ per head (length `heads`). |
+
+A Quantized value is an integer or one of the strings `"nan"`, `"inf"`, `"-inf"`, or `"missing"`.
+
+Constraints:
+
+- Real values MUST be quantized as `round(value * scale)` with half-to-even rounding; nonfinite floats MUST be encoded as `"nan"`, `"inf"`, or `"-inf"`; `"missing"` is reserved for masked positions.
+- Emission MUST occur only during an active request at a valid stepped token index `t >= 0`, never when `t = -1`.
+- `rev` MUST start at 1 on the first write of a request (`prev_rev = 0`), increment by 1 on each observed write, and reset when `request_id` changes. Memory state $S$ at `rev = 0` is the transient zero initial state, distinct from learned model parameters.
+- Messages are emitted on writes satisfying `(rev - 1) % summary_stride == 0`.
+- For the same step `t`, the `memory_summary` message MUST precede all `memory_slice` messages.
+- A receiver MUST NOT difference values across a revision gap (where `prev_rev` does not equal the last `rev` processed for that request and block); the next received full value MUST establish a new baseline.
+- Heads are computational heads ($3 \times \text{heads\_per\_lobe}$; lobe 0 $\gamma$, 1 $\alpha/\beta$, 2 $\alpha'/\beta'$), not anatomical MBON or DAN neurons.
+- Model implementations declaring `kc_mbon_memory` unsupported (such as the personal template) MUST NOT emit memory messages and MUST NOT synthesize fake memory tensors.
+- Vector lengths for all vector fields in `memory_summary` MUST equal `heads`.
+
+### `memory_slice` message
+
+A `memory_slice` message provides high-resolution memory inspection for an individual active Kenyon cell within one computational head at step `t`.
+
+```json
+{"type":"memory_slice","seq":13,"run_id":"run-4f8a12","request_id":"req-001","epoch":0,"t":5,"scale":10000,"block":0,"lobe":0,"kc_id":42,"head":0,"k_activation":8500,"prev_rev":4,"rev":5,"s_before":[1020,530,-210,840],"s_after":[1165,602,-177,898],"read_vector":[2150,-1400,3200,900],"delta_raw":[200,100,25,100],"delta_net":[145,72,33,58]}
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---:|---|
+| `type` | string | yes | Always `"memory_slice"`. |
+| `seq` | integer | yes | Strictly increasing sequence number within `run_id`. |
+| `run_id` | string | yes | Generation run identifier. |
+| `request_id` | string | yes | Generation request identifier. |
+| `epoch` | integer | yes | Mapping epoch at emission time. |
+| `t` | integer | yes | Step index of the current request token. |
+| `scale` | integer | yes | Fixed-point scale factor (real value = integer / `scale`). |
+| `block` | integer | yes | Model layer/block index. |
+| `lobe` | integer | yes | KC lobe index (0: $\gamma$, 1: $\alpha/\beta$, 2: $\alpha'/\beta'$). |
+| `kc_id` | integer | yes | Global Kenyon cell identifier. |
+| `head` | integer | yes | Global computational head index. |
+| `k_activation` | Quantized | yes | KC code value used for the write: `vibe` top-k code scaled into [0, 1]; `vibe2` code divided by its maximum. |
+| `prev_rev` | integer | yes | Revision number before this update. |
+| `rev` | integer | yes | Revision number after this update (`prev_rev + 1`). |
+| `s_before` | array of Quantized | yes | KC row of $S$ before step (length `head_dim`). |
+| `s_after` | array of Quantized | yes | KC row of $S$ after step (length `head_dim`). |
+| `read_vector` | array of Quantized | yes | Associative readout $\mathbf{y}_{\text{read}}$ for this head before skip connection (length `head_dim`). |
+| `delta_raw` | array of Quantized | yes | Raw gated write update before recovery (length `head_dim`). |
+| `delta_net` | array of Quantized | yes | Net update row $S_{\text{after}} - S_{\text{before}}$ (length `head_dim`). |
+
+Constraints:
+
+- Real values MUST be quantized as `round(value * scale)` with half-to-even rounding; nonfinite floats MUST be encoded as `"nan"`, `"inf"`, or `"-inf"`; `"missing"` is reserved for masked positions.
+- Emission MUST occur only during an active request at a valid stepped token index `t >= 0`, never when `t = -1`.
+- For each write satisfying `(rev - 1) % slice_stride == 0`, slices MUST be emitted for up to `max_kc_slices` KCs with addressing activation $k > 0$, ranked by descending activation with ties broken by lower `kc_id`.
+- For each selected KC, one `memory_slice` MUST be emitted per local computational head of that KC's lobe in head order.
+- `read_vector` represents the associative readout $\mathbf{y}_{\text{read}}$ before any skip connection (such as the vibe2 $D \odot x$ skip); it is identical for every KC of that head at that `t`.
+- `delta_raw` is the raw gated write $d \cdot k \cdot (x - S_{\text{before}})$ before recovery; `delta_net` is the actual net update $S_{\text{after}} - S_{\text{before}}$.
+- `rev` MUST start at 1 on the first write (`prev_rev = 0`). A receiver MUST NOT difference values across a revision gap; the new slice establishes a new baseline.
+- Memory state $S$ is transient per-request state (zero at request start), not learned parameters.
+- Vector lengths for `s_before`, `s_after`, `read_vector`, `delta_raw`, and `delta_net` MUST equal `head_dim`.
+- Model implementations declaring `kc_mbon_memory` unsupported MUST NOT emit memory messages.

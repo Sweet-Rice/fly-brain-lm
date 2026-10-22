@@ -368,3 +368,95 @@ def test_extension_schemas_accept_examples_and_reject_floats_booleans_and_nulls(
             bad_ns_str[ns_key] = "not_digits"
             with pytest.raises(ValidationError):
                 validator.validate(bad_ns_str)
+
+
+def test_memory_extension_schemas_validate_examples_and_reject_non_v1_scalars():
+    summary_schema = load_json(ROOT / "memory_summary.schema.json")
+    slice_schema = load_json(ROOT / "memory_slice.schema.json")
+
+    summary_example = {
+        "type": "memory_summary",
+        "seq": 0,
+        "run_id": "run-test",
+        "request_id": "req-test",
+        "epoch": 0,
+        "t": 1,
+        "scale": 10000,
+        "block": 0,
+        "heads": 3,
+        "head_dim": 4,
+        "dtype": "float32",
+        "prev_rev": 0,
+        "rev": 1,
+        "dopamine_gate": [1000, 2000, "nan"],
+        "dopamine_cap": [9900, 9900, 9900],
+        "recovery_half_life": [150000, 150000, 150000],
+        "recovery_factor": [9500, 9500, 9500],
+        "s_norm_before": [10000, 10000, 10000],
+        "s_norm_after": [10500, 10500, 10500],
+        "s_delta_norm": [500, 500, 500],
+    }
+
+    slice_example = {
+        "type": "memory_slice",
+        "seq": 1,
+        "run_id": "run-test",
+        "request_id": "req-test",
+        "epoch": 0,
+        "t": 1,
+        "scale": 10000,
+        "block": 0,
+        "lobe": 0,
+        "kc_id": 42,
+        "head": 0,
+        "k_activation": 8500,
+        "prev_rev": 0,
+        "rev": 1,
+        "s_before": [100, 200, 300, 400],
+        "s_after": [110, 210, 310, 410],
+        "read_vector": [500, 600, 700, 800],
+        "delta_raw": [10, 10, 10, 10],
+        "delta_net": [9, 9, 9, 9],
+    }
+
+    cases = [
+        (summary_schema, summary_example, "dopamine_cap"),
+        (slice_schema, slice_example, "s_before"),
+    ]
+
+    for schema, example, vector_key in cases:
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema)
+        validator.validate(example)
+        assert_integer_or_string_scalars(example)
+        assert ContractReceiver().process(json.dumps(example)) == {"action": "ignore_message"}
+
+        bad_float = deepcopy(example)
+        bad_float[vector_key][0] = 0.5
+        with pytest.raises(ValidationError):
+            validator.validate(bad_float)
+
+        bad_bool = deepcopy(example)
+        bad_bool["epoch"] = True
+        with pytest.raises(ValidationError):
+            validator.validate(bad_bool)
+
+        bad_none = deepcopy(example)
+        bad_none["run_id"] = None
+        with pytest.raises(ValidationError):
+            validator.validate(bad_none)
+
+        bad_string = deepcopy(example)
+        bad_string[vector_key][0] = "1.5"
+        with pytest.raises(ValidationError):
+            validator.validate(bad_string)
+
+        bad_seq = deepcopy(example)
+        del bad_seq["seq"]
+        with pytest.raises(ValidationError):
+            validator.validate(bad_seq)
+
+        bad_t = deepcopy(example)
+        bad_t["t"] = -1
+        with pytest.raises(ValidationError):
+            validator.validate(bad_t)

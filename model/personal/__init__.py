@@ -27,10 +27,18 @@ Model contract (serving and visualization use these; checked at build and load):
                                    tensors partitioning range(K) (0 gamma, 1 alpha/beta, 2 alpha'/beta').
                                    Raises IndexError for a block that does not exist.
 
+Optional capability declarations (read by model.model.supports_capability; a missing tuple is empty):
+  CAPABILITIES                  tuple of optional features this model offers, e.g. "kc_mbon_memory" (KC-MBON
+                                   memory telemetry; the model must then also provide set_memory_observer).
+  UNSUPPORTED_CAPABILITIES      features explicitly not offered. This template keeps no KC-MBON memory state,
+                                   so memory telemetry reports it unsupported and emits nothing.
+
 Intra-package imports must be relative (`from .x import y`) so this package can be moved.
 """
 
 NOTE = "personal model"
+CAPABILITIES = ()
+UNSUPPORTED_CAPABILITIES = ("kc_mbon_memory",)
 
 
 def build(wiring, config=None):
