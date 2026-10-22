@@ -177,7 +177,7 @@ Every mapping carries its version. A receiver MUST check every mapping, includin
 
 ## Extension messages (additive)
 
-The visualization stream optionally carries additive run and token telemetry messages from an opt-in producer (`python -m harness.telemetry.serve`, built on `harness/telemetry/adapter.py`). Existing `mapping` and `fire` messages are unchanged and keep their byte-for-byte form; legacy v1 receivers ignore the unknown types per [§6](#6-receiver-rules). Extension messages are sent only after a mapping, so the mapping is still the first message of every connection and recording.
+The visualization stream optionally carries additive run and token telemetry messages from an opt-in producer (`python -m harness.telemetry.serve`, built on `harness/telemetry/adapter.py`), and with `--memory-telemetry` also KC–MBON memory messages (`harness/telemetry/memory.py`). Existing `mapping` and `fire` messages are unchanged and keep their byte-for-byte form; legacy v1 receivers ignore the unknown types per [§6](#6-receiver-rules). Extension messages are sent only after a mapping, so the mapping is still the first message of every connection and recording.
 
 Scalar rules: extension messages carry integer and string scalars only; a producer MUST NOT emit floats, Booleans, or nulls. Nanosecond wall-clock timestamps (`*_ns`) exceed 2^53 − 1 and are decimal strings (`^[0-9]+$`). Relative latencies (`*_rel_us`) are non-negative integer microseconds since the request started. Server time (`server_time_ms`) is integer milliseconds (`time.time_ns() // 1_000_000`). Clocks of different machines and processes are not comparable, so consumers SHOULD correlate events by `seq`, `t`, and `request_id`, not by wall clocks.
 
@@ -361,3 +361,25 @@ Constraints:
 - Memory state $S$ is transient per-request state (zero at request start), not learned parameters.
 - Vector lengths for `s_before`, `s_after`, `read_vector`, `delta_raw`, and `delta_net` MUST equal `head_dim`.
 - Model implementations declaring `kc_mbon_memory` unsupported MUST NOT emit memory messages.
+
+### Memory tensor registry
+
+Producer: `python -m harness.telemetry.serve --memory-telemetry [--memory-max-kc-slices N]` attaches `harness.telemetry.memory.MemoryTelemetry` to the memory of block `--block` (default 0) through `set_memory_observer`. An implementation without the `kc_mbon_memory` capability prints `memory telemetry: unsupported by <impl>` at startup and emits no memory message; run and token telemetry continue unchanged.
+
+The observed model calls the collector once per memory write (one model step) with the detached tensors below. Notation: `B` batch (1 when served; messages report batch element 0), `hpl` = `heads_per_lobe` from the checkpoint config, `H = 3 × hpl`, `K` KCs of the block, `K_l` the KCs of lobe `l` (`kc_topology(block)[1][l]`), `P` = `head_dim`. Row `i` of lobe `l`'s state is global KC `kc_topology(block)[1][l][i]`; local head `j` of lobe `l` is global head `l × hpl + j`. The memory dtype (`dtype` in `memory_summary`) is `S[0].dtype`, created at request start as `promote_types(value-path parameter dtype, float32)`: the step casts the code, gate and values to it and computes in it with autocast disabled. Wire values are quantized from float64 copies.
+
+| Tensor | Shape | Scope | Dtype source | Meaning | Wire fields |
+|---|---|---|---|---|---|
+| `S_before` | 3 × `(B, hpl, K_l, P)` | per request, per block; transient | memory dtype | Recurrent KC→MBON state of each lobe before this write. Zero at request start (`rev` 0). | `s_norm_before`, `s_before` |
+| `S_after` | 3 × `(B, hpl, K_l, P)` | per request, per block; transient | memory dtype | State after write and recovery: $r \odot (S_{\text{before}} + \Delta_{\text{raw}})$. Becomes the next step's `S_before`. | `s_norm_after`, `s_after` |
+| `y_read` | `(B, H, P)` | per step, per block | memory dtype | Associative readout of `S_before` (read happens before the write). `vibe`: $\sum_k k\,S / \max(\sum_k k, 10^{-6})$. `vibe2`: $\sum_k \frac{k}{\sum k + 10^{-6}} S$, before the $D \odot x$ skip. Output gating and projection come later and are not included. | `read_vector` |
+| `delta_raw` | 3 × `(B, hpl, K_l, P)` | per step, per block | memory dtype | Gated write before recovery, $d \cdot k \cdot (v - S_{\text{before}})$. Here $v$ is the head value: in `vibe`, the causal-conv value; in `vibe2`, $x = \mathrm{silu}(\text{conv value})$. | `delta_raw` |
+| `delta_net` | 3 × `(B, hpl, K_l, P)` | per step, per block | memory dtype | Net change $S_{\text{after}} - S_{\text{before}}$, recovery decay included. | `s_delta_norm`, `delta_net` |
+| `d_t` | `(B, H)` | per step, per block | memory dtype | Dopamine gate the write used, ceiling applied. `vibe`: $0.99\,\sigma(W u)$. `vibe2`: $\mathrm{cap} \odot \sigma(W_d u + b_d)$. | `dopamine_gate` |
+| `cap` | `(H,)` | per model, per block; constant | `vibe`: memory dtype; `vibe2`: the non-persistent `DopamineMixer.cap` buffer (module dtype) | Gate ceiling. `vibe`: 0.99 for every head. `vibe2`: 0.99, except α/β heads `hpl … 2·hpl − 1`, which use `ab_dopamine_max`. | `dopamine_cap` |
+| `half_life` | `(H,)` | per model, per block; fixed during inference | memory dtype | Recovery half-life in steps, $h = 1 + e^{\psi}$, from the learned parameter `psi`. | `recovery_half_life` |
+| `recovery` | `(H,)` | per model, per block; fixed during inference | memory dtype | Per-step keep factor $r = 2^{-1/h}$ (`vibe` `0.5 ** (1 / h)`, `vibe2` `exp(-ln 2 / h)`). | `recovery_factor` |
+| `k_code` | `(B, K)` | per step, per block | memory dtype | KC code used for the read and the write, with columns aligned with the rows of `kc_topology(block)`'s mask. `vibe`: the top-k address code, already scaled into [0, 1] by its maximum. `vibe2`: the address code divided by (its maximum + 10⁻⁶). The raw, unnormalized `vibe2` code is not exported. | `kc_id` selection (`k > 0`), `k_activation` |
+
+- MBON targets are computational heads, 3 lobes × `heads_per_lobe` (15 for `heads_per_lobe` 5). They are not anatomical MBON or DAN neurons or connectome body IDs. `d_t` is a learned per-head gate, not a spiking dopamine neuron.
+- `S` is transient activation state. `model.stream` allocates it as zeros at request start, every block has its own copy, and it is discarded at the end of the request. It is never part of a checkpoint or `state_dict`. Learned parameters (`psi`, `D`, projection and address weights) and fixed buffers (connectome `mask`, lobe index buffers) are not memory state. A write changes only `S`, and memory messages never report parameter changes.
