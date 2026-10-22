@@ -195,6 +195,82 @@ mapping/fire recording showed the empty-timeline explanation. Keyboard focus rea
 the token list and End scrolled it; 390×844 and 1024×768 layouts had no horizontal
 overflow. This is functional browser evidence, not a native-GPU performance benchmark.
 
+## Memory / dopamine inspector
+
+Use the same two-terminal timeline setup above, adding `--memory-telemetry` to the
+telemetry server command:
+
+```console
+python -m harness.telemetry.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767 --memory-telemetry --record /tmp/flybrain-memory.ndjson
+python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
+```
+
+Open `http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream` and generate a
+request. On Windows substitute writable `$env:TEMP/...` paths for `/tmp/...` as in
+the timeline setup. `vibe` and `vibe2` export memory; unsupported implementations
+and streams without the opt-in flag leave the inspector empty without disabling
+the graph or timeline. `--memory-max-kc-slices 0` exports summaries only; the
+default selects up to four active KCs per write and exports each head of their lobe.
+
+- **Observed write** follows the latest write by default. Select a retained
+  request/block/revision/step to hold it while new events arrive. Run and server
+  epoch are shown separately; graph receiver local epochs are not interchangeable.
+- The summary table reports dopamine gate/ceiling, recovery half-life in steps,
+  per-step keep factor, before/after memory Frobenius norms and net update norm for
+  each computational head. Heads and gates are model units, not anatomical MBON/DAN
+  neurons. `S` is transient per-request recurrent state, not learned parameters.
+- Select an observed KC/lobe/head slice to inspect each feature's state before and
+  after the write, raw gated update, net update including recovery, and associative
+  read vector before a skip connection. The readout belongs to the head, not the
+  individual KC. Wire KC indices are not graph node IDs or connectome body IDs;
+  the inspector does not infer a graph selection from them.
+- Fixed-point values display as `integer / scale`; `nan`, `inf`, `-inf` and
+  `missing` remain literal, and missing data never becomes zero. Fields are
+  independently quantized, so displayed rounded values need not subtract exactly.
+- Retains 16 observed writes and up to 32 slices per write, with omission counts.
+  Explicit stream gaps and revision gaps/partial baselines are reported. Full wire
+  values establish their own baseline: the UI never computes differences between
+  observed revisions. A gap may represent strided sampling or delivery loss;
+  only `stream_status: gap` proves messages were dropped. Slice-only writes are
+  valid when independent producer strides omit a summary; unavailable summary data
+  is explained. Summary-only writes do not imply other KCs or slices were zero.
+- Both tables are labelled keyboard-focusable scroll regions. Write and slice
+  selectors preserve focus, streaming renders are batched, and updates are not
+  announced per write. Source changes, disconnects, restarts, replacement mappings
+  and resyncs clear the inspector. File playback uses the existing synthetic fire
+  cadence and does not reconstruct unobserved memory writes.
+
+`test/fixtures/memory.ndjson` is a small **synthetic** conformance example for
+browser inspection and integration tests, including fixed-point special values.
+The memory tests cover validation, shapes, revisions, orphan slices, bounded
+retention and snapshots, with a shared recording test that also checks the #55
+timeline and graph step counter.
+
+### Memory inspector and timeline regression verification
+
+Checked on 2026-10-22 in the in-app Chromium browser using existing untrained
+`vibe` and `vibe2` scratch checkpoints with the opt-in memory server. Both produced
+real summary/slice tables with 15 heads, 48 features and up to 20 exported slices
+per write. Write/head selection worked, a held write survived a subsequent request,
+and the memory-enabled timeline retained completed requests, final unprocessed
+tokens and a cancelled request. No false delivery gap or dropped-message count
+appeared from interleaved memory messages.
+
+A real `vibe2` capture replayed at 4× with Pause/Play/Restart; restart restored 13
+writes and 14 token rows without accumulation. The committed synthetic fixture
+and controlled extensions checked server epoch 7, fixed-point `0.125`/`-0.04`,
+literal nonfinite/missing values, explicit delivery and revision gaps, orphan
+slices and summary-only states. Twenty synthetic writes retained 16 with four
+omissions. Timeline-only and legacy mapping/fire recordings left memory empty;
+the timeline-only final token remained unprocessed, and source changes cleared
+both panels. At 390×844 and 1024×768 there was no document horizontal overflow;
+Right scrolled the focused head table horizontally and End reached the bottom of
+the feature table. These are functional checks, not native-GPU performance measurements.
+
+Final frontend suite: **223 tests passed**, including the #55 timeline regression;
+`npm run typecheck` and `git diff --check` passed. The inspector uses the existing
+telemetry and adds no dependency, build step or serving-engine modification.
+
 ## Run from a fresh checkout (offline review)
 
 Python 3 serves the static application; there are no frontend dependencies, build
@@ -399,9 +475,10 @@ interface for submitting generation requests to the local model reverse proxy:
     `completed`, `cancelled`, and `failed`.
   - Accessible announcements (`#prompt-announcement`) announce terminal completion or
     errors without flooding screen readers on every token chunk.
-- **Future timeline and memory panels**:
-  - Timeline and memory backend integration issues will be linked in a follow-up PR later
-    (no placeholder doc links are created).
+- **Telemetry inspection**:
+  - The [run/token timeline](#run--token-timeline) and
+    [memory/dopamine inspector](#memory--dopamine-inspector) consume the opt-in
+    backend telemetry without coupling prompt generation to visualization availability.
 ### Activity highlights
 
 Every accepted source-to-destination pair brightens its entire directed edge,
