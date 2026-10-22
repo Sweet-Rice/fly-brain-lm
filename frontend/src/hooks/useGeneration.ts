@@ -7,6 +7,7 @@ import type {
   GenerationClientSnapshot,
   GenerationInput,
   GenerationResult,
+  GenerationSubmitOptions,
 } from '../../../harness/app/inference-contract/v1/types.js';
 
 export function useGeneration() {
@@ -38,8 +39,10 @@ export function useGeneration() {
   }, [controller]);
 
   const submit = useCallback(
-    (input: GenerationInput): Promise<GenerationResult> =>
-      controller.submit(input),
+    (
+      input: GenerationInput,
+      options?: GenerationSubmitOptions,
+    ): Promise<GenerationResult> => controller.submit(input, options),
     [controller],
   );
   const cancel = useCallback(() => controller.cancel(), [controller]);

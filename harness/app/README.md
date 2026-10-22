@@ -1,21 +1,79 @@
-# Integrated browser workspace
+# Integrated browser workspace and shared atlas module
 
-This browser workspace pairs a WebGPU graph activity viewer with an integrated
-prompt composer and neuron inspector. Built with no-build vanilla ES modules, the
-public mount functions (`mountPrompt`, `mountInspector`) return disposers, while the
-core inference controller (`generation.js`), neuron index (`inspector.js`), and protocol
-parsers (`protocol.js`) contain DOM-free logic so that a future React or other UI
-port can import and reuse the same state machines and indexing without DOM coupling
-or provisional aliases (`.controller`, `.CLASSES`). Existing visualization sources
-and receivers are unaffected and operate normally even when the model API is missing
-or unstarted. The existing `harness/example/` Canvas demo is unchanged.
+This package provides both a standalone no-build browser workspace (`harness/app/index.html`)
+and the shared WebGPU live brain module (`harness/app/live-atlas.js`) consumed by the React
+frontend workspace (`frontend/`). While mount functions (`mountPrompt`, `mountInspector`,
+`mountLiveAtlas`) own their supplied DOM roots, the core inference controller (`generation.js`),
+neuron index (`inspector.js`), protocol receiver (`protocol.js`), and layout math are pure,
+allowing React or other UI environments to import and reuse them without duplicate client logic.
+
+The standalone dashboard in `index.html` retains offline recording playback controls, the
+run/token timeline, and memory/dopamine inspector tables. These telemetry and playback
+surfaces remain exclusively in the legacy dashboard and are not part of the React workspace.
+Existing visualization sources and receivers operate normally even when the model API is
+missing or unstarted. The existing `harness/example/` Canvas demo is unchanged.
+
+## Shared live-atlas module (`live-atlas.js`)
+
+The shared `mountLiveAtlas` function provides a complete WebGPU brain viewer and neuron
+inspector instance. It is defined in `harness/app/live-atlas.js` with TypeScript definitions
+in `harness/app/live-atlas.d.ts`.
+
+### Usage
+
+```javascript
+import { mountLiveAtlas } from "./live-atlas.js";
+
+const handle = mountLiveAtlas({
+  canvas: document.querySelector("canvas"),
+  labels: document.querySelector(".labels-container"),
+  inspector: document.querySelector(".inspector-container"),
+  onState: (snapshot) => {
+    // snapshot: LiveAtlasSnapshot
+    console.log(snapshot.connectionState, snapshot.nodeCount, snapshot.acceptedFires);
+  },
+  // Optional: defaults to same-origin ws(s)://<host>/stream
+  endpoint: "ws://127.0.0.1:8765/stream",
+});
+
+// LiveAtlasHandle controls:
+handle.ensureConnected(); // Reconnects if dropped; no-op if already connected
+handle.connect();         // Explicitly connects to the endpoint
+handle.disconnect();      // Disconnects and resets mapping, counters, and selection
+handle.fit();             // Centers and fits camera to the graph bounds (shortcut: 0 or Home)
+handle.zoom(1.25);        // Zooms camera relative to current view (+/- keys zoom; drag/arrows pan)
+handle.dispose();         // Synchronously tears down socket, timers, and GPU resources
+```
+
+### Snapshot and state lifecycle
+
+- **`LiveAtlasSnapshot`**: Exposes read-only state: `connectionState`, `connectionMessage`,
+  `gpuMessage`, `nodeCount`, `edgeCount`, `groups` (`id`, `name`, `color`, `placement`, `count`),
+  `lastStep`, `acceptedFires`, `droppedMessages`, and `droppedPairs`.
+- **Batched counter snapshots**: Counter snapshots are coalesced and batched per animation frame;
+  individual per-fire events stay out of consumer state to prevent render thrash during rapid
+  token generation.
+- **GPU cancellation signal**: `initializeGPU` in `gpu.js` accepts an optional fourth options argument
+  `{ signal }` so pending asynchronous adapter/device acquisition can be aborted cleanly
+  on component unmount.
+- **Disconnect and reconnect**: `disconnect()` explicitly resets cached mapping, counter totals,
+  and inspector selection. `connect()` and `ensureConnected()` restore the mapping only, while
+  counters restart from zero and node selection stays cleared, without leaking sockets or firing
+  stale post-disposal callbacks.
+- **Stream semantics**: Live activity is the configured model's shared stream, not token-aligned
+  or per-request attribution; counters and step persist until an explicit source reset or reconnect.
+  `onGenerate` in consumers calls `ensureConnected()` to reconnect if disconnected, with no claimed
+  request/run correlation; the stream naturally persists across prompts.
+- **Data caveats**: Coordinates are illustrative layout projections; connectome body IDs are
+  not exported in standard mappings and are explicitly displayed as unavailable / not exported
+  (never inferred or speculative anatomy). "No observed fire does not mean inactive; fire means
+  positive KC code, not biological spikes."
 
 For the canonical real-model reference, clean-checkout setup and all integration
 scenarios, use the [end-to-end workflow](../WORKFLOW.md). The dashboard layout and
 its data limits follow the
 [dashboard visual redesign plan](dashboard-visual-redesign-plan.md); see
 [Fly-brain schematic](#fly-brain-schematic) below.
-
 ## Run the live workspace (real model + app server)
 
 ### Prerequisites

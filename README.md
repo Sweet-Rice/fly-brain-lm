@@ -32,32 +32,50 @@ than opening the HTML with `file://`. In this static offline mode, the prompt
 composer detects that the local model proxy is unavailable (static-page mode),
 while recording playback and graph controls continue to work normally.
 
-## Prompt laboratory (React)
+## Prompt laboratory and live brain workspace (React)
 
-The presentable text-generation frontend is a React, TypeScript, and Vite app in
-[`frontend/`](frontend/README.md). It reuses the harness's tested
-`GenerationController` and versioned inference types rather than maintaining a
-second service client. With the model HTTP service running on port 8771:
+The presentable frontend in [`frontend/`](frontend/README.md) is an integrated React,
+TypeScript, and Vite workspace pairing text prompt generation with an embedded live
+WebGPU brain viewer and neuron inspector. It mounts the shared `harness/app/live-atlas.js`
+module and reuses the tested `GenerationController` without duplicating client logic.
+
+### Quickstart
+
+Initialize an untrained scratch checkpoint (do not overwrite private checkpoints), start
+the model server, then launch the React dev server:
 
 ```console
+# Step 1: Initialize an untrained scratch checkpoint (vibe or vibe2) to a new path
+python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt
+
+# Step 2: Start the model server (HTTP API on 8771, visualization stream on 8765)
+python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8765
+
+# Step 3: In another terminal, start the React workspace
 npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-Open **http://127.0.0.1:5173/**. The Vite server proxies `/health` and `/v1/*`
-to the loopback model API. See the frontend guide for production builds, quality
-commands, design-system boundaries, theme behavior, and alternate loopback ports.
-The WebGPU atlas remains available separately through the browser workspace below.
+Open **http://127.0.0.1:5173/**. The Vite dev server proxies HTTP `/health` and `/v1/*` to
+`http://127.0.0.1:8771` (`FLYBRAIN_API_URL`) and WebSocket `/stream` to `ws://127.0.0.1:8765`
+(`FLYBRAIN_STREAM_URL`). Connecting to same-origin `/stream` avoids extra endpoint
+configuration and browser mixed-content restrictions. In production, configure a reverse
+proxy to route both HTTP routes and WebSocket upgrades on `/stream`.
 
-## Browser workspace: prompt composer and live inspection
+See [`frontend/README.md`](frontend/README.md) for full architecture, lifecycle details,
+data limits, preview/production deployment, and smoke verification evidence. Offline
+recording playback, timeline inspection, and memory/dopamine tables remain exclusively in
+the legacy dashboard (`harness/app/index.html`).
 
-The browser workspace remains a no-build ES module application for WebGPU activity
-inspection. Its public mount functions (`mountPrompt`, `mountInspector`) return clean
-disposers, backed by DOM-free inference (`GenerationController`) and topology
-(`NeuronIndex`) classes. The React prompt laboratory imports the same controller
-and [UI inference contract v1](harness/app/inference-contract/v1/README.md), while
-visualization sources and receivers remain independent when the model API is
-missing or unstarted.
+## Standalone browser workspace (legacy dashboard)
+
+The standalone browser workspace in `harness/app/` remains a no-build ES module application
+for WebGPU activity inspection, offline recording playback, run/token timeline, and
+memory/dopamine inspection. Its public mount functions (`mountPrompt`, `mountInspector`)
+own their supplied DOM roots and return disposers, while `mountLiveAtlas` returns a control
+handle with `.dispose()`. The underlying inference controller (`GenerationController`),
+neuron index (`NeuronIndex`), protocol parsers, and layout math remain pure. Visualization
+sources and receivers operate independently when the model API is missing or unstarted.
 
 Checkpoints are gitignored and not bundled; initialize an untrained scratch checkpoint
 first (default `model.init_model` writes `model/checkpoints/<impl>.pt`, e.g. `vibe.pt`,
@@ -155,8 +173,8 @@ private trained checkpoint is bundled or independently verified here. See
 | Folder | Documentation |
 |---|---|
 | `harness/` | [End-to-end workflow](harness/WORKFLOW.md), [stream tools](harness/README.md), [measured limits](harness/PERFORMANCE.md) |
-| `harness/app/` | [Standalone WebGPU viewer, playback and controls](harness/app/README.md) |
-| `frontend/` | [React/TypeScript prompt laboratory and design system](frontend/README.md) |
+| `harness/app/` | [Standalone WebGPU viewer, offline playback, timeline and memory inspectors](harness/app/README.md) |
+| `frontend/` | [React workspace: prompt laboratory with integrated WebGPU brain atlas](frontend/README.md) |
 | `harness/example/` | [Separate legacy Canvas demo and fixed-prompt replay](harness/example/README.md) |
 | `model/` | [Checkpoint initialization and model prerequisites](model/README.md) |
 | `model/vibe/`, `model/vibe2/` | [Model implementations and selection](model/README.md#choosing-an-implementation) |
@@ -176,12 +194,12 @@ criteria to implementation, tests, browser evidence and pending child PRs.
 
 ## Ports in the guides
 
-| Service | Loopback port |
-|---|---:|
-| App server HTTP (static assets + `/health` and `/v1` proxy) | 8772 |
+| React frontend dev server (Vite proxy `/health`, `/v1`, `/stream`) | 5173 |
+| React frontend preview server (production bundle preview) | 4173 |
+| Standalone harness app server HTTP (static assets + `/health` and `/v1` proxy) | 8772 |
 | Standalone offline page HTTP (`http.server`) | 8772 |
 | Model HTTP API | 8771 |
-| Existing chat or API visualization WebSocket | 8767 |
+| Model visualization WebSocket stream (default / harness) | 8765 / 8767 |
 | Workflow live WebSocket | Chosen by the OS with `--port 0`; use the printed URL |
 | Legacy recorded replay WebSocket / Canvas page | 8768 / 8770 |
 Run one source per stream port. If a port is occupied, choose another and update

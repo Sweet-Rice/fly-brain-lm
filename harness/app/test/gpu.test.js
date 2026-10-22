@@ -863,3 +863,81 @@ test("errors allocating selection preserve prior valid render and cleanup", asyn
   dispose();
   assert.equal(overlayBuffer2.destroys, 1, "preserved buffer destroyed on cleanup");
 });
+
+test("abort signal during pending adapter request synchronously removes listeners and prevents device request", async t => {
+  let resolveAdapter;
+  const adapterPromise = new Promise(resolve => { resolveAdapter = resolve; });
+  let deviceRequested = false;
+  const mockAdapter = {
+    requestDevice: async () => {
+      deviceRequested = true;
+      return mock.device;
+    },
+  };
+  const mock = platform(t, {
+    requestAdapter: () => adapterPromise,
+  });
+
+  const controller = new AbortController();
+  const initPromise = initializeGPU(mock.canvas, mock.status, mock.labels, { signal: controller.signal });
+
+  assert.ok(mock.calls.listeners.size > 0, "listeners registered on canvas before adapter resolution");
+
+  controller.abort();
+  assert.equal(mock.calls.listeners.size, 0, "listeners removed synchronously upon abort");
+
+  resolveAdapter(mockAdapter);
+  const dispose = await initPromise;
+  assert.equal(typeof dispose, "function");
+  assert.equal(deviceRequested, false, "requestDevice was never called after abort");
+  assert.equal(mock.calls.configuration, undefined, "context was not configured");
+  assert.equal(mock.statuses.length, 0, "no error status reported for aborted initialization");
+});
+
+test("abort signal during pending device request synchronously removes listeners and destroys late-resolving device without configuring canvas", async t => {
+  let resolveDevice;
+  const devicePromise = new Promise(resolve => { resolveDevice = resolve; });
+  const mock = platform(t, {
+    requestAdapter: async () => ({
+      requestDevice: () => devicePromise,
+    }),
+  });
+
+  const controller = new AbortController();
+  const initPromise = initializeGPU(mock.canvas, mock.status, mock.labels, { signal: controller.signal });
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.ok(mock.calls.listeners.size > 0, "listeners registered while waiting for device");
+
+  controller.abort();
+  assert.equal(mock.calls.listeners.size, 0, "listeners removed synchronously upon abort");
+
+  resolveDevice(mock.device);
+  const dispose = await initPromise;
+  assert.equal(typeof dispose, "function");
+
+  assert.equal(mock.calls.destroys, 1, "late-resolving device is destroyed immediately");
+  assert.equal(mock.calls.configuration, undefined, "context was not configured");
+  assert.equal(mock.statuses.length, 0, "no error status reported for aborted initialization");
+});
+
+test("pre-aborted signal disposes synchronously without querying WebGPU", async t => {
+  let adapterCalled = false;
+  const mock = platform(t, {
+    requestAdapter: async () => {
+      adapterCalled = true;
+      return { requestDevice: async () => mock.device };
+    },
+  });
+
+  const controller = new AbortController();
+  controller.abort();
+
+  const dispose = await initializeGPU(mock.canvas, mock.status, mock.labels, { signal: controller.signal });
+  assert.equal(typeof dispose, "function");
+  assert.equal(adapterCalled, false, "adapter was never requested");
+  assert.equal(mock.calls.listeners.size, 0, "no listeners retained");
+  assert.equal(mock.statuses.length, 0, "no error status reported");
+});
