@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { AtlasWorkspace } from './components/atlas/AtlasWorkspace';
+import type { LiveAtlasHandle } from '../../harness/app/live-atlas.js';
 import {
   ArrowIcon,
   BrandMark,
@@ -59,7 +61,7 @@ export function App() {
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const copyTimerRef = useRef<number | null>(null);
   const settingsRef = useRef<HTMLDetailsElement>(null);
-
+  const atlasHandleRef = useRef<LiveAtlasHandle | null>(null);
   const active = Boolean(ACTIVE_GENERATION_STATES[snapshot.state]);
   const ready = snapshot.health.ready;
   const healthLoading = snapshot.health.status === 'loading';
@@ -112,7 +114,18 @@ export function App() {
     event.preventDefault();
     if (active || !ready) return;
     setApiKey(apiKey);
-    await submit({ prompt, maxTokens, temperature, topK });
+    await submit(
+      { prompt, maxTokens, temperature, topK },
+      {
+        onGenerate: () => {
+          try {
+            atlasHandleRef.current?.ensureConnected();
+          } catch {
+            // Stream failure never prevents HTTP generation.
+          }
+        },
+      },
+    );
   }
 
   async function handleCopy() {
@@ -193,8 +206,8 @@ export function App() {
               architecture of the fruit fly brain. Prompts stay on this machine.
             </p>
           </div>
-          <a className="atlas-link" href="/app/">
-            Open neural atlas <ArrowIcon />
+          <a className="atlas-link" href="#neural-atlas">
+            Explore neural atlas <ArrowIcon />
           </a>
         </section>
 
@@ -437,6 +450,7 @@ export function App() {
           </Panel>
         </div>
 
+        <AtlasWorkspace ref={atlasHandleRef} />
         <section aria-labelledby="service-heading" className="service-strip">
           <div>
             <p className="kicker">Service</p>
