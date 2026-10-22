@@ -25,7 +25,8 @@ test('telemetry needs a mapping and never advances graph time or local epoch', (
   assert.equal(receiver.epoch, 0, 'server telemetry epoch is independent of local connection epoch');
   assert.deepEqual(send(receiver, { ...status, seq: true }), { action: 'drop_message' });
   assert.deepEqual(send(receiver, { type: 'token_step' }), { action: 'drop_message' });
-  assert.deepEqual(send(receiver, { type: 'memory_summary' }), { action: 'ignore_message' });
+  assert.deepEqual(send(receiver, { type: 'memory_summary' }), { action: 'drop_message' });
+  assert.deepEqual(send(receiver, { type: 'future_extension' }), { action: 'ignore_message' });
   assert.equal(send(receiver, { type: 'fire', t: 9, pairs: [[3, 91]] }).action, 'accept_fire');
   receiver.reset();
   assert.deepEqual(send(receiver, status), { action: 'drop_message' });

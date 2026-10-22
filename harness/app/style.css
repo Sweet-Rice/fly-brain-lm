@@ -1360,3 +1360,71 @@ pre.prompt-output[data-state="failed"] {
   overflow-wrap: anywhere;
   font: 0.8125rem/1.5 var(--font-mono);
 }
+
+.memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.memory-panel p {
+  margin: 0;
+}
+
+.memory-panel select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+.memory-identity {
+  font: 0.75rem/1.5 var(--font-mono);
+}
+
+.memory-notice {
+  font-size: 0.8125rem;
+  border-left: 2px solid var(--focus);
+  padding-left: 8px;
+}
+
+.memory-table-wrap {
+  max-height: 300px;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+}
+
+.memory-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 0.75rem/1.5 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-table caption {
+  text-align: left;
+  padding: 6px;
+  font-family: var(--font-sans);
+  color: var(--muted);
+}
+
+.memory-table th,
+.memory-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.memory-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--elevated);
+  white-space: normal;
+  min-width: 80px;
+}

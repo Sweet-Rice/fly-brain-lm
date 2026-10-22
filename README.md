@@ -114,7 +114,9 @@ Chrome or Edge browser.
 - **Run/token timeline**: Inspect opt-in request phases, token IDs/text, processing
   status and producer-relative timings for live streams or recordings. See
   [timeline setup and limits](harness/app/README.md#run--token-timeline).
-  Memory/dopamine panels remain a separate follow-up.
+- **Memory/dopamine inspector**: Inspect observed recurrent writes, per-head gates
+  and recovery, and sampled KC/head state slices. See
+  [memory setup and limits](harness/app/README.md#memory--dopamine-inspector).
 ## Run the real model or tests
 
 The [workflow guide](harness/WORKFLOW.md) contains Windows PowerShell and POSIX

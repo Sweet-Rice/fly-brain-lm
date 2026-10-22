@@ -5,6 +5,7 @@ import { initializeGPU } from "./gpu.js";
 import { mountPrompt } from "./prompt-view.js";
 import { mountInspector } from "./inspector.js";
 import { mountTimeline } from "./timeline-view.js";
+import { mountMemory } from "./memory-view.js";
 import { groupStyle } from "./brain-atlas.js";
 
 const receiver = new ProtocolReceiver();
@@ -182,6 +183,8 @@ if (inspectorWorkspace) {
 
 const timelineWorkspace = element("timeline-workspace");
 const disposeTimeline = timelineWorkspace ? mountTimeline(timelineWorkspace, canvas) : null;
+const memoryWorkspace = element("memory-workspace");
+const disposeMemory = memoryWorkspace ? mountMemory(memoryWorkspace, canvas) : null;
 
 const endpointEl = element("endpoint");
 if (endpointEl) {
@@ -226,6 +229,7 @@ window.addEventListener("pagehide", () => {
   disposePrompt?.();
   disposeInspector?.();
   disposeTimeline?.();
+  disposeMemory?.();
 });
 if (new URLSearchParams(location.search).has("ws") && element("endpoint")?.value) {
   live.connect(element("endpoint").value);
