@@ -226,7 +226,7 @@ test("recording controls reset the graph and switch cleanly between files and li
   const file = new Blob([[mapping, fire(0), fire(100)].join("\n")]);
   file.name = "example.ndjson";
   const events = [];
-  for (const type of ["mapping", "fire", "reset"]) element("viewport").addEventListener(type, event => events.push({ type, detail: event.detail }));
+  for (const type of ["mapping", "fire", "reset", "telemetry"]) element("viewport").addEventListener(type, event => events.push({ type, detail: event.detail }));
   await import("../main.js");
   const click = id => element(id).dispatchEvent(new Event("click"));
   const settle = async predicate => {
@@ -310,6 +310,27 @@ test("recording controls reset the graph and switch cleanly between files and li
   await new Promise(setImmediate);
   assert.equal(sockets.length, socketCount, "no new socket created when live already connected to same endpoint");
   assert.equal(element("step").textContent, 88, "live graph not reset when prompt generated on same live connection");
+
+  const telemetry = { type: "stream_status", run_id: "run-integration", epoch: 7,
+    seq: 10, event: "resync", dropped_steps: 0, server_time_ms: 123 };
+  activeLiveSocket.onmessage({ data: JSON.stringify(telemetry) });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(events.at(-1), { type: "telemetry", detail: telemetry });
+  assert.match(element("timeline-identity").textContent, /run-integration · epoch 7/);
+  assert.equal(element("step").textContent, 88, "telemetry cannot advance graph time");
+
+  const telemetryFile = new Blob([mapping, "\n", JSON.stringify(telemetry)]);
+  telemetryFile.name = "telemetry.ndjson";
+  element("recording").files = [telemetryFile];
+  element("recording").dispatchEvent(new Event("change"));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(element("timeline-identity").textContent, /run-integration · epoch 7/);
+  click("recording-restart");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(element("timeline-identity").textContent, /run-integration · epoch 7/);
+  click("disconnect");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(element("timeline-identity").textContent, "No run telemetry received.");
 
   await settle(() => element("prompt-output").textContent.includes("Hello fly"));
   assert.ok(element("prompt-output").textContent.includes("Hello fly"));

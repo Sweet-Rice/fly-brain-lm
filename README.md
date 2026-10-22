@@ -111,8 +111,10 @@ Chrome or Edge browser.
   never speculative anatomy. Body IDs are not exported in standard mappings and are
   explicitly displayed as unavailable / not exported (never inferred).
   "No observed fire does not mean inactive; fire means positive KC code, not biological spikes."
-- **Future timeline and memory panels**: Timeline and memory backend integration issues
-  will be linked in a follow-up PR later (no placeholder doc links are created).
+- **Run/token timeline**: Inspect opt-in request phases, token IDs/text, processing
+  status and producer-relative timings for live streams or recordings. See
+  [timeline setup and limits](harness/app/README.md#run--token-timeline).
+  Memory/dopamine panels remain a separate follow-up.
 ## Run the real model or tests
 
 The [workflow guide](harness/WORKFLOW.md) contains Windows PowerShell and POSIX
