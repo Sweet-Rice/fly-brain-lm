@@ -5,6 +5,11 @@ compute shaders. One recurrent model produces text, graph fires and token-aligne
 readout telemetry. `GenerationController` consumes an in-page fetch/SSE transport;
 there are no network requests to `/health`, `/v1/*` or `/stream`.
 
+**No external services are required:** the website serves its own model files and
+your browser performs inference on your GPU. No Python, API key, account or
+WebSocket backend is needed. A deployed site needs only static HTTPS hosting;
+Node.js and Git LFS are local setup tools, not requirements for visitors.
+
 ## Local development
 
 ### Prerequisites
@@ -12,6 +17,8 @@ there are no network requests to `/health`, `/v1/*` or `/stream`.
 - Node.js 22+, Git LFS, and a WebGPU-capable Chrome or Edge browser.
 - Loopback HTTP or trusted HTTPS. No Python model server or API key.
 - Hydrated `public/models/vibe2-tinystories/weights.bin` (123,537,408 bytes).
+
+From the repository root:
 
 ```console
 git lfs install
@@ -23,6 +30,11 @@ npm --prefix frontend run dev
 Open `http://127.0.0.1:5173/`. The header reports download progress, then model
 readiness. Missing WebGPU, an unhydrated LFS pointer or missing assets produces an
 actionable error; Retry reloads a failed model. Device loss requires a page reload.
+
+For a first run, wait for **Model ready · vibe2-tinystories**, enter
+`Once upon a time`, and click **Run prompt**. Open **Settings** and choose
+temperature `0` for repeatable greedy output. Keep the local dev server running
+while using the page; Ctrl-C stops it.
 
 ### Static deployment
 

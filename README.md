@@ -1,36 +1,12 @@
 # Fly Brain LM
 
-Experimental PyTorch fly-brain language models with an integrated browser workspace
-pairing WebGPU activity inspection with a prompt composer and neuron inspector. The
-registry includes the legacy `vibe` scaffold and the `vibe2` fly-dopamine
-implementation. Fresh initializations are **untrained**; their generated text has no
-quality claim.
-<a id="start-with-the-recorded-example"></a>
+Fly-brain language models with a website that runs the trained `vibe2-tinystories`
+model directly on your GPU through WebGPU. Text generation, graph activity and
+the token readout all run in your browser. **No external inference services,
+Python server, API key or WebSocket backend are required.**
 
-## Start with the offline graph
-
-From a clean checkout, only Python 3 and a WebGPU-capable Chrome or Edge browser
-are needed. There is no frontend build, package installation, checkpoint, CUDA,
-tokenizer download or running model for this path.
-
-Run from the repository root:
-
-```console
-python -m http.server 8772 --bind 127.0.0.1 --directory harness
-```
-
-On systems where Python is named `python3`, use that name instead. Open
-**http://127.0.0.1:8772/app/**, click **Or open a recording**, and choose
-[`harness/recordings/reference.ndjson`](harness/recordings/reference.ndjson).
-Expect five groups, **1,958 nodes and 19,037 directed edges**, followed by
-brightening edges as recorded fires play. Use Pause, Play, Restart and Playback
-speed to inspect the capture. Timing is synthetic; the events were generated
-by the real untrained model. Keep the page server running; Ctrl-C stops it.
-This works without `websockets`, PyTorch or Node.js. After checkout, the offline
-demo needs no external network access. Serve it on loopback as shown, rather
-than opening the HTML with `file://`. In this static offline mode, the prompt
-composer detects that the local model proxy is unavailable (static-page mode),
-while recording playback and graph controls continue to work normally.
+The website only needs a static web server to deliver the page and model files.
+The PyTorch implementations and standalone legacy dashboard remain available below.
 
 ## Prompt laboratory and live brain workspace (React)
 
@@ -42,7 +18,8 @@ is used by React. The MBON paths show architecture, not attribution.
 
 ### Quickstart
 
-Install Git LFS before cloning, or hydrate the weights in an existing checkout:
+**Prerequisites:** Node.js 22+, Git LFS, and a WebGPU-capable Chrome or Edge browser.
+Run these commands from the repository root:
 
 ```console
 git lfs install
@@ -52,6 +29,13 @@ npm --prefix frontend run dev
 ```
 
 Open **http://127.0.0.1:5173/** in a WebGPU-capable Chrome or Edge browser.
+Wait for **Model ready · vibe2-tinystories**, enter `Once upon a time`, and click
+**Run prompt**. For repeatable output, open **Settings** and set temperature to `0`.
+
+Keep the dev server running while using the site; Ctrl-C stops it. It serves static
+assets, not model inference. Visitors to a deployed HTTPS website need only their
+browser, not Node.js or Git LFS.
+
 The initial download is approximately 124 MB. Expect **1,959 nodes / 19,037 edges**.
 The trained float32 weights are committed through LFS; tokenizer, manifest and
 PyTorch parity vectors are ordinary Git files. Python `.pt` files stay gitignored.
@@ -80,6 +64,34 @@ See [`frontend/README.md`](frontend/README.md) for full architecture, lifecycle 
 data limits, preview/production deployment, and smoke verification evidence. Offline
 recording playback, timeline inspection, and memory/dopamine tables remain exclusively in
 the legacy dashboard (`harness/app/index.html`).
+
+<a id="start-with-the-recorded-example"></a>
+
+## Start with the offline graph
+
+From a clean checkout, only Python 3 and a WebGPU-capable Chrome or Edge browser
+are needed. There is no frontend build, package installation, checkpoint, CUDA,
+tokenizer download or running model for this path.
+
+Run from the repository root:
+
+```console
+python -m http.server 8772 --bind 127.0.0.1 --directory harness
+```
+
+On systems where Python is named `python3`, use that name instead. Open
+**http://127.0.0.1:8772/app/**, click **Or open a recording**, and choose
+[`harness/recordings/reference.ndjson`](harness/recordings/reference.ndjson).
+Expect five groups, **1,958 nodes and 19,037 directed edges**, followed by
+brightening edges as recorded fires play. Use Pause, Play, Restart and Playback
+speed to inspect the capture. Timing is synthetic; the events were generated
+by the real untrained model. Keep the page server running; Ctrl-C stops it.
+This works without `websockets`, PyTorch or Node.js. After checkout, the offline
+demo needs no external network access. Serve it on loopback as shown, rather
+than opening the HTML with `file://`. In this static offline mode, the prompt
+composer detects that the local model proxy is unavailable (static-page mode),
+while recording playback and graph controls continue to work normally.
+
 
 ## Standalone browser workspace (legacy dashboard)
 
