@@ -14,6 +14,17 @@ test('activity keeps direction, sparse ids, and self loops, filtering undeclared
   assert.equal(activity.active(ACTIVITY_DURATION), false);
 });
 
+test('declared synapses light both endpoint nodes without lighting isolated or undeclared endpoints', () => {
+  const activity = new EdgeActivity(
+    [[90001, 6], [6, 2]],
+    [{ id: 2 }, { id: 90001 }, { id: 6 }, { id: 88 }],
+  );
+  activity.fire([[90001, 6], [88, 90001]], 100);
+  assert.deepEqual([...activity.starts], [100, -1, -1, 100, 100, -1]);
+  assert.equal(activity.active(100 + ACTIVITY_DURATION - 1), true);
+  assert.equal(activity.active(100 + ACTIVITY_DURATION), false);
+});
+
 test('repeated activity restarts its duration using arrival time without filling gaps', () => {
   const activity = new EdgeActivity([[1, 2], [2, 1]]);
   const starts = activity.starts;

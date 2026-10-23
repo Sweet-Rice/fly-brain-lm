@@ -52,6 +52,20 @@ def main(argv=None):
     impl = ck.get("impl", LEGACY_IMPL)
     engine = Engine(model, a.model_id, a.ctx, a.max_tokens, a.seed)
     srv = make_server(engine, a.host, a.port, a.api_key)
+    health_note = ck.get("note", "")
+    if ck.get("source_step", 0) > 0:
+        health_note = f"Trained checkpoint, step {ck['source_step']}"
+        if ck.get("source_best_val_loss") is not None:
+            health_note += f", validation loss {ck['source_best_val_loss']:.4f}"
+
+    class CheckpointHandler(srv.RequestHandlerClass):
+        def do_GET(self):
+            if self.path not in ("/", "/health"):
+                return super().do_GET()
+            if self._authorized():
+                self._json(200, {"status": "ok", "model": engine.id, "note": health_note})
+
+    srv.RequestHandlerClass = CheckpointHandler
     stream = stream_model(model, wiring, a.block, port=a.viz_port, record=a.record)[0]
     adapter = TelemetryAdapter(model, stream, block=a.block, impl=impl, model_id=a.model_id, ckpt_digest=digest)
     adapter.wrap_engine(engine)

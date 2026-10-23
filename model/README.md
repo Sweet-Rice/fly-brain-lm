@@ -1,10 +1,10 @@
 # model/
 
-FlyBrainLM **temporary scaffold**: builds a model implementation from the MaleCNS wiring, initializes it, saves an
-**untrained** checkpoint, and serves it. Untrained replies are gibberish by design. Architectures are not final.
+FlyBrainLM builds model implementations from the MaleCNS wiring and serves local checkpoints.
+Fresh initializations are **untrained**; their replies have no quality claim. Architectures are not final.
 `vibe` is the default scaffold; `vibe2` is the fly-dopamine port introduced by PR #35.
-No trained checkpoint is bundled or independently verified by this integration. The optional
-[trained-weight importer](#vibe2-trained-fly-dopamine-weights) requires external private files.
+Trained checkpoints are private external artifacts and are not bundled. The
+[trained-weight importer](#vibe2-trained-fly-dopamine-weights) loads original weights with their matching wiring.
 
 | Path | What it is |
 |---|---|
@@ -131,9 +131,10 @@ Do not pass `--out model/checkpoints/vibe2.pt`: `init_model --impl vibe2` overwr
   glomerular normalization. The visualization therefore shows 1959 nodes, not 1958; edges are unchanged at 19037.
 - After saving, it prints the source step and loss, the parameter count (30,879,324), and a greedy continuation of
   "Once upon a time".
-- PR #35 reports imported-logit parity against its private source model. This integration does not verify
-  those parity figures or trained-text quality because the private checkpoint is unavailable. Public tests
-  cover the importer's KC-permutation behavior using locally constructed weights.
+- PR #35 reports imported-logit parity against its private source model. This integration does not independently
+  verify those parity figures. Public tests cover the importer's KC-permutation behavior using locally constructed weights.
+- Imported checkpoints retain their source training step and best validation loss. The telemetry server exposes
+  these in `/health`; fresh initialization is not a substitute for trained weights.
 
 ## What a checkpoint contains
 

@@ -1031,11 +1031,6 @@ pre.prompt-output {
   font-weight: 600;
 }
 
-.inspector-status {
-  font-size: 0.75rem;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
 
 .inspector-select-form {
   display: flex;
@@ -1193,15 +1188,6 @@ pre.prompt-output {
   padding: 4px 0;
 }
 
-.neuron-caveat {
-  font-size: 0.6875rem;
-  color: var(--muted);
-  margin-top: 6px;
-  font-style: italic;
-  line-height: 1.4;
-  border-left: 2px solid var(--border);
-  padding-left: 6px;
-}
 
 /* Stream section: metrics */
 .metrics {

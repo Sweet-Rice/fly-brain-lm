@@ -2,7 +2,9 @@
 
 @layer components {
   /* Scoped accessibility utility */
-  .sr-only {
+  .sr-only,
+  .atlas-inspector-mount .inspector-label,
+  .atlas-inspector-mount .neuron-heading {
     position: absolute !important;
     width: 1px !important;
     height: 1px !important;
@@ -114,39 +116,6 @@
     margin-top: -6px;
   }
 
-  /* Schematic layout indicator chip: hidden by default, shown ONLY for brain layout */
-  .atlas-viewport__schematic-chip {
-    display: none;
-    position: absolute;
-    top: 0.75rem;
-    left: 0.75rem;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.35rem 0.7rem;
-    border-radius: 999px;
-    background: rgba(12, 20, 16, 0.85);
-    backdrop-filter: blur(8px);
-    border: 1px solid rgba(82, 98, 92, 0.4);
-    color: #a7b5ac;
-    font-size: 0.7rem;
-    font-family: var(--font-mono);
-    pointer-events: none;
-    z-index: 2;
-  }
-
-  canvas[data-layout='brain'] ~ .atlas-viewport__schematic-chip,
-  .atlas-viewport__canvas-container:has(canvas[data-layout='brain'])
-    .atlas-viewport__schematic-chip {
-    display: inline-flex;
-  }
-
-  .atlas-viewport__schematic-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--lime);
-  }
-
   /* Canvas viewport controls (Fit, Zoom In, Zoom Out) on bottom right: 44px min hit targets */
   .atlas-viewport__controls {
     position: absolute;
@@ -194,101 +163,218 @@
     outline-offset: 1px;
   }
 
-  /* Fallback message overlay when WebGPU is not supported */
-  .atlas-viewport__gpu-banner {
+  /* Readout overlay layer */
+  .atlas-viewport__readout {
     position: absolute;
-    inset: 1.25rem;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: rgba(16, 23, 20, 0.94);
-    backdrop-filter: blur(6px);
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .readout-links {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .readout-mbon-link {
+    stroke: var(--lime);
+    stroke-opacity: 0.45;
+    stroke-width: 1.25px;
+    stroke-dasharray: 3 4;
+    fill: none;
+  }
+
+  .readout-hub-link {
+    stroke: var(--lime);
+    stroke-opacity: 0.85;
+    stroke-width: 1.25px;
+    fill: none;
+  }
+
+  .readout-hub-node {
+    fill: var(--lime);
+    stroke: #0c1410;
+  }
+
+  .readout-hub-label {
+    fill: var(--lime);
+    font-family: var(--font-mono);
+  }
+
+  .readout-card {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    width: clamp(160px, 28%, 230px);
+    background: rgba(16, 23, 20, 0.92);
+    backdrop-filter: blur(8px);
     border: 1px solid #34443d;
     border-radius: var(--radius-sm);
-    padding: 2rem 1.5rem;
-    text-align: center;
     color: #eef2e8;
-    z-index: 4;
-  }
-
-  .atlas-viewport__gpu-banner strong {
-    color: var(--amber);
-    font-size: 1rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .atlas-viewport__gpu-banner p {
-    max-width: 480px;
-    font-size: 0.85rem;
-    color: #a7b5ac;
-    margin-bottom: 0.75rem;
-    line-height: 1.45;
-  }
-
-  .atlas-viewport__gpu-banner small {
-    font-size: 0.75rem;
-    color: #6e8077;
-  }
-
-  /* Keyboard hint bar */
-  .atlas-viewport__keyboard-hint {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    color: var(--ink-soft);
-    font-size: 0.72rem;
-    font-family: var(--font-mono);
-  }
-
-  .atlas-viewport__keyboard-hint kbd {
-    display: inline-block;
-    padding: 0.15rem 0.35rem;
-    border-radius: 4px;
-    background: var(--paper-soft);
-    border: 1px solid var(--line);
-    color: var(--ink);
-    font-size: 0.68rem;
-  }
-
-  /* Telemetry counters strip */
-  .atlas-metrics {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 1px;
-    background: var(--line);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-
-  .atlas-metrics > div {
-    background: var(--paper-raised);
-    padding: var(--space-2) var(--space-3);
+    pointer-events: auto;
+    padding: 0.65rem;
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 0.35rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 
-  .atlas-metrics dt {
-    color: var(--ink-soft);
+  .readout-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .readout-pipeline-label {
+    color: var(--lime);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
     font-size: 0.68rem;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+    line-height: 1.25;
   }
 
-  .atlas-metrics dd {
+  .readout-source-badge,
+  .readout-token-meta,
+  .readout-pos-label {
+    color: #a7b5ac;
     font-family: var(--font-mono);
-    font-size: 1.05rem;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: var(--ink);
+    font-size: 0.68rem;
   }
 
+  .readout-source-badge {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .readout-token-view {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .readout-token-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.5rem;
+  }
+
+  .readout-token-status[data-status='stepped_fired'] {
+    color: var(--coral);
+  }
+
+  .readout-piece-group {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .readout-text-box {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.35;
+    background: rgba(12, 20, 16, 0.95);
+    border: 1px solid #23352c;
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.5rem;
+    min-height: 32px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: #eef2e8;
+  }
+
+  .readout-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.3rem;
+    margin-top: 0.25rem;
+  }
+
+  .readout-pos-label {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    text-align: center;
+  }
+
+  .readout-btn {
+    border-radius: 999px;
+    border: 1px solid #34443d;
+    background: rgba(12, 20, 16, 0.6);
+    color: #eef2e8;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    min-height: 28px;
+    padding: 0.2rem 0.4rem;
+    cursor: pointer;
+    transition:
+      border-color 120ms ease,
+      background 120ms ease;
+  }
+
+  .readout-btn:hover:not(:disabled) {
+    border-color: var(--lime);
+    background: rgba(30, 42, 36, 0.8);
+  }
+
+  .readout-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .readout-btn:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  /* Compact GPU fallback banner when WebGPU is not supported */
+  .atlas-viewport__gpu-banner {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    right: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(23, 16, 16, 0.92);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.65rem;
+    color: var(--danger);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    text-align: center;
+    z-index: 4;
+    cursor: help;
+  }
+
+  .atlas-panel__status-group {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .atlas-compact-metrics {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+  }
+
+  .atlas-metrics-dropped {
+    color: var(--coral);
+    font-weight: 750;
+  }
   /* Inspector and Circuit Details Panel */
   .atlas-inspector-content {
     display: flex;
@@ -333,24 +419,10 @@
     color: var(--ink);
   }
 
-  .atlas-inspector-mount .inspector-status {
-    font-size: 0.72rem;
-    font-family: var(--font-mono);
-    color: var(--ink-soft);
-    overflow-wrap: anywhere;
-  }
-
   .atlas-inspector-mount .inspector-select-form {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
-  }
-
-  .atlas-inspector-mount .inspector-label {
-    font-weight: 600;
-    font-size: 0.75rem;
-    color: var(--ink-soft);
-    margin: 0;
   }
 
   .atlas-inspector-mount .inspector-input-group {
@@ -402,6 +474,47 @@
     outline-offset: 1px;
   }
 
+  /* Inspector tabs */
+  .atlas-inspector-mount .inspector-tabs {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-3);
+  }
+
+  .atlas-inspector-mount .inspector-tab {
+    cursor: pointer;
+    border-radius: 999px;
+    min-height: 36px;
+    padding: 0.35rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: var(--paper-soft);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    transition:
+      border-color 120ms ease,
+      background 120ms ease,
+      color 120ms ease;
+  }
+
+  .atlas-inspector-mount .inspector-tab:hover:not([aria-selected='true']) {
+    border-color: var(--moss);
+    color: var(--moss);
+  }
+
+  .atlas-inspector-mount .inspector-tab[aria-selected='true'] {
+    background: var(--moss-deep);
+    color: var(--paper);
+    border-color: var(--moss-deep);
+  }
+
+  .atlas-inspector-mount .inspector-tab:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
   .atlas-inspector-mount .inspector-error {
     color: var(--danger);
     background: color-mix(in srgb, var(--danger) 12%, transparent);
@@ -446,16 +559,6 @@
   .atlas-inspector-mount .neuron-section:first-child {
     border-top: none;
     padding-top: 0;
-  }
-
-  .atlas-inspector-mount .neuron-heading {
-    font-size: 0.7rem;
-    font-weight: 700;
-    margin: 0 0 0.5rem;
-    color: var(--ink-soft);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-family: var(--font-mono);
   }
 
   .atlas-inspector-mount .neuron-row {
@@ -548,16 +651,6 @@
     padding: 0.25rem 0;
   }
 
-  .atlas-inspector-mount .neuron-caveat {
-    font-size: 0.7rem;
-    color: var(--ink-soft);
-    margin-top: 0.5rem;
-    font-style: italic;
-    line-height: 1.45;
-    border-left: 2px solid var(--line);
-    padding-left: 0.5rem;
-  }
-
   /* Groups Legend block */
   .atlas-groups-block {
     border-top: 1px solid var(--line);
@@ -578,12 +671,6 @@
     font-weight: 700;
     margin: 0;
     color: var(--ink);
-  }
-
-  .atlas-groups-count {
-    font-size: 0.75rem;
-    font-family: var(--font-mono);
-    color: var(--ink-soft);
   }
 
   .atlas-groups-table-wrap {
@@ -619,11 +706,6 @@
     background: var(--paper-soft);
   }
 
-  .atlas-groups-table td code {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-  }
-
   .atlas-group-swatch {
     display: inline-block;
     width: 12px;
@@ -633,31 +715,11 @@
     border: 1px solid rgba(0, 0, 0, 0.2);
   }
 
-  .atlas-placement-tag {
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    color: var(--ink-soft);
-  }
-
   .atlas-empty-notice {
     font-size: 0.8rem;
     color: var(--ink-soft);
     font-style: italic;
     margin: 0;
-  }
-
-  .atlas-caveat-box {
-    background: var(--paper-soft);
-    border-left: 3px solid var(--moss);
-    border-radius: var(--radius-sm);
-    padding: 0.75rem 0.85rem;
-    font-size: 0.75rem;
-    line-height: 1.45;
-    color: var(--ink-soft);
-  }
-
-  .atlas-caveat-box strong {
-    color: var(--ink);
   }
 }
 
@@ -676,6 +738,128 @@
     }
   }
 
+  @media (min-width: 1200px) and (min-height: 680px) {
+    .atlas-workspace-container,
+    .atlas-workspace-grid {
+      display: contents;
+    }
+
+    .atlas-viewport-panel,
+    .atlas-inspector-panel {
+      display: flex;
+      min-height: 0;
+      flex-direction: column;
+    }
+
+    .atlas-viewport-panel {
+      grid-area: atlas;
+      align-self: stretch;
+      max-height: 100%;
+    }
+
+    .atlas-inspector-panel {
+      grid-area: inspector;
+    }
+
+    .atlas-panel__header-row {
+      gap: 12px;
+      padding: 4px 12px;
+    }
+
+    .atlas-viewport-content {
+      min-height: 0;
+      flex: 1;
+      padding: 0 8px 8px;
+    }
+
+    .atlas-viewport__canvas-container {
+      height: auto;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .atlas-viewport__controls {
+      top: 8px;
+      right: 8px;
+      bottom: auto;
+      gap: 2px;
+      padding: 2px;
+      z-index: 4;
+    }
+
+    .atlas-viewport__controls-button {
+      min-width: 30px;
+      min-height: 30px;
+      height: 30px;
+      padding: 0 0.55rem;
+      font-size: 0.75rem;
+    }
+
+    .readout-card {
+      top: auto;
+      right: 8px;
+      bottom: 8px;
+      width: min(15rem, calc(100% - 4.5rem));
+      max-height: 45%;
+      overflow-y: auto;
+      --scrollbar-thumb: #52695d;
+    }
+
+    .atlas-inspector-content {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1;
+      gap: 12px;
+      overflow: hidden;
+      padding: 10px 16px 12px;
+    }
+
+    .atlas-inspector-mount {
+      min-height: 0;
+      flex: 1 1 auto;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+    }
+
+    .atlas-inspector-mount .inspector-panel {
+      gap: 8px;
+    }
+
+    .atlas-inspector-mount .inspector-btn {
+      min-height: 36px;
+    }
+
+    .atlas-inspector-mount .inspector-empty {
+      padding: 8px 12px;
+    }
+
+    .atlas-inspector-mount .inspector-tabs {
+      margin-bottom: 0;
+    }
+
+    .atlas-inspector-mount .neuron-details {
+      gap: 8px;
+    }
+
+    .atlas-inspector-mount .neuron-section {
+      padding-top: 4px;
+    }
+
+    .atlas-groups-block {
+      min-height: 0;
+      flex: 0 1 auto;
+      overflow-y: auto;
+      gap: 8px;
+      padding-top: 12px;
+    }
+
+    .atlas-groups-table th,
+    .atlas-groups-table td {
+      padding: 4px 8px;
+    }
+  }
+
   @media (max-width: 1023px) {
     .atlas-workspace-grid {
       grid-template-columns: minmax(0, 1fr);
@@ -689,6 +873,9 @@
     .atlas-viewport__canvas-container {
       height: 380px;
       min-height: 320px;
+    }
+    .readout-card {
+      width: min(46%, 200px);
     }
   }
 
@@ -704,10 +891,6 @@
     .atlas-viewport__controls-button {
       min-height: 44px;
       min-width: 44px;
-    }
-
-    .atlas-viewport__schematic-chip {
-      font-size: 0.65rem;
     }
   }
 }

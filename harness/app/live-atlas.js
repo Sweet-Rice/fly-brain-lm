@@ -2,6 +2,7 @@ import { ProtocolReceiver } from "./protocol.js";
 import { LiveSource } from "./sources.js";
 import { initializeGPU } from "./gpu.js";
 import { mountInspector } from "./inspector.js";
+import { mountReadout } from "./readout-view.js";
 import { groupStyle } from "./brain-atlas.js";
 
 function resolveEndpoint(endpoint) {
@@ -11,7 +12,7 @@ function resolveEndpoint(endpoint) {
 }
 
 export function mountLiveAtlas(options) {
-  const { canvas, labels, inspector, onState, WebSocketType } = options;
+  const { canvas, labels, inspector, readout: readoutRoot, onState, WebSocketType, connectionStyle = "lines" } = options;
   const endpoint = resolveEndpoint(options.endpoint);
 
   let disposed = false;
@@ -133,10 +134,11 @@ export function mountLiveAtlas(options) {
       }
       canvas.dispatchEvent(new CustomEvent("fire", { detail: { t: event.t, pairs: event.pairs } }));
       schedulePublish();
+    } else if (event.action === "accept_telemetry") {
+      canvas.dispatchEvent(new CustomEvent("telemetry", { detail: event.message }));
     } else if (event.action === "drop_message") {
       droppedMessages++;
       schedulePublish();
-    } else if (event.action === "close") {
       clearDisplay();
       cancelScheduledPublish();
       emitSnapshot();
@@ -159,6 +161,7 @@ export function mountLiveAtlas(options) {
 
   const live = new LiveSource(receiver, { onEvent, onStatus }, WebSocketType);
   const disposeInspector = mountInspector(inspector, canvas);
+  const readout = readoutRoot ? mountReadout(readoutRoot, canvas) : null;
 
   const gpuAbortController = new AbortController();
   let disposeGPU = null;
@@ -172,7 +175,7 @@ export function mountLiveAtlas(options) {
       emitSnapshot();
     },
     labels,
-    { signal: gpuAbortController.signal }
+    { signal: gpuAbortController.signal, connectionStyle }
   );
 
   gpuReady.then(
@@ -242,6 +245,10 @@ export function mountLiveAtlas(options) {
       canvas.dispatchEvent(new CustomEvent("zoom", { detail: factor }));
     },
 
+    setGeneration(state) {
+      if (!disposed) readout?.setGeneration(state);
+    },
+
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -250,6 +257,7 @@ export function mountLiveAtlas(options) {
       gpuAbortController.abort();
       disposeGPU?.();
       disposeInspector();
+      readout?.dispose();
       live.dispose();
       labels?.replaceChildren();
     },

@@ -1,3 +1,5 @@
+import type { GenerationClientSnapshot } from "./inference-contract/v1/types.js";
+
 export interface LiveAtlasGroup {
   readonly id: number;
   readonly name: string;
@@ -23,6 +25,8 @@ export interface LiveAtlasOptions {
   canvas: HTMLCanvasElement;
   labels: HTMLElement;
   inspector: HTMLElement;
+  readout?: HTMLElement;
+  connectionStyle?: 'lines' | 'dots';
   onState: (snapshot: LiveAtlasSnapshot) => void;
   endpoint?: string;
   WebSocketType?: { new (url: string | URL, protocols?: string | string[]): WebSocket };
@@ -34,6 +38,7 @@ export interface LiveAtlasHandle {
   disconnect(): void;
   fit(): void;
   zoom(factor: number): void;
+  setGeneration(state: GenerationClientSnapshot): void;
   dispose(): void;
 }
 

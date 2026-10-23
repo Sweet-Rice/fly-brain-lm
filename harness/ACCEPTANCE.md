@@ -15,7 +15,7 @@ or PR status. This work does not merge PRs or close the epic.
 | Real model mapping followed by visible per-step activity | [`workflow.py`](workflow.py), [real-inference tests](../test/test_workflow.py), and [target browser verification](WORKFLOW.md#target-machine-verification) | Full untrained CPU model; no generated-text quality claim. Node tests cannot prove WebGPU rendering. |
 | Bounded, non-blocking network and recording I/O | [`viz_stream.py`](viz_stream.py), [held-consumer stress tests](../test/test_viz_stress.py), and [measured operating limits](PERFORMANCE.md) | Socket/file writes run off the model thread; JSON serialization and KC extraction remain synchronous. Native browser buffers during blocked JavaScript are outside application control. |
 | Reconnect and replacement mapping follow v1 | [Normative lifecycle](protocol/v1/SPEC.md), [real socket tests](../test/test_viz_stream.py), [workflow tests](../test/test_workflow.py), and [browser scenarios](WORKFLOW.md#4-exercise-the-live-browser-workflow) | Reconnect starts with the current mapping and only new activity; missed fires are not replayed. Replacement restarts step ordering. |
-| Shipped recording works without the model | [Offline instructions](WORKFLOW.md#1-offline-review-from-a-clean-checkout), [recording and provenance](recordings/README.md), [fixture tests](../test/test_workflow_reference.py), and [actual JavaScript playback test](app/test/workflow.test.js) | Static HTTP server and capable WebGPU browser required for drawing; no model packages/checkpoint needed. Playback cadence is synthetic. |
+| Shipped recording works without the model | [Recorded-review instructions](WORKFLOW.md#1-offline-review-from-a-clean-checkout), [recording provenance](recordings/README.md), [fixture tests](../test/test_workflow_reference.py), and [JavaScript playback test](app/test/workflow.test.js) | Current browser review uses Python, `websockets`, and the separate Canvas viewer; no model/checkpoint needed. Replay cadence is synthetic. The live app has no playback controls. |
 | Clean-checkout documentation and measured limits | [Root setup](../README.md), [complete workflow](WORKFLOW.md), [test guide](../test/README.md), and [performance report/raw results](PERFORMANCE.md) | Measured topology: 1,958 nodes / 19,037 edges. CUDA overhead, hardware sleep/resume and multi-day wall-clock soak remain unmeasured. |
 
 The [workflow guide](WORKFLOW.md#target-machine-verification) records actual
@@ -23,6 +23,10 @@ target-machine live, reconnect, replacement, offline playback and `--no-viz`
 HTTP checks. [Performance measurements](PERFORMANCE.md#sustained-and-failure-checks)
 separate synthetic load from real inference and deterministic lifecycle tests
 from unperformed hardware/background tests.
+
+The browser recheck below records the earlier UI. Current live-only connection
+and control behavior, including automatic owned-model binding, is documented in
+the [workspace guide](app/README.md).
 
 Epic browser recheck on **2026-10-21**, Windows/Radeon: the full CPU model's
 `/epic` stream drew all 1,958 nodes and 19,037 edges with visible activity.

@@ -38,6 +38,7 @@ The presentable frontend in [`frontend/`](frontend/README.md) is an integrated R
 TypeScript, and Vite workspace pairing text prompt generation with an embedded live
 WebGPU brain viewer and neuron inspector. It mounts the shared `harness/app/live-atlas.js`
 module and reuses the tested `GenerationController` without duplicating client logic.
+The atlas shows MBON → model readout → decoded text from producer `token_step` telemetry, with a `Local SSE` fallback; the paths are architectural, not attribution.
 
 ### Quickstart
 
@@ -61,6 +62,33 @@ Open **http://127.0.0.1:5173/**. The Vite dev server proxies HTTP `/health` and 
 (`FLYBRAIN_STREAM_URL`). Connecting to same-origin `/stream` avoids extra endpoint
 configuration and browser mixed-content restrictions. In production, configure a reverse
 proxy to route both HTTP routes and WebSocket upgrades on `/stream`.
+
+For network access:
+
+```console
+cd frontend && npx vite --host 0.0.0.0
+```
+
+It is unauthenticated, and remote plain HTTP disables WebGPU drawing (prompting still works).
+Use trusted HTTPS for remote graph rendering, for example private Tailscale Serve;
+see [network HTTPS setup](frontend/README.md#network-https-and-webgpu). Plain HTTP
+on a network IP is not a secure browser context, even inside a Tailnet.
+
+### Trained vibe2 checkpoint
+
+Trained checkpoints are private and not bundled. Import the original TinyStories weights
+with their matching wiring using `model.vibe2.import_weights` per
+[`model/README.md#vibe2-trained-fly-dopamine-weights`](model/README.md#vibe2-trained-fly-dopamine-weights).
+Never run `model.init_model` onto the trained file (it overwrites weights with random untrained values).
+
+Launch from the repository root:
+
+```console
+python -m harness.telemetry.serve --ckpt model/checkpoints/vibe2_tinystories.pt --port 8771 --viz-port 8765 --model-id vibe2-tinystories
+npm --prefix frontend run dev
+```
+
+Open **http://127.0.0.1:5173/**; expect **1,959 nodes / 19,037 edges**.
 
 See [`frontend/README.md`](frontend/README.md) for full architecture, lifecycle details,
 data limits, preview/production deployment, and smoke verification evidence. Offline
@@ -148,6 +176,7 @@ Chrome or Edge browser.
 - **Memory/dopamine inspector**: Inspect observed recurrent writes, per-head gates
   and recovery, and sampled KC/head state slices. See
   [memory setup and limits](harness/app/README.md#memory--dopamine-inspector).
+
 ## Run the real model or tests
 
 The [workflow guide](harness/WORKFLOW.md) contains Windows PowerShell and POSIX

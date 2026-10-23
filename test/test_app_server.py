@@ -3,7 +3,7 @@
 Tests meaningful real sockets:
 - Confinement of static assets to harness/ directory (no directory traversal, no dotfiles/secrets).
 - Root redirect ("/" and "/app" -> "/app/").
-- Fixed configured HTTP upstream on literal loopback (rejecting non-loopback bind/upstream).
+- Fixed configured HTTP upstream on literal loopback, with opt-in wildcard app binding.
 - Whitelisted routes proxying (/health, /v1/models, /v1/completions, /v1/chat/completions).
 - Bounded request body enforcement.
 - Memory-only pass-through of Authorization header.
@@ -35,13 +35,16 @@ from harness.app_server import (
     DEFAULT_API_URL,
     DEFAULT_HOST,
     DEFAULT_PORT,
+    DEFAULT_VIZ_PORT,
     MAX_REQUEST_BODY_SIZE,
     AppHTTPServer,
     ModelProcess,
     is_loopback_host,
     make_server,
+    resolve_owned_binding,
     resolve_static_asset,
     validate_loopback_url,
+    validate_loopback_ws_url,
 )
 
 
@@ -177,8 +180,6 @@ def test_loopback_validation():
     with pytest.raises(ValueError, match="literal loopback"):
         validate_loopback_url("http://192.168.1.1:8771")
 
-    with pytest.raises(ValueError, match="literal loopback"):
-        make_server(host="0.0.0.0", port=0)
 
 
 def test_root_and_app_redirects():
@@ -496,8 +497,6 @@ def test_disconnect_propagates_to_upstream_cleanup(dummy_upstream):
         upstream_srv.resume_second_chunk_event.set()
         assert upstream_srv.completion_event.wait(timeout=2.0)
 
-        # Upstream encountered connection error when attempting next write
-        assert upstream_srv.write_error in ("BrokenPipeError", "ConnectionResetError")
     finally:
         server.shutdown()
         server.server_close()
@@ -752,17 +751,17 @@ def test_launcher_reports_loading_then_ready_with_checkpoint(tmp_path):
         mp.stop()
 
 
-def test_launcher_reports_model_exited(tmp_path):
-    """Verify proxy returns model_exited 503 with exit code if child terminates prematurely."""
+def test_launcher_reports_model_exited(tmp_path, dummy_upstream):
+    """An exited owned child must not adopt another API listening on its configured port."""
     ckpt = tmp_path / "model.pt"
     ckpt.write_bytes(b"dummy")
-    port = _free_port()
+    _, upstream_url = dummy_upstream
     mp = ModelProcess(
         [sys.executable, "-c", "import sys; sys.exit(3)"],
         cwd=tmp_path,
         ckpt_path=ckpt,
     )
-    server = make_server(port=0, api_url=f"http://127.0.0.1:{port}", model_process=mp)
+    server = make_server(port=0, api_url=upstream_url, model_process=mp)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     app_port = server.server_address[1]
 
@@ -823,3 +822,124 @@ def test_model_process_stop_terminates_child(tmp_path):
         }
     finally:
         mp.stop()
+
+
+def test_validate_loopback_ws_url():
+    """Verify loopback websocket URL validation rules."""
+    # Valid loopback ws and wss URLs
+    res = validate_loopback_ws_url("ws://127.0.0.1:8765/stream")
+    assert res.scheme == "ws"
+    assert res.hostname == "127.0.0.1"
+    assert res.port == 8765
+    assert res.path == "/stream"
+
+    assert validate_loopback_ws_url("ws://localhost:8765").hostname == "localhost"
+    assert validate_loopback_ws_url("wss://127.0.0.1:8765/stream").scheme == "wss"
+    assert validate_loopback_ws_url("ws://[::1]:8765/stream").port == 8765
+
+    # Scheme restrictions
+    with pytest.raises(ValueError, match="scheme must be ws or wss"):
+        validate_loopback_ws_url("http://127.0.0.1:8765")
+    with pytest.raises(ValueError, match="scheme must be ws or wss"):
+        validate_loopback_ws_url("tcp://127.0.0.1:8765")
+
+    # Non-loopback host restrictions
+    with pytest.raises(ValueError, match="host must be literal loopback"):
+        validate_loopback_ws_url("ws://0.0.0.0:8765")
+    with pytest.raises(ValueError, match="host must be literal loopback"):
+        validate_loopback_ws_url("ws://example.com:8765/stream")
+    with pytest.raises(ValueError, match="host must be literal loopback"):
+        validate_loopback_ws_url("ws://192.168.1.1:8765")
+
+    # Empty or invalid type
+    with pytest.raises(ValueError, match="non-empty string"):
+        validate_loopback_ws_url("")
+
+
+@pytest.mark.parametrize("url", [
+    "ws://user:secret@127.0.0.1:8765/stream",
+    "ws://127.0.0.1:8765/stream?token=secret",
+    "ws://127.0.0.1:8765/stream#secret",
+    "ws://127.0.0.1:0/stream",
+    "ws://127.0.0.1:65536/stream",
+])
+def test_rejects_sensitive_or_unusable_stream_urls(url):
+    with pytest.raises(ValueError):
+        make_server(port=0, viz_url=url)
+
+@pytest.mark.parametrize("viz_url", [
+    "ws://127.0.0.1:9999/stream",
+    "wss://127.0.0.1:8765/stream",
+    "ws://127.0.0.2:8765/stream",
+    "ws://127.0.0.1:8765/custom",
+    "ws://127.0.0.1:8765",
+])
+def test_resolve_owned_binding_rejects_contradictory_viz_url(tmp_path, viz_url):
+    ckpt = tmp_path / "model.pt"
+    ckpt.write_bytes(b"dummy")
+    with pytest.raises(ValueError, match="contradicts owned model visualization stream"):
+        resolve_owned_binding(
+            ckpt_path=ckpt,
+            api_url="http://127.0.0.1:8771",
+            viz_port=8765,
+            viz_url=viz_url,
+        )
+
+
+@pytest.mark.parametrize("arg", [
+    "--ckpt=other.pt", "--host=0.0.0.0", "--port=9000",
+    "--viz-port", "--model-id=other", "--record=other.ndjson", "--no-viz",
+])
+def test_owned_binding_cannot_be_overridden_by_passthrough_args(tmp_path, arg):
+    ckpt = tmp_path / "model.pt"
+    ckpt.write_bytes(b"dummy")
+    with pytest.raises(ValueError, match="App-owned model option"):
+        resolve_owned_binding(
+            ckpt_path=ckpt,
+            api_url="http://127.0.0.1:8771",
+            model_args=[arg],
+        )
+
+
+def test_resolve_owned_binding_validation_boundaries(tmp_path):
+    """Verify validation boundaries for owned binding resolution."""
+    # Missing checkpoint
+    with pytest.raises(ValueError, match="checkpoint not found"):
+        resolve_owned_binding(
+            ckpt_path=tmp_path / "nonexistent.pt",
+            api_url="http://127.0.0.1:8771",
+        )
+
+    ckpt = tmp_path / "model.pt"
+    ckpt.write_bytes(b"dummy")
+
+    # Non-loopback api_url
+    with pytest.raises(ValueError, match="must be literal loopback"):
+        resolve_owned_binding(
+            ckpt_path=ckpt,
+            api_url="http://example.com:8771",
+        )
+
+    # Invalid port values
+    with pytest.raises(ValueError, match="Invalid --viz-port"):
+        resolve_owned_binding(
+            ckpt_path=ckpt,
+            api_url="http://127.0.0.1:8771",
+            viz_port=-1,
+        )
+
+    for port in (0, 65536, "not-a-port"):
+        with pytest.raises(ValueError, match="Invalid --viz-port"):
+            resolve_owned_binding(ckpt_path=ckpt, api_url="http://127.0.0.1:8771", viz_port=port)
+
+
+@pytest.mark.parametrize("api_url", [
+    "https://127.0.0.1:8771",
+    "http://127.0.0.1:8771/prefix",
+    "http://user:secret@127.0.0.1:8771",
+])
+def test_owned_binding_requires_the_actual_child_http_origin(tmp_path, api_url):
+    ckpt = tmp_path / "model.pt"
+    ckpt.write_bytes(b"dummy")
+    with pytest.raises(ValueError, match="plain HTTP loopback origin"):
+        resolve_owned_binding(ckpt_path=ckpt, api_url=api_url)

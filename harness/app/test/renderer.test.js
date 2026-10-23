@@ -10,7 +10,7 @@ const graph = (edges = 1, nodes = 2) => ({
   edgePairs: Array.from({ length: edges }, (_, index) => [index, index + 1]),
 });
 
-function setup() {
+function setup(options = {}) {
   const buffers = [];
   const writes = [];
   const completions = [];
@@ -45,7 +45,7 @@ function setup() {
     setPipeline: () => {}, setBindGroup: () => {},
     setVertexBuffer: (_slot, buffer) => calls.push(buffer), draw: (count) => calls.push(count),
   };
-  const renderer = createRenderer(device, 'bgra8unorm');
+  const renderer = createRenderer(device, 'bgra8unorm', options);
   return { device, buffers, writes, completions, calls, pass, renderer };
 }
 
@@ -250,5 +250,34 @@ test('thousands of fires coalesce into one fixed-size activity upload on the nex
   s.renderer.draw(s.pass, camera, 30 * 86400000);
   assert.deepEqual(storageWrites().at(-1).data, [-1, -1, -1]);
   assert.equal(s.writes.at(-1).data[3], 600, 'shader clock stays bounded');
+  s.renderer.destroy();
+});
+test('dot connections stay idle until fired and reject graphs built for another style', () => {
+  const s = setup({ connectionStyle: 'dots' });
+
+  const dotGraph = {
+    edges: new Float32Array(54),
+    nodes: new Float32Array(42),
+    edgePairs: [[0, 1]],
+    edgeCount: 1,
+    connectionStyle: 'dots',
+  };
+  s.renderer.setGraph(dotGraph);
+  assert.equal(s.renderer.isActive(100), false);
+
+  s.renderer.fire([[0, 1]], 100);
+  assert.equal(s.renderer.isActive(699), true);
+  assert.equal(s.renderer.isActive(700), false);
+
+  const wrongStyle = {
+    ...dotGraph,
+    edges: new Float32Array(189), // Valid triangle count in both interleaved formats.
+    connectionStyle: 'lines',
+  };
+  assert.throws(() => s.renderer.setGraph(wrongStyle), /connection style does not match/);
+  assert.equal(s.renderer.fire([[0, 1]], 800), true, 'the rejected graph leaves the current one intact');
+  s.renderer.setGraph(null);
+  assert.equal(s.renderer.isActive(900), false);
+
   s.renderer.destroy();
 });

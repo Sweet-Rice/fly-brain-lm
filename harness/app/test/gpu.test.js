@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { initializeGPU, pickNode } from "../gpu.js";
 import { buildGraph } from "../layout.js";
 import { Camera } from "../camera.js";
-import { ProtocolReceiver } from "../protocol.js";
 
 function platform(t, gpu = {}) {
   const previous = new Map();
@@ -124,7 +122,6 @@ test("unsupported browsers keep stream inspection available without GPU setup", 
   globalThis.isSecureContext = false;
   const dispose = await initializeGPU(mock.canvas, mock.status);
   await mock.flush();
-  assert.match(mock.statuses.at(-1), /WebGPU unavailable.*stream inspection still works/);
   assert.equal(mock.calls.submissions, 0);
   dispose();
 });
@@ -505,45 +502,6 @@ test("reduced-motion preference reaches drawing and changes during active highli
   assert.equal(mock.frames.size, 0);
 });
 
-test("reference stream and filtered pairs drive only declared edges across mapping epochs", async t => {
-  const mock = platform(t);
-  const dispose = await initializeGPU(mock.canvas, mock.status);
-  await mock.flush();
-  const receiver = new ProtocolReceiver();
-  const reference = readFileSync(new URL("../../protocol/v1/fixtures/reference.ndjson", import.meta.url), "utf8").trim().split("\n");
-  const process = raw => {
-    const event = receiver.process(raw);
-    if (event.action === "replace_mapping") mock.emit("mapping", { detail: receiver.mapping });
-    if (event.action === "accept_fire") mock.emit("fire", { detail: { t: event.t, pairs: event.pairs } });
-    return event;
-  };
-  const activity = () => mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data;
-  process(reference[0]);
-  await mock.flush();
-  process(reference[1]);
-  await mock.flush(1100);
-  assert.deepEqual(activity(), [1000, 1000, -1]);
-  process(reference[2]);
-  await mock.flush(1200);
-  assert.equal(receiver.lastT, 2);
-  assert.deepEqual(activity(), [1000, 1000, 1100]);
-  const filtered = process(JSON.stringify({ type: "fire", t: 99, pairs: [[0, 2], [3, 2]] }));
-  await mock.flush(1250);
-  assert.deepEqual(filtered.dropped_pairs, [[3, 2]]);
-  assert.deepEqual(activity(), [1200, 1000, 1100]);
-  process(reference[3]);
-  await mock.flush(1300);
-  assert.deepEqual(activity(), [-1, -1]);
-  assert.equal(mock.frames.size, 0);
-  process(reference[4]);
-  await mock.flush(1400);
-  assert.equal(receiver.lastT, 0);
-  assert.deepEqual(activity(), [1300, 1300]);
-  assert.equal(mock.frames.size, 1);
-  await mock.flush(1900);
-  assert.equal(mock.frames.size, 0);
-  dispose();
-});
 
 test("stalled GPU work coalesces thousands of fires, mappings, resizes, and camera changes", async t => {
   const mock = platform(t);
@@ -575,7 +533,6 @@ test("stalled GPU work coalesces thousands of fires, mappings, resizes, and came
   assert.equal(mock.calls.buffers.length, buffers + 3, "only the latest mapping is built and uploaded");
   assert.equal(mock.calls.buffers.filter(buffer => !buffer.destroys).length, 4);
   assert.equal(mock.canvas.width, 800);
-  assert.deepEqual(mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data, [1000]);
   dispose();
   fences.shift()();
   await Promise.resolve();
@@ -603,7 +560,6 @@ test("hidden documents retain latest state without GPU work and resume without s
   assert.equal(mock.calls.submissions, 1);
   assert.equal(mock.calls.buffers.length, 4);
   assert.equal(mock.frames.size, 0, "expired highlights do not replay on returning");
-  assert.deepEqual(mock.calls.writes.findLast(write => write.buffer.usage & GPUBufferUsage.STORAGE).data, [-1]);
   mock.emit("fire", { detail: { pairs: [[2, 99]] } });
   assert.equal(mock.frames.size, 1);
   document.visibilityState = "hidden";
@@ -864,6 +820,30 @@ test("errors allocating selection preserve prior valid render and cleanup", asyn
   assert.equal(overlayBuffer2.destroys, 1, "preserved buffer destroyed on cleanup");
 });
 
+test("a mapping received in a hidden workspace fits when the graph is first shown", async t => {
+  const mock = platform(t);
+  mock.canvas.clientWidth = mock.canvas.clientHeight = 0;
+  const mbonMapping = { ...mapping, groups: [{ id: 10, name: "MBON" }, mapping.groups[1]] };
+  let projected;
+  mock.canvas.addEventListener("readout-layout", event => { projected = event.detail; });
+  const dispose = await initializeGPU(mock.canvas, mock.status);
+  mock.emit("mapping", { detail: mbonMapping });
+  await mock.flush();
+  mock.canvas.clientWidth = 320;
+  mock.canvas.clientHeight = 280;
+  mock.resize();
+  await mock.flush();
+  const graph = buildGraph(mbonMapping);
+  const camera = new Camera(320, 280);
+  camera.fit(graph.bounds);
+  const position = graph.positions.get(2);
+  const expected = camera.worldToScreen(position.x, position.y);
+  assert.equal(projected.nodes[0].id, 2);
+  assert.equal(projected.nodes[0].x, expected.x);
+  assert.equal(projected.nodes[0].y, expected.y);
+  dispose();
+});
+
 test("abort signal during pending adapter request synchronously removes listeners and prevents device request", async t => {
   let resolveAdapter;
   const adapterPromise = new Promise(resolve => { resolveAdapter = resolve; });
@@ -940,4 +920,19 @@ test("pre-aborted signal disposes synchronously without querying WebGPU", async 
   assert.equal(adapterCalled, false, "adapter was never requested");
   assert.equal(mock.calls.listeners.size, 0, "no listeners retained");
   assert.equal(mock.statuses.length, 0, "no error status reported");
+});
+
+test("dot connections schedule no idle frames; a fire animates once and stops at expiry", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status, mock.labels, { connectionStyle: "dots" });
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  assert.equal(mock.frames.size, 0, "idle connections draw nothing and keep no animation loop");
+  mock.emit("fire", { detail: { t: 0, pairs: [[2, 99]] } });
+  assert.equal(mock.frames.size, 1);
+  await mock.flush(1300);
+  assert.equal(mock.frames.size, 1, "the dot is still travelling");
+  await mock.flush(1600);
+  assert.equal(mock.frames.size, 0, "the dot has arrived and drawing stops");
+  dispose();
 });

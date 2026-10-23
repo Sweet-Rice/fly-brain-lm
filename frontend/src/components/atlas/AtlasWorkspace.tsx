@@ -36,7 +36,7 @@ function stateTone(
 }
 
 function stateLabel(state: string): string {
-  if (state === 'connected') return 'Stream live';
+  if (state === 'connected') return 'Live';
   if (state === 'connecting') return 'Connecting…';
   if (state === 'reconnecting') return 'Reconnecting…';
   if (state === 'background') return 'Stream paused';
@@ -47,15 +47,16 @@ function stateLabel(state: string): string {
 
 export interface AtlasWorkspaceProps {
   endpoint?: string;
+  connectionStyle?: 'lines' | 'dots';
 }
 
 export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
-  function AtlasWorkspace({ endpoint }, ref) {
+  function AtlasWorkspace({ endpoint, connectionStyle = 'dots' }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const labelsRef = useRef<HTMLDivElement>(null);
     const inspectorRef = useRef<HTMLDivElement>(null);
+    const readoutRef = useRef<HTMLDivElement>(null);
     const handleRef = useRef<LiveAtlasHandle | null>(null);
-
     const [snapshot, setSnapshot] =
       useState<LiveAtlasSnapshot>(INITIAL_SNAPSHOT);
 
@@ -77,6 +78,9 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
         zoom: (factor: number) => {
           handleRef.current?.zoom(factor);
         },
+        setGeneration: (state) => {
+          handleRef.current?.setGeneration(state);
+        },
         dispose: () => {
           handleRef.current?.dispose();
         },
@@ -88,12 +92,15 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
       const canvas = canvasRef.current;
       const labels = labelsRef.current;
       const inspector = inspectorRef.current;
-      if (!canvas || !labels || !inspector) return;
+      const readout = readoutRef.current;
+      if (!canvas || !labels || !inspector || !readout) return;
 
       const handle = mountLiveAtlas({
         canvas,
         labels,
         inspector,
+        readout,
+        connectionStyle,
         onState: (nextSnapshot) => {
           setSnapshot(nextSnapshot);
         },
@@ -106,7 +113,7 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
         handleRef.current = null;
         handle.dispose();
       };
-    }, [endpoint]);
+    }, [endpoint, connectionStyle]);
 
     const isConnected = snapshot.connectionState === 'connected';
     const isPending =
@@ -144,19 +151,32 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
       <div className="atlas-workspace-container" id="neural-atlas">
         <div className="atlas-workspace-grid">
           {/* Viewport & Controls Panel */}
-          <Panel
-            className="atlas-viewport-panel"
-            eyebrow="03 / Neural Atlas"
-            title="Live brain circuit"
-          >
+          <Panel aria-label="Neural atlas" className="atlas-viewport-panel">
             <div className="atlas-panel__header-row">
-              <Status
-                aria-live="polite"
-                pulse={isPending}
-                tone={stateTone(snapshot.connectionState)}
-              >
-                {stateLabel(snapshot.connectionState)}
-              </Status>
+              <div className="atlas-panel__status-group">
+                <Status
+                  aria-live="polite"
+                  pulse={isPending}
+                  tone={stateTone(snapshot.connectionState)}
+                >
+                  {stateLabel(snapshot.connectionState)}
+                </Status>
+                {snapshot.nodeCount > 0 && (
+                  <span className="atlas-compact-metrics">
+                    <span>{snapshot.nodeCount.toLocaleString()} nodes</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{snapshot.edgeCount.toLocaleString()} edges</span>
+                    {droppedTotal > 0 && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="atlas-metrics-dropped">
+                          {droppedTotal} dropped
+                        </span>
+                      </>
+                    )}
+                  </span>
+                )}
+              </div>
               <div className="atlas-panel__header-actions">
                 {isConnected || isPending ? (
                   <Button
@@ -200,14 +220,11 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
                   className="atlas-viewport__labels"
                   ref={labelsRef}
                 />
-
-                <div className="atlas-viewport__schematic-chip">
-                  <span
-                    aria-hidden="true"
-                    className="atlas-viewport__schematic-dot"
-                  />
-                  <span>Schematic layout: illustrative positions</span>
-                </div>
+                <div
+                  aria-label="MBON readout to decoded text"
+                  className="atlas-viewport__readout"
+                  ref={readoutRef}
+                />
 
                 <div
                   aria-label="Graph zoom and fit controls"
@@ -251,68 +268,21 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
                     aria-live="polite"
                     className="atlas-viewport__gpu-banner"
                     role="alert"
+                    title={snapshot.gpuMessage ?? 'WebGPU unavailable'}
                   >
-                    <strong>WebGPU visualizer unavailable</strong>
-                    <p>{snapshot.gpuMessage}</p>
-                    <small>
-                      Neuron inspection, group legend, and generation remain
-                      fully available.
-                    </small>
+                    <span>
+                      {window.isSecureContext
+                        ? 'WebGPU unavailable'
+                        : 'HTTPS required for graph'}
+                    </span>
                   </div>
                 )}
               </div>
-
-              <div className="atlas-viewport__keyboard-hint">
-                <span>
-                  Canvas keys: <kbd>Arrow keys</kbd> pan · <kbd>+</kbd>/
-                  <kbd>−</kbd> zoom · <kbd>0</kbd> fit
-                </span>
-                {snapshot.connectionMessage && (
-                  <span title={snapshot.connectionMessage}>
-                    {snapshot.connectionMessage}
-                  </span>
-                )}
-              </div>
-
-              {/* Real counters from live stream */}
-              <dl
-                aria-label="Live circuit mapping counters"
-                className="atlas-metrics"
-              >
-                <div>
-                  <dt>Mapping Nodes</dt>
-                  <dd>{snapshot.nodeCount.toLocaleString()}</dd>
-                </div>
-                <div>
-                  <dt>Declared Edges</dt>
-                  <dd>{snapshot.edgeCount.toLocaleString()}</dd>
-                </div>
-                <div>
-                  <dt>Last Step</dt>
-                  <dd>
-                    {snapshot.lastStep !== null
-                      ? snapshot.lastStep.toLocaleString()
-                      : '—'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Accepted Fires</dt>
-                  <dd>{snapshot.acceptedFires.toLocaleString()}</dd>
-                </div>
-                <div>
-                  <dt>Dropped Signals</dt>
-                  <dd>{droppedTotal.toLocaleString()}</dd>
-                </div>
-              </dl>
             </div>
           </Panel>
 
           {/* Inspector & Group Legend Panel */}
-          <Panel
-            className="atlas-inspector-panel"
-            eyebrow="04 / Circuit Details"
-            title="Inspection & Groups"
-          >
+          <Panel aria-label="Circuit details" className="atlas-inspector-panel">
             <div className="atlas-inspector-content">
               {/* Imperative Inspector mount root */}
               <div
@@ -325,10 +295,6 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
               <div className="atlas-groups-block">
                 <div className="atlas-groups-header">
                   <h3>Circuit groups</h3>
-                  <span className="atlas-groups-count">
-                    {snapshot.groups.length}{' '}
-                    {snapshot.groups.length === 1 ? 'group' : 'groups'}
-                  </span>
                 </div>
 
                 {snapshot.groups.length === 0 ? (
@@ -347,14 +313,15 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
                             <span className="sr-only">Colour</span>
                           </th>
                           <th scope="col">Group</th>
-                          <th scope="col">ID</th>
                           <th scope="col">Nodes</th>
-                          <th scope="col">Placement</th>
                         </tr>
                       </thead>
                       <tbody>
                         {snapshot.groups.map((group) => (
-                          <tr key={group.id}>
+                          <tr
+                            key={group.id}
+                            title={`Group ${group.id} · ${group.placement}`}
+                          >
                             <td>
                               <span
                                 aria-hidden="true"
@@ -365,31 +332,13 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
                             <td>
                               <strong>{group.name}</strong>
                             </td>
-                            <td>
-                              <code>{group.id}</code>
-                            </td>
                             <td>{group.count.toLocaleString()}</td>
-                            <td>
-                              <span className="atlas-placement-tag">
-                                {group.placement}
-                              </span>
-                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 )}
-
-                <div className="atlas-caveat-box">
-                  <p>
-                    <strong>Anatomical note:</strong> Anatomical connectome body
-                    IDs (e.g. FlyWire or hemibrain) are unavailable in this
-                    model checkpoint mapping. Neurons are indexed by logical
-                    circuit ID. Layout positions are illustrative schematic
-                    layers rather than measured fruit fly anatomy.
-                  </p>
-                </div>
               </div>
             </div>
           </Panel>

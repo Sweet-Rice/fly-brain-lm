@@ -1,7 +1,8 @@
 # Real model to browser: reproducible workflow
 
-Run every command from the repository root. The integrated browser workspace in `app/`
-combines WebGPU activity inspection with an in-browser prompt composer and neuron
+This guide steps through a clean-checkout offline review, installing the model
+dependencies, a headless smoke test, a live browser workflow with the real
+untrained model, mapping replacement during inference, and the in-browser neuron
 inspector. Live activity here comes from actual PyTorch model hooks. The model is
 **untrained**, so its generated text has no quality claim.
 
@@ -42,72 +43,67 @@ immutable legacy fixture; the [Canvas example](example/README.md) is separate.
 
 ## 2. Install the real model dependencies
 
-Python 3.12 was used on the target machine. Reuse an existing `.venv`; otherwise
-create one. These commands install CPU PyTorch, so CUDA is unnecessary. Package
-installation requires network access; `tiktoken` may also download its GPT-2
-encoding on its first use. The checked-in `data/connectome/wiring.npz` supplies
-the real wiring; no large connectome tables or TinyStories download are needed.
+The model and workflow runner need PyTorch and standard packages. Run from the
+repository root.
 
 Windows PowerShell:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-.\.venv\Scripts\python.exe -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
+.\.venv\Scripts\Activate.ps1
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
 ```
 
-POSIX shell:
+POSIX shell (Linux / macOS):
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/python -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
+source .venv/bin/activate
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install numpy pandas pyarrow tiktoken websockets pytest jsonschema
 ```
 
-For other PyTorch builds use the [installation selector](https://pytorch.org/get-started/locally/).
-Optional data preparation is documented in [`../data/README.md`](../data/README.md).
-The browser has no runtime npm dependencies or build step. Node.js 22+ runs its
-tests; the optional development-only TypeScript checker verifies the
-[UI inference contract v1](app/inference-contract/v1/README.md).
+The workflow runs on CPU using the bundled wiring in `data/`; no CUDA or large
+connectome download is required.
 
-## 3. Run the headless smoke command
+## 3. Headless smoke test
+
+Verify the full pipeline without a browser or WebSocket:
 
 Windows PowerShell:
 
 ```powershell
-.\.venv\Scripts\python.exe -m harness.workflow
+.\.venv\Scripts\python.exe -m harness.workflow --smoke
 ```
 
 POSIX shell:
 
 ```bash
-.venv/bin/python -m harness.workflow
+.venv/bin/python -m harness.workflow --smoke
 ```
 
 This builds the full default untrained `vibe` model from bundled wiring on CPU, using
 seed 0, 12 layers and width 384. It runs greedy inference for `Once upon a time`
 with up to eight generated tokens. It checks mapping-first delivery, ordered
 declared fires, inference while disconnected, reconnect, mapping refresh with
-restarted `t`, and unchanged generated tokens when the visualization hook is
-detached. It needs no checkpoint and writes no checkpoint. Without `--record`,
-its temporary recording is deleted. Failures exit unsuccessfully; passing this
-command does not prove a browser has a usable WebGPU adapter.
+epoch rollover, and clean disconnect. The run prints each step's `t` and active
+edge count, and completes with `ALL SMOKE CHECKS PASSED`.
 
-### Run either model implementation
+For the fly-dopamine model (`vibe2`), add `--impl vibe2`:
 
-Add `--impl vibe2` to run the fly-dopamine implementation from PR #35 through
-the same smoke scenarios; `--impl vibe` selects the existing scaffold explicitly.
-Without `--impl`, the runner uses `FLYBRAIN_IMPL`, then defaults to `vibe`. Both
+```console
+.venv/bin/python -m harness.workflow --smoke --impl vibe2
+```
+
+The runner selects the implementation through the shared registry. Both
 fresh defaults use 12 layers, width 384 and the bundled 54-glomerulus wiring:
 1,958 nodes and 19,037 edges. They are different untrained models and need not
 generate the same tokens or select the same KC paths. Within each implementation,
 removing the hook must leave its generated tokens unchanged. The `personal`
 registry entry is an unimplemented template and fails explicitly.
 
-```console
-python -m harness.workflow --impl vibe
-python -m harness.workflow --impl vibe2
-```
+### Reference recording and provenance
 
 Neither command imports private trained weights. The checked-in reference remains
 the historical `vibe` recording. New recording metadata identifies the selected
@@ -220,12 +216,21 @@ Chrome or Edge browser.
 - **Same-origin reverse proxy**: The app server reverse proxy is a local loopback
   convenience for development, not public secure hosting. `model/serve/serve.py`
   remains completely frozen and untouched.
+- **Same-origin stream relay**: The app server relays WebSocket `/stream` to the
+  configured visualization stream, keeping browser connections same-origin.
 - **Model implementation selection**: Models (`vibe` vs `vibe2`) are chosen when
   initializing the checkpoint (default `init_model` writes `model/checkpoints/<impl>.pt`,
   e.g. `vibe.pt`, not `init.pt`; see [model initialization](../model/README.md)), not via
   a serving dropdown in the UI. Do not overwrite private trained checkpoints. Serving
   defaults to `model/checkpoints/init.pt`, so explicitly pass `--ckpt` pointing to your
   scratch checkpoint. Serving loads whichever implementation is recorded in the checkpoint.
+- **Network access**: The app binds loopback by default. `--host 0.0.0.0` permits network
+  access, while the model API and visualization listener remain private. This is not
+  authenticated public hosting; remote WebGPU drawing requires HTTPS. An HTTPS reverse
+  proxy must also forward WebSocket upgrades for `/stream`.
+- **One-command launcher**: `--model-ckpt` starts the model server as a child process,
+  reports loading status and checkpoint SHA-256 prefix on `/health`, and shuts down
+  the child on exit.
 
 ### Prompt Composer in the workspace
 
@@ -280,6 +285,7 @@ Chrome or Edge browser.
   observed activity histories.
 - **Future timeline and memory panels**: Timeline and memory backend integration issues
   will be linked in a follow-up PR later (no placeholder doc links are created).
+
 ## 6. Existing checkpoints and visualization configuration
 
 Existing applications can continue using the frozen entry points in
@@ -293,7 +299,7 @@ build-selection environment variable. Legacy checkpoints without `impl` load as
 
 | Entry point | Visualization configuration |
 |---|---|
-| `harness.app_server` | `--port 8772` HTTP server for `/app/` static assets and `/health` + `/v1` reverse proxy. `--api-url http://127.0.0.1:8771` points to upstream model server. Loopback only. |
+| `harness.app_server` | Live `/app/` and same-origin `/stream`, `/health` + `/v1` proxies. Prefer `--model-ckpt` with `--api-url` and `--viz-port` for one owned model. Proxy-only mode requires explicit `--viz-url`; no guessed stream. Loopback by default; `--host 0.0.0.0` opts into network access. |
 | `harness.workflow` | `--impl` / `FLYBRAIN_IMPL` select a fresh implementation; default `vibe`. Loopback only; `--port 0` selects a free port; `--path /stream` or another absolute path. `--serve` keeps inference running; omit it for the finite smoke. `--record PATH` is optional. |
 | `model.serve.ask` | `--host 127.0.0.1 --port 8767 --path /stream --block 0`; `--port 0` chooses a free port. Visualization is enabled; there is **no `--no-viz` flag**. |
 | `model.serve.serve` | `--port 8771` is the HTTP API port; `--viz-port 8767` is the separate stream port. Stream path is `/stream`. `--no-viz` disables the stream/recorder without disabling requests. |

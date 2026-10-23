@@ -171,6 +171,8 @@ export class NeuronIndex {
 export function mountInspector(root, canvas = null) {
   const index = new NeuronIndex();
   let selectedId = null;
+  let activeTab = "identity";
+  let userChoseLinks = false;
   let inPage = 0;
   let outPage = 0;
   let updateScheduled = false;
@@ -197,8 +199,7 @@ export function mountInspector(root, canvas = null) {
 
   const header = createEl("div", "inspector-header", "inspector-header");
   const title = createEl("h3", "inspector-title", "inspector-title", "Neuron Inspector");
-  const status = createEl("span", "inspector-status", "inspector-status", "No mapping received.");
-  header.append(title, status);
+  header.append(title);
 
   // Selection form
   const form = createEl("form", "inspector-select-form", "inspector-select-form");
@@ -211,9 +212,7 @@ export function mountInspector(root, canvas = null) {
   input.placeholder = "e.g. 7";
   const selectBtn = createEl("button", "inspector-select-btn", "inspector-btn", "Inspect");
   selectBtn.type = "submit";
-  const clearBtn = createEl("button", "inspector-clear-btn", "inspector-btn", "Clear");
-  clearBtn.type = "button";
-  inputGroup.append(input, selectBtn, clearBtn);
+  inputGroup.append(input, selectBtn);
   const errorMsg = createEl("div", "inspector-select-error", "inspector-error");
   errorMsg.setAttribute("role", "alert");
   form.append(formLabel, inputGroup, errorMsg);
@@ -225,8 +224,60 @@ export function mountInspector(root, canvas = null) {
   const details = createEl("div", "neuron-details", "neuron-details");
   details.hidden = true;
 
+  // Tabs container and buttons
+  const tabsContainer = createEl("div", "inspector-tabs", "inspector-tabs");
+  tabsContainer.setAttribute("role", "tablist");
+  tabsContainer.setAttribute("aria-label", "Neuron detail views");
+
+  const tabDefs = [
+    { id: "identity", label: "Identity", panelId: "neuron-section-identity" },
+    { id: "links", label: "Links", panelId: "neuron-section-links" },
+    { id: "activity", label: "Activity", panelId: "neuron-section-activity" },
+  ];
+
+  const tabButtons = {};
+  for (const def of tabDefs) {
+    const btn = createEl("button", `inspector-tab-${def.id}`, "inspector-tab", def.label);
+    btn.type = "button";
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-controls", def.panelId);
+    btn.setAttribute("aria-selected", "false");
+    btn.setAttribute("aria-pressed", "false");
+    btn.dataset.tab = def.id;
+    btn.addEventListener("click", () => {
+      userChoseLinks = (def.id === "links");
+      setActiveTab(def.id);
+    });
+    tabButtons[def.id] = btn;
+    tabsContainer.append(btn);
+  }
+
+  tabsContainer.addEventListener("keydown", (e) => {
+    const tabs = tabDefs.map(d => tabButtons[d.id]);
+    const currentIndex = tabs.findIndex(t => t === (globalThis.document?.activeElement || null));
+    if (currentIndex === -1) return;
+    let nextIndex = -1;
+    if (e.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % tabs.length;
+    } else if (e.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    } else if (e.key === "Home") {
+      nextIndex = 0;
+    } else if (e.key === "End") {
+      nextIndex = tabs.length - 1;
+    }
+    if (nextIndex >= 0) {
+      e.preventDefault();
+      const nextTab = tabs[nextIndex];
+      if (typeof nextTab.focus === "function") nextTab.focus();
+      nextTab.click();
+    }
+  });
+
   // Identity
-  const identSection = createEl("div", null, "neuron-section");
+  const identSection = createEl("div", "neuron-section-identity", "neuron-section");
+  identSection.setAttribute("role", "tabpanel");
+  identSection.setAttribute("aria-labelledby", "inspector-tab-identity");
   const idRow = createEl("div", null, "neuron-row");
   const idLabel = createEl("span", null, "neuron-label", "Neuron ID: ");
   const idVal = createEl("span", "neuron-id", "neuron-value");
@@ -245,7 +296,9 @@ export function mountInspector(root, canvas = null) {
   identSection.append(idRow, groupRow, bodyRow);
 
   // Connectivity
-  const connSection = createEl("div", null, "neuron-section");
+  const connSection = createEl("div", "neuron-section-links", "neuron-section");
+  connSection.setAttribute("role", "tabpanel");
+  connSection.setAttribute("aria-labelledby", "inspector-tab-links");
   const connHeading = createEl("h4", null, "neuron-heading", "Connectivity");
 
   // Inbound
@@ -287,8 +340,12 @@ export function mountInspector(root, canvas = null) {
   connSection.append(connHeading, inRow, inNav, inNeighborsList, outRow, outNav, outNeighborsList);
 
   // Activity
-  const actSection = createEl("div", null, "neuron-section");
+  const actSection = createEl("div", "neuron-section-activity", "neuron-section");
+  actSection.setAttribute("role", "tabpanel");
+  actSection.setAttribute("aria-labelledby", "inspector-tab-activity");
   const actHeading = createEl("h4", null, "neuron-heading", "Observed Activity");
+  actHeading.title = MISSING_DATA_CAVEAT;
+  tabButtons.activity.title = MISSING_DATA_CAVEAT;
 
   const countRow = createEl("div", null, "neuron-row");
   const countLabel = createEl("span", null, "neuron-label", "Observed fires: ");
@@ -305,11 +362,44 @@ export function mountInspector(root, canvas = null) {
   const recentVal = createEl("span", "neuron-recent-steps", "neuron-value", "none");
   recentRow.append(recentLabel, recentVal);
 
-  const caveat = createEl("div", "neuron-fire-caveat", "neuron-caveat", MISSING_DATA_CAVEAT);
+  actSection.append(actHeading, countRow, stepRow, recentRow);
 
-  actSection.append(actHeading, countRow, stepRow, recentRow, caveat);
+  function setActiveTab(tabName) {
+    activeTab = tabName;
+    for (const def of tabDefs) {
+      const isActive = (def.id === tabName);
+      const tBtn = tabButtons[def.id];
+      if (tBtn) {
+        tBtn.setAttribute("aria-selected", isActive ? "true" : "false");
+        tBtn.setAttribute("aria-pressed", isActive ? "true" : "false");
+        tBtn.className = isActive ? "inspector-tab active" : "inspector-tab";
+      }
+    }
+    identSection.hidden = (tabName !== "identity");
+    if (identSection.hidden) {
+      identSection.setAttribute("hidden", "");
+    } else {
+      identSection.removeAttribute("hidden");
+    }
 
-  details.append(identSection, connSection, actSection);
+    connSection.hidden = (tabName !== "links");
+    if (connSection.hidden) {
+      connSection.setAttribute("hidden", "");
+    } else {
+      connSection.removeAttribute("hidden");
+    }
+
+    actSection.hidden = (tabName !== "activity");
+    if (actSection.hidden) {
+      actSection.setAttribute("hidden", "");
+    } else {
+      actSection.removeAttribute("hidden");
+    }
+  }
+
+  setActiveTab("identity");
+
+  details.append(tabsContainer, identSection, connSection, actSection);
   panel.append(header, form, emptyNotice, details);
   root.replaceChildren(panel);
 
@@ -332,7 +422,10 @@ export function mountInspector(root, canvas = null) {
       const btn = createEl("button", null, "inspector-neighbor-btn", String(id));
       btn.type = "button";
       btn.dataset.id = String(id);
-      btn.addEventListener("click", () => selectNode(id, { notifyCanvas: true, focusTarget: true }));
+      btn.addEventListener("click", () => {
+        userChoseLinks = true;
+        selectNode(id, { notifyCanvas: true, focusTarget: true });
+      });
       return btn;
     });
     if (inBtns.length === 0) {
@@ -355,7 +448,10 @@ export function mountInspector(root, canvas = null) {
       const btn = createEl("button", null, "inspector-neighbor-btn", String(id));
       btn.type = "button";
       btn.dataset.id = String(id);
-      btn.addEventListener("click", () => selectNode(id, { notifyCanvas: true, focusTarget: true }));
+      btn.addEventListener("click", () => {
+        userChoseLinks = true;
+        selectNode(id, { notifyCanvas: true, focusTarget: true });
+      });
       return btn;
     });
     if (outBtns.length === 0) {
@@ -369,7 +465,6 @@ export function mountInspector(root, canvas = null) {
     countVal.textContent = String(node.count);
     stepVal.textContent = node.lastStep !== null ? String(node.lastStep) : "—";
     recentVal.textContent = node.recentSteps.length > 0 ? node.recentSteps.join(", ") : "none";
-    caveat.textContent = MISSING_DATA_CAVEAT;
   }
 
   function render() {
@@ -377,14 +472,16 @@ export function mountInspector(root, canvas = null) {
       details.hidden = true;
       emptyNotice.hidden = false;
       emptyNotice.textContent = index.nodeCount > 0
-        ? "Select a neuron to inspect details."
-        : "Waiting for a mapping.";
+        ? "Select a neuron."
+        : "Waiting for mapping.";
       return;
     }
 
     const node = index.getNode(selectedId);
     if (!node) {
       selectedId = null;
+      userChoseLinks = false;
+      setActiveTab("identity");
       render();
       return;
     }
@@ -431,6 +528,8 @@ export function mountInspector(root, canvas = null) {
   function selectNode(id, { notifyCanvas = true, focusTarget = false } = {}) {
     if (id === null || id === undefined) {
       selectedId = null;
+      userChoseLinks = false;
+      setActiveTab("identity");
       inPage = 0;
       outPage = 0;
       input.value = "";
@@ -457,6 +556,11 @@ export function mountInspector(root, canvas = null) {
     inPage = 0;
     outPage = 0;
     input.value = String(numericId);
+    if (userChoseLinks) {
+      setActiveTab("links");
+    } else {
+      setActiveTab("identity");
+    }
 
     if (updateScheduled) {
       cancelFrame(frameHandle);
@@ -521,15 +625,14 @@ export function mountInspector(root, canvas = null) {
     }
     selectNode(num, { notifyCanvas: true });
   });
-  clearBtn.addEventListener("click", () => {
-    selectNode(null, { notifyCanvas: true });
-  });
 
   // Canvas event handlers
   const onMapping = (event) => {
     const mapping = event?.detail ?? null;
     index.setMapping(mapping);
     selectedId = null;
+    userChoseLinks = false;
+    setActiveTab("identity");
     inPage = 0;
     outPage = 0;
     input.value = "";
@@ -538,7 +641,6 @@ export function mountInspector(root, canvas = null) {
       cancelFrame(frameHandle);
       updateScheduled = false;
     }
-    status.textContent = mapping ? `Mapping active · ${index.nodeCount} nodes` : "No mapping received.";
     render();
   };
 
@@ -556,6 +658,8 @@ export function mountInspector(root, canvas = null) {
   const onReset = () => {
     index.reset();
     selectedId = null;
+    userChoseLinks = false;
+    setActiveTab("identity");
     inPage = 0;
     outPage = 0;
     input.value = "";
@@ -564,7 +668,6 @@ export function mountInspector(root, canvas = null) {
       cancelFrame(frameHandle);
       updateScheduled = false;
     }
-    status.textContent = "No mapping received.";
     render();
   };
 

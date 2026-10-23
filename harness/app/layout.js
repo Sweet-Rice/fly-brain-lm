@@ -12,6 +12,10 @@ const SPACING = 20;
 export const RADIUS = 3;
 const CIRCLE_SEGMENTS = 12;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+export const NODE_IDLE_ALPHA = 0.12;
+export const EDGE_IDLE_ALPHA = 0.008;
+export const ARROW_IDLE_ALPHA = 0.06;
+export const DOT_STRIP_HALF_WIDTH = 3.5;
 
 export function computeEdgePath(a, b, tractWaypoint = null, radius = RADIUS) {
   if (a.x === b.x && a.y === b.y) {
@@ -102,7 +106,20 @@ function getTractWaypoint(graph, sourceId, destId) {
   return null;
 }
 
-export function buildGraph(mapping) {
+export function buildGraph(mapping, options = {}) {
+  const connectionStyle = options?.connectionStyle ?? 'lines';
+  const nodeIndexMap = new Map();
+  const nodeIds = [];
+  if (mapping?.nodes) {
+    for (const node of mapping.nodes) {
+      const id = typeof node === 'object' && node !== null ? node.id : node;
+      if (typeof id === 'number' && !nodeIndexMap.has(id)) {
+        nodeIndexMap.set(id, nodeIds.length);
+        nodeIds.push(id);
+      }
+    }
+  }
+
   const grouped = new Map(mapping.groups.map(group => [group.id, []]));
   for (const node of mapping.nodes) {
     if (grouped.has(node.group)) {
@@ -114,13 +131,13 @@ export function buildGraph(mapping) {
   const isBrain = mapping.groups.some(g => groupStyleMap.get(g.id).anatomical);
 
   if (!isBrain) {
-    return buildGridLayout(mapping, grouped, groupStyleMap);
+    return buildGridLayout(mapping, grouped, groupStyleMap, nodeIndexMap, nodeIds, connectionStyle);
   }
 
-  return buildBrainLayout(mapping, grouped, groupStyleMap);
+  return buildBrainLayout(mapping, grouped, groupStyleMap, nodeIndexMap, nodeIds, connectionStyle);
 }
 
-function buildGridLayout(mapping, grouped, groupStyleMap) {
+function buildGridLayout(mapping, grouped, groupStyleMap, nodeIndexMap = new Map(), nodeIds = [], connectionStyle = 'lines') {
   const positions = new Map();
   const labels = [];
   const nodes = [];
@@ -128,6 +145,7 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
   const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
   let left = 0;
   let tallest = 0;
+  const base = mapping.edges.length;
 
   function include(x, y) {
     if (x < bounds.minX) bounds.minX = x;
@@ -136,12 +154,19 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     if (y > bounds.maxY) bounds.maxY = y;
   }
 
-  function triangle(target, a, b, c, color, alpha, edgeIndex = -1) {
+  function triangle(target, a, b, c, color, alpha, activityIndex = -1) {
     for (const [x, y] of [a, b, c]) {
-      target.push(x, y, ...color, alpha, edgeIndex);
+      target.push(x, y, ...color, alpha, activityIndex);
       include(x, y);
     }
   }
+  function dotTriangle(target, a, b, c, color, totalLength, edgeIndex) {
+    for (const [x, y, s, v] of [a, b, c]) {
+      target.push(x, y, s, v, color[0], color[1], color[2], totalLength, edgeIndex);
+      include(x, y);
+    }
+  }
+
 
   function segment(a, b, color, edgeIndex) {
     const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -152,8 +177,8 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     const q = [a[0] - nx, a[1] - ny];
     const r = [b[0] + nx, b[1] + ny];
     const s = [b[0] - nx, b[1] - ny];
-    triangle(edges, p, q, r, color, 0.12, edgeIndex);
-    triangle(edges, r, q, s, color, 0.12, edgeIndex);
+    triangle(edges, p, q, r, color, EDGE_IDLE_ALPHA, edgeIndex);
+    triangle(edges, r, q, s, color, EDGE_IDLE_ALPHA, edgeIndex);
   }
 
   function arrow(tip, direction, color, edgeIndex) {
@@ -163,7 +188,7 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     const uy = direction[1] / length;
     triangle(edges, tip,
       [tip[0] - ux * 5 - uy * 2.3, tip[1] - uy * 5 + ux * 2.3],
-      [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, 0.65, edgeIndex);
+      [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, ARROW_IDLE_ALPHA, edgeIndex);
   }
 
   mapping.groups.forEach((group) => {
@@ -182,11 +207,13 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
       const x = center + (i % columns - (columns - 1) / 2) * SPACING;
       const y = Math.floor(i / columns) * SPACING - height / 2;
       positions.set(node.id, { x, y, color });
+      const slot = nodeIndexMap.get(node.id);
+      const activityIndex = slot !== undefined ? base + slot : -1;
       for (let j = 0; j < CIRCLE_SEGMENTS; j++) {
         const a = (j * 2 * Math.PI) / CIRCLE_SEGMENTS;
         const b = ((j + 1) * 2 * Math.PI) / CIRCLE_SEGMENTS;
         triangle(nodes, [x, y], [x + Math.cos(a) * RADIUS, y + Math.sin(a) * RADIUS],
-          [x + Math.cos(b) * RADIUS, y + Math.sin(b) * RADIUS], color, 1);
+          [x + Math.cos(b) * RADIUS, y + Math.sin(b) * RADIUS], color, NODE_IDLE_ALPHA, activityIndex);
       }
     });
     left += width + 60;
@@ -199,17 +226,50 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     include(label.x + halfWidth, label.y + 8);
   }
 
-  for (const [edgeIndex, [source, destination]] of mapping.edges.entries()) {
-    const a = positions.get(source);
-    const b = positions.get(destination);
-    if (!a || !b) continue;
-    const path = computeEdgePath(a, b, null, RADIUS);
-    for (const seg of path.segments) {
-      segment(seg.a, seg.b, a.color, edgeIndex);
-    }
-    arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex);
-  }
+  const isDots = connectionStyle === 'dots';
+  if (isDots) {
+    for (const [edgeIndex, [source, destination]] of mapping.edges.entries()) {
+      const a = positions.get(source);
+      const b = positions.get(destination);
+      if (!a || !b) continue;
+      const path = computeEdgePath(a, b, null, RADIUS);
+      let totalLength = 0;
+      for (const seg of path.segments) {
+        totalLength += Math.hypot(seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]);
+      }
+      let currentS = 0;
+      for (const seg of path.segments) {
+        const dx = seg.b[0] - seg.a[0];
+        const dy = seg.b[1] - seg.a[1];
+        const segLen = Math.hypot(dx, dy);
+        if (segLen === 0) continue;
+        const nx = -dy / segLen * DOT_STRIP_HALF_WIDTH;
+        const ny = dx / segLen * DOT_STRIP_HALF_WIDTH;
+        const nextS = currentS + segLen;
 
+        const p0 = [seg.a[0] + nx, seg.a[1] + ny, currentS, 1.0];
+        const p1 = [seg.a[0] - nx, seg.a[1] - ny, currentS, -1.0];
+        const p2 = [seg.b[0] + nx, seg.b[1] + ny, nextS, 1.0];
+        const p3 = [seg.b[0] - nx, seg.b[1] - ny, nextS, -1.0];
+
+        dotTriangle(edges, p0, p1, p2, a.color, totalLength, edgeIndex);
+        dotTriangle(edges, p2, p1, p3, a.color, totalLength, edgeIndex);
+
+        currentS = nextS;
+      }
+    }
+  } else {
+    for (const [edgeIndex, [source, destination]] of mapping.edges.entries()) {
+      const a = positions.get(source);
+      const b = positions.get(destination);
+      if (!a || !b) continue;
+      const path = computeEdgePath(a, b, null, RADIUS);
+      for (const seg of path.segments) {
+        segment(seg.a, seg.b, a.color, edgeIndex);
+      }
+      arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex);
+    }
+  }
   if (mapping.groups.length === 0) Object.assign(bounds, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
   return {
     nodes: new Float32Array(nodes),
@@ -222,10 +282,13 @@ function buildGridLayout(mapping, grouped, groupStyleMap) {
     edgePairs: mapping.edges,
     positions,
     areas: null,
+    nodeIndexMap,
+    nodeIds,
+    connectionStyle,
   };
 }
 
-function buildBrainLayout(mapping, grouped, groupStyleMap) {
+function buildBrainLayout(mapping, grouped, groupStyleMap, nodeIndexMap = new Map(), nodeIds = [], connectionStyle = 'lines') {
   const positions = new Map();
   const labels = [];
   const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
@@ -455,12 +518,15 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
   // 10. Preallocate and write nodes geometry
   const nodes = new Float32Array(mapping.nodes.length * CIRCLE_SEGMENTS * 3 * 7);
   let nodeOffset = 0;
+  const base = mapping.edges.length;
   for (const group of mapping.groups) {
     const members = (grouped.get(group.id) ?? []).slice().sort((a, b) => a.id - b.id);
     for (const node of members) {
       const pos = positions.get(node.id);
       if (!pos) continue;
       const { x, y, color } = pos;
+      const slot = nodeIndexMap.get(node.id);
+      const activityIndex = slot !== undefined ? base + slot : -1;
       include(x - RADIUS, y - RADIUS);
       include(x + RADIUS, y + RADIUS);
       for (let j = 0; j < CIRCLE_SEGMENTS; j++) {
@@ -475,31 +541,42 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
           nodes[nodeOffset++] = color[0];
           nodes[nodeOffset++] = color[1];
           nodes[nodeOffset++] = color[2];
-          nodes[nodeOffset++] = 1;
-          nodes[nodeOffset++] = -1;
+          nodes[nodeOffset++] = NODE_IDLE_ALPHA;
+          nodes[nodeOffset++] = activityIndex;
         }
       }
     }
   }
 
   // 11. Precalculate edge buffer size and preallocate
+  const isDots = connectionStyle === 'dots';
   let totalEdgeFloats = 0;
   const edgePaths = [];
+  const edgeLengths = isDots ? [] : null;
   for (const [source, destination] of mapping.edges) {
     const a = positions.get(source);
     const b = positions.get(destination);
     if (!a || !b) {
       edgePaths.push(null);
+      if (isDots) edgeLengths.push(0);
       continue;
     }
     const tractWaypoint = getTractWaypoint({ positions, areas }, source, destination);
     const path = computeEdgePath(a, b, tractWaypoint, RADIUS);
     edgePaths.push(path);
-    // each segment = 2 triangles = 6 vertices = 42 floats
-    // arrow = 1 triangle = 3 vertices = 21 floats
-    totalEdgeFloats += path.segments.length * 42 + 21;
+    if (isDots) {
+      let len = 0;
+      for (const seg of path.segments) {
+        len += Math.hypot(seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]);
+      }
+      edgeLengths.push(len);
+      totalEdgeFloats += path.segments.length * 54;
+    } else {
+      // each segment = 2 triangles = 6 vertices = 42 floats
+      // arrow = 1 triangle = 3 vertices = 21 floats
+      totalEdgeFloats += path.segments.length * 42 + 21;
+    }
   }
-
   const edges = new Float32Array(totalEdgeFloats);
   let edgeOffset = 0;
 
@@ -515,8 +592,23 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
       include(x, y);
     }
   }
+  function dotTriangle(target, a, b, c, color, totalLength, edgeIndex) {
+    for (const [x, y, s, v] of [a, b, c]) {
+      target[edgeOffset++] = x;
+      target[edgeOffset++] = y;
+      target[edgeOffset++] = s;
+      target[edgeOffset++] = v;
+      target[edgeOffset++] = color[0];
+      target[edgeOffset++] = color[1];
+      target[edgeOffset++] = color[2];
+      target[edgeOffset++] = totalLength;
+      target[edgeOffset++] = edgeIndex;
+      include(x, y);
+    }
+  }
 
-  function segment(a, b, color, edgeIndex, alpha = 0.05) {
+
+  function segment(a, b, color, edgeIndex, alpha = EDGE_IDLE_ALPHA) {
     const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
     if (length === 0) return;
     const nx = -(b[1] - a[1]) / length * 0.35;
@@ -529,7 +621,7 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
     triangle(edges, r, q, s, color, alpha, edgeIndex);
   }
 
-  function arrow(tip, direction, color, edgeIndex, alpha = 0.25) {
+  function arrow(tip, direction, color, edgeIndex, alpha = ARROW_IDLE_ALPHA) {
     const length = Math.hypot(...direction);
     if (length === 0) return;
     const ux = direction[0] / length;
@@ -539,19 +631,49 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
       [tip[0] - ux * 5 + uy * 2.3, tip[1] - uy * 5 - ux * 2.3], color, alpha, edgeIndex);
   }
 
-  for (let edgeIndex = 0; edgeIndex < mapping.edges.length; edgeIndex++) {
-    const path = edgePaths[edgeIndex];
-    if (!path) continue;
-    const [source] = mapping.edges[edgeIndex];
-    const a = positions.get(source);
-    for (const seg of path.segments) {
-      segment(seg.a, seg.b, a.color, edgeIndex, 0.05);
+  if (isDots) {
+    for (let edgeIndex = 0; edgeIndex < mapping.edges.length; edgeIndex++) {
+      const path = edgePaths[edgeIndex];
+      if (!path) continue;
+      const [source] = mapping.edges[edgeIndex];
+      const a = positions.get(source);
+      const totalLen = edgeLengths[edgeIndex];
+      let currentS = 0;
+      for (const seg of path.segments) {
+        const dx = seg.b[0] - seg.a[0];
+        const dy = seg.b[1] - seg.a[1];
+        const segLen = Math.hypot(dx, dy);
+        if (segLen === 0) continue;
+        const nx = -dy / segLen * DOT_STRIP_HALF_WIDTH;
+        const ny = dx / segLen * DOT_STRIP_HALF_WIDTH;
+        const nextS = currentS + segLen;
+
+        const p0 = [seg.a[0] + nx, seg.a[1] + ny, currentS, 1.0];
+        const p1 = [seg.a[0] - nx, seg.a[1] - ny, currentS, -1.0];
+        const p2 = [seg.b[0] + nx, seg.b[1] + ny, nextS, 1.0];
+        const p3 = [seg.b[0] - nx, seg.b[1] - ny, nextS, -1.0];
+
+        dotTriangle(edges, p0, p1, p2, a.color, totalLen, edgeIndex);
+        dotTriangle(edges, p2, p1, p3, a.color, totalLen, edgeIndex);
+
+        currentS = nextS;
+      }
     }
-    arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex, 0.25);
+  } else {
+    for (let edgeIndex = 0; edgeIndex < mapping.edges.length; edgeIndex++) {
+      const path = edgePaths[edgeIndex];
+      if (!path) continue;
+      const [source] = mapping.edges[edgeIndex];
+      const a = positions.get(source);
+      for (const seg of path.segments) {
+        segment(seg.a, seg.b, a.color, edgeIndex, EDGE_IDLE_ALPHA);
+      }
+      arrow(path.arrow.tip, path.arrow.direction, a.color, edgeIndex, ARROW_IDLE_ALPHA);
+    }
   }
 
   return {
-    nodes,
+    nodes: nodeOffset === nodes.length ? nodes : nodes.subarray(0, nodeOffset),
     edges,
     regions,
     labels,
@@ -561,6 +683,9 @@ function buildBrainLayout(mapping, grouped, groupStyleMap) {
     edgePairs: mapping.edges,
     positions,
     areas,
+    nodeIndexMap,
+    nodeIds,
+    connectionStyle,
   };
 }
 

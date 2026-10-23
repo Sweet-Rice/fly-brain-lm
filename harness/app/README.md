@@ -28,6 +28,9 @@ const handle = mountLiveAtlas({
   canvas: document.querySelector("canvas"),
   labels: document.querySelector(".labels-container"),
   inspector: document.querySelector(".inspector-container"),
+  readout: document.querySelector(".readout-container"),
+  // Optional: "lines" by default; the React workspace selects "dots".
+  connectionStyle: "dots",
   onState: (snapshot) => {
     // snapshot: LiveAtlasSnapshot
     console.log(snapshot.connectionState, snapshot.nodeCount, snapshot.acceptedFires);
@@ -37,6 +40,7 @@ const handle = mountLiveAtlas({
 });
 
 // LiveAtlasHandle controls:
+handle.setGeneration(snapshot); // Syncs active generation snapshot to the readout card
 handle.ensureConnected(); // Reconnects if dropped; no-op if already connected
 handle.connect();         // Explicitly connects to the endpoint
 handle.disconnect();      // Disconnects and resets mapping, counters, and selection
@@ -44,6 +48,39 @@ handle.fit();             // Centers and fits camera to the graph bounds (shortc
 handle.zoom(1.25);        // Zooms camera relative to current view (+/- keys zoom; drag/arrows pan)
 handle.dispose();         // Synchronously tears down socket, timers, and GPU resources
 ```
+
+`connectionStyle` selects directed connection lines or fire dots without changing
+node picking, selection highlights, the readout, or activity validation. In dots mode,
+idle connections draw nothing; each observed fire sends one dot from source to target
+over the activity window, so the renderer schedules frames only while a dot travels.
+`prefers-reduced-motion: reduce` shows stationary dots on the fired connection instead.
+Connection geometry stays on the GPU; dot position comes from the per-edge fire
+timestamp, without rebuilding or uploading vertices each frame.
+
+### MBON readout overlay
+
+Pass an optional `readout` container element in the `mountLiveAtlas` options to mount
+the MBON readout overlay (`readout-view.js`). When present, the readout view subscribes to
+canvas events:
+- `telemetry`: dispatched by `live-atlas.js` when the stream delivers validated producer
+  telemetry (`accept_telemetry`), forwarding token step and generation status to the readout card.
+- `mapping` and `reset`: resets readout state when the graph topology is reloaded or cleared.
+
+Call `handle.setGeneration(state)` to synchronize the latest client generation snapshot
+(`runId`, completion `text`, and lifecycle `state`) to the readout card.
+
+The compact card shows `Readout` with a `Live` or `Local` source badge. Request/run
+identifiers, token index/step, and the architectural-not-attribution caveat remain
+available in hover titles instead of permanent explanatory paragraphs. Token IDs,
+observed status, decoded pieces, and Previous/Next/Latest paging remain visible.
+
+Observed in Chromium with the trained `vibe2-tinystories` checkpoint: the React atlas
+displayed 1,959 nodes and 19,037 edges, live firing highlights, 15 dashed lime MBON
+paths, and the Identity/Links/Activity neuron tabs. A greedy 64-token completion
+for `Once upon a time` began `, there was`; paging the producer-backed readout
+in both directions reproduced all 222 response characters with zero dropped signals.
+Both light and dark palettes were checked. Generation also worked over Tailscale
+HTTP, where the expected WebGPU-unavailable banner replaced drawing.
 
 ### Snapshot and state lifecycle
 
@@ -74,6 +111,7 @@ scenarios, use the [end-to-end workflow](../WORKFLOW.md). The dashboard layout a
 its data limits follow the
 [dashboard visual redesign plan](dashboard-visual-redesign-plan.md); see
 [Fly-brain schematic](#fly-brain-schematic) below.
+
 ## Run the live workspace (real model + app server)
 
 ### Prerequisites
@@ -106,7 +144,7 @@ Ctrl-C stops both. While loading, the page shows
 with Generate disabled until the checkpoint loads, then reports the ready message
 `Model ready: flybrain-untrained (TEMPORARY, untrained) · checkpoint flybrain-scratch.pt sha256:<first 12 hex digits>`
 with checkpoint name and sha256 prefix. Missing checkpoint: exits with
-`Error starting app server: checkpoint not found: <name>`.
+`Error starting app server: checkpoint not found: <name>`. An exited child returns `503 model_exited`.
 
 ### Two terminals (model started separately)
 
@@ -137,6 +175,15 @@ in a WebGPU-capable Chrome or Edge browser.
 - **Local development proxy**: The app server reverse proxy is a local loopback
   convenience, not public secure hosting. Upstream `model/serve/serve.py` remains
   frozen and untouched.
+- **Same-origin stream relay**: The app server provides a same-origin WebSocket relay for
+  `/stream` to the configured model visualization stream, keeping browser connections same-origin.
+- **Network access**: For network access, add **`--host 0.0.0.0`** to the app command and open
+  `http://<server-address>:8772/app/`. Only the app port needs exposure; the model API
+  and visualization listener remain private on loopback. The app has no authentication;
+  use a trusted network or a protected reverse proxy, not public hosting.
+- **WebGPU network requirements**: WebGPU requires HTTPS or a browser-trusted loopback origin.
+  Remote plain HTTP supports prompts and stream inspection but not GPU drawing. An HTTPS reverse
+  proxy must also forward WebSocket upgrades for `/stream`.
 - **Implementation selection**: Model architectures (`vibe` vs `vibe2`) are chosen
   when creating the checkpoint (default `model.init_model` writes `model/checkpoints/vibe.pt`,
   not `init.pt`; do not overwrite private trained checkpoints; see
@@ -537,6 +584,7 @@ interface for submitting generation requests to the local model reverse proxy:
   - The [run/token timeline](#run--token-timeline) and
     [memory/dopamine inspector](#memory--dopamine-inspector) consume the opt-in
     backend telemetry without coupling prompt generation to visualization availability.
+
 ### Activity highlights
 
 Every accepted source-to-destination pair brightens its entire directed edge,
@@ -692,6 +740,11 @@ To verify the app server reverse proxy, run pytest from the repository root:
 python -m pytest test/test_app_server.py
 ```
 
+On Windows, `test_static_asset_symlink_confinement` requires permission to create
+symlinks (Developer Mode or an appropriately privileged process). Without that
+permission, fixture creation fails with `WinError 1314` before server confinement
+is exercised; do not treat that result as a passing security check.
+
 ### Test coverage
 
 - **`test/test_app_server.py`**: Loopback-only binding, static asset confinement under `harness/`,
@@ -747,6 +800,7 @@ python -m pytest test/test_app_server.py
   `main.test.js`, and `workflow.test.js` continue to verify normative v1 contract fixtures,
   real capture validation, live/file parity, reconnect/reset, deterministic layout,
   sparse IDs, buffer release, and reduced motion.
+
 ### Manual verification instructions
 
 1. **Offline recording check**:
