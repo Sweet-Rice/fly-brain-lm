@@ -1442,10 +1442,11 @@ test('GenerationController streams 128 fragmented tokens into multi-thousand cha
   }
 });
 
-test('mountPrompt preserves complete output across pages and announces once', async () => {
+test('mountPrompt renders long output without truncation and announces once', async () => {
   const { text, chunks } = buildLongCompletion();
+  const requests = [];
   const controller = new GenerationController({
-    fetch: async url => {
+    fetch: async (url, options = {}) => {
       if (url === '/health') {
         return new Response(
           JSON.stringify({
@@ -1459,6 +1460,7 @@ test('mountPrompt preserves complete output across pages and announces once', as
           }
         );
       }
+      requests.push(JSON.parse(options.body));
       return new Response(createMockReadableStream(chunks), {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
@@ -1468,7 +1470,7 @@ test('mountPrompt preserves complete output across pages and announces once', as
 
   const doc = new MockDocument();
   const root = doc.createElement('div');
-  const dispose = mountPrompt(root, { controller, pollHealth: false, defaultMaxTokens: 128 });
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
 
   try {
     await controller.checkHealth();
@@ -1489,7 +1491,7 @@ test('mountPrompt preserves complete output across pages and announces once', as
     });
 
     root.getElementById(PROMPT_DOM_IDS.INPUT).value = 'Long output test';
-    // defaultMaxTokens: 128 passed to mountPrompt
+    root.getElementById(PROMPT_DOM_IDS.MAX_TOKENS).value = '128';
 
     const finished = new Promise(resolve => {
       const off = controller.subscribe(s => {
@@ -1507,22 +1509,30 @@ test('mountPrompt preserves complete output across pages and announces once', as
     const final = await finished;
 
     assert.equal(final.state, GENERATION_STATES.COMPLETED);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].max_tokens, 128);
+    assert.equal(requests[0].prompt, 'Long output test');
 
     const output = root.getElementById(PROMPT_DOM_IDS.OUTPUT);
-    const previous = root.getElementById(PROMPT_DOM_IDS.PAGER_PREV);
-    const latest = root.getElementById(PROMPT_DOM_IDS.PAGER_LATEST);
-    const lastPage = output.textContent;
-    const pages = [lastPage];
-    assert.equal(previous.disabled, false);
-    while (!previous.disabled) {
-      previous.dispatchEvent(new Event('click'));
-      pages.unshift(output.textContent);
-    }
-    assert.equal(pages.join(''), text, 'Every page preserves the original Unicode and whitespace');
-    latest.dispatchEvent(new Event('click'));
-    assert.equal(output.textContent, lastPage);
+    assert.equal(output.textContent, text);
+    assert.equal(output.textContent.length, text.length);
 
-    assert.equal(announcements.length, 1, 'Completion is announced once, not once per token or page');
+    assert.equal(
+      root.getElementById(PROMPT_DOM_IDS.USAGE).textContent,
+      'Tokens: 4 prompt + 128 completion = 132 total'
+    );
+    assert.equal(
+      root.getElementById(PROMPT_DOM_IDS.FINISH_REASON).textContent,
+      'Finish reason: length'
+    );
+    assert.equal(
+      root.getElementById(PROMPT_DOM_IDS.STATUS).textContent,
+      'State: completed'
+    );
+
+    assert.deepEqual(announcements, [
+      `Generation completed. Length: ${[...text].length} characters. (128 tokens)`,
+    ]);
   } finally {
     dispose();
   }

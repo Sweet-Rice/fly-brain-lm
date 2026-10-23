@@ -36,7 +36,8 @@ export function pickNode(graph, camera, clientX, clientY, rect = { left: 0, top:
   }
   return closestId;
 }
-export async function initializeGPU(canvas, onStatus, labels = null) {
+export async function initializeGPU(canvas, onStatus, labels = null, options = {}) {
+  const signal = options?.signal;
   let mapping = null, graph = null, activity = null, renderer, device, context, observer;
   let disposed = false, frame = null, drag = null;
   let busy = false, dirty = false, mappingPending = true, resizePending = true;
@@ -333,14 +334,39 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
       detail: { nodes: [], width: camera.width, height: camera.height },
     }));
   };
+  if (signal) {
+    if (signal.aborted) {
+      dispose();
+      return dispose;
+    }
+    const onAbort = () => {
+      dispose();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    listeners.push(() => signal.removeEventListener("abort", onAbort));
+  }
   if (!globalThis.isSecureContext || !navigator.gpu) {
-    onStatus("WebGPU unavailable. Use a supported browser on HTTPS or localhost; stream inspection still works.");
+    if (!disposed && !signal?.aborted) {
+      onStatus("WebGPU unavailable. Use a supported browser on HTTPS or localhost; stream inspection still works.");
+    }
     return dispose;
   }
   try {
     const adapter = await navigator.gpu.requestAdapter();
+    if (disposed || signal?.aborted) return dispose;
     if (!adapter) throw new Error("No WebGPU adapter is available");
-    device = await adapter.requestDevice();
+    let acquiredDevice;
+    try {
+      acquiredDevice = await adapter.requestDevice();
+    } catch (err) {
+      if (disposed || signal?.aborted) return dispose;
+      throw err;
+    }
+    if (disposed || signal?.aborted) {
+      acquiredDevice.destroy();
+      return dispose;
+    }
+    device = acquiredDevice;
     context = canvas.getContext("webgpu");
     if (!context) throw new Error("Cannot create a WebGPU canvas context");
     const format = navigator.gpu.getPreferredCanvasFormat();
@@ -359,8 +385,10 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     });
     invalidate();
   } catch (error) {
-    dispose();
-    onStatus(`WebGPU unavailable: ${error.message}. Stream inspection still works.`);
+    if (!disposed && !signal?.aborted) {
+      dispose();
+      onStatus(`WebGPU unavailable: ${error.message}. Stream inspection still works.`);
+    }
   }
   return dispose;
 }

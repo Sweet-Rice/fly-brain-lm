@@ -1,8 +1,8 @@
 /**
  * Prompt and Generation View Module.
  *
- * Mounts the minimal prompt form with a single prompt textarea above paginated output,
- * model health indicator, accessible announcements, and action controls into a root container.
+ * Mounts the prompt form, model health indicator, parameter controls,
+ * accessible announcements, and streamed text output into a root container.
  */
 
 import {
@@ -15,23 +15,29 @@ export const PROMPT_DOM_IDS = Object.freeze({
   ROOT: 'prompt-root',
   FORM: 'prompt-form',
   HEALTH_STATUS: 'prompt-health-status',
+  HEALTH_RETRY_BTN: 'prompt-health-retry-btn',
   INPUT: 'prompt-input',
+  MAX_TOKENS: 'prompt-max-tokens',
+  TEMPERATURE: 'prompt-temperature',
+  TOP_K: 'prompt-top-k',
+  API_KEY: 'prompt-api-key',
+  API_KEY_HELP: 'prompt-api-key-help',
   GENERATE_BTN: 'prompt-generate-btn',
   CANCEL_BTN: 'prompt-cancel-btn',
+  CLEAR_BTN: 'prompt-clear-btn',
   COPY_BTN: 'prompt-copy-btn',
   STATUS: 'prompt-status',
+  RUN_ID: 'prompt-run-id',
   USAGE: 'prompt-usage',
   FINISH_REASON: 'prompt-finish-reason',
   OUTPUT: 'prompt-output',
   OUTPUT_EMPTY: 'prompt-output-empty',
   ANNOUNCEMENT: 'prompt-announcement',
   ERROR_PROMPT: 'prompt-error-prompt',
+  ERROR_MAX_TOKENS: 'prompt-error-max-tokens',
+  ERROR_TEMPERATURE: 'prompt-error-temperature',
+  ERROR_TOP_K: 'prompt-error-top-k',
   ERROR_GENERAL: 'prompt-error-general',
-  PAGER: 'prompt-pager',
-  PAGER_PREV: 'prompt-pager-prev',
-  PAGER_NEXT: 'prompt-pager-next',
-  PAGER_LATEST: 'prompt-pager-latest',
-  PAGER_STATUS: 'prompt-pager-status',
 });
 
 export const PROMPT_CLASSES = Object.freeze({
@@ -40,8 +46,11 @@ export const PROMPT_CLASSES = Object.freeze({
   HEALTH: 'prompt-health-status',
   FORM: 'prompt-form',
   FIELD_GROUP: 'prompt-field-group',
+  CONTROLS_GRID: 'prompt-controls-grid',
   LABEL: 'prompt-label',
   TEXTAREA: 'prompt-input',
+  INPUT_NUM: 'prompt-input-num',
+  INPUT_TEXT: 'prompt-input-text',
   INLINE_ERROR: 'prompt-inline-error',
   GENERAL_ERROR: 'prompt-general-error',
   ACTIONS: 'prompt-actions',
@@ -49,87 +58,17 @@ export const PROMPT_CLASSES = Object.freeze({
   BTN_PRIMARY: 'prompt-btn-primary',
   META: 'prompt-meta',
   STATUS_BADGE: 'prompt-status',
+  RUN_ID: 'prompt-run-id',
   USAGE: 'prompt-usage',
   FINISH_REASON: 'prompt-finish-reason',
   OUTPUT_CONTAINER: 'prompt-output-container',
   OUTPUT: 'prompt-output',
   OUTPUT_EMPTY: 'prompt-output-empty',
   ANNOUNCEMENT: 'prompt-announcement',
-  PAGER: 'prompt-pager',
-  PAGER_BTN: 'prompt-pager-btn',
-  PAGER_PREV: 'prompt-pager-prev',
-  PAGER_NEXT: 'prompt-pager-next',
-  PAGER_LATEST: 'prompt-pager-latest',
-  PAGER_STATUS: 'prompt-pager-status',
-});
-
-export const PAGER_LIMITS = Object.freeze({
-  MAX_LINES: 6,
-  MAX_CODEPOINTS: 240,
 });
 
 /**
- * Splits text into bounded pages without splitting surrogate pairs.
- * Concatenating all pages yields the exact original text.
- *
- * @param {string} text - Full text to paginate
- * @param {number} [maxLines=6] - Max logical lines per page
- * @param {number} [maxCodepoints=240] - Max code points per page
- * @param {number} [columns=Infinity] - Conservative visual columns per line
- * @returns {string[]} Array of page text strings
- */
-export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoints = PAGER_LIMITS.MAX_CODEPOINTS, columns = Infinity) {
-  if (!text) {
-    return [''];
-  }
-
-  const codepoints = Array.from(text);
-  const pages = [];
-  let currentPage = [];
-  let currentLines = 1;
-  let currentColumn = 0;
-
-  for (let i = 0; i < codepoints.length; i++) {
-    const cp = codepoints[i];
-    const newline = cp === '\n' || cp === '\r';
-
-    if (currentPage.length >= maxCodepoints ||
-        (!newline && currentColumn >= columns && currentLines >= maxLines)) {
-      pages.push(currentPage.join(''));
-      currentPage = [];
-      currentLines = 1;
-      currentColumn = 0;
-    }
-
-    if (!newline && currentColumn >= columns) {
-      currentLines++;
-      currentColumn = 0;
-    }
-    currentPage.push(cp);
-
-    if (newline) {
-      currentColumn = 0;
-      currentLines++;
-      if (currentLines > maxLines && i + 1 < codepoints.length) {
-        pages.push(currentPage.join(''));
-        currentPage = [];
-        currentLines = 1;
-      }
-    }
-    else {
-      currentColumn++;
-    }
-  }
-
-  if (currentPage.length > 0) {
-    pages.push(currentPage.join(''));
-  }
-
-  return pages.length > 0 ? pages : [''];
-}
-
-/**
- * Mounts the minimal prompt generation UI into root.
+ * Mounts the prompt generation UI into root.
  *
  * @param {HTMLElement} root - Target container
  * @param {Object} options - Configuration options
@@ -142,7 +81,6 @@ export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoi
  * @param {number} [options.defaultTopK=50] - Default top_k (1..50257)
  * @param {boolean} [options.pollHealth=true] - Whether to poll health periodically
  * @param {GenerationController} [options.controller] - Custom controller instance
- * @param {Function} [options.subscribeConnection] - Optional function returning unsubscribe to track connection readiness
  * @returns {Function} disposer function to dismantle UI and abort active operations
  */
 export function mountPrompt(root, options = {}) {
@@ -172,7 +110,7 @@ export function mountPrompt(root, options = {}) {
   container.id = PROMPT_DOM_IDS.ROOT;
   container.className = PROMPT_CLASSES.CONTAINER;
 
-  // Header: Health status
+  // Header: Health status & manual retry
   const header = doc.createElement('div');
   header.className = PROMPT_CLASSES.HEADER;
 
@@ -180,37 +118,23 @@ export function mountPrompt(root, options = {}) {
   healthStatus.id = PROMPT_DOM_IDS.HEALTH_STATUS;
   healthStatus.className = PROMPT_CLASSES.HEALTH;
   healthStatus.textContent = 'Checking model status...';
-  healthStatus.title = 'Checking model status...';
   healthStatus.setAttribute('aria-live', 'polite');
 
-  header.append(healthStatus);
+  const healthRetryBtn = doc.createElement('button');
+  healthRetryBtn.id = PROMPT_DOM_IDS.HEALTH_RETRY_BTN;
+  healthRetryBtn.type = 'button';
+  healthRetryBtn.className = PROMPT_CLASSES.BTN;
+  healthRetryBtn.textContent = 'Retry Health';
 
-  // Metadata row (state, usage, finish reason)
-  const meta = doc.createElement('div');
-  meta.className = PROMPT_CLASSES.META;
+  header.append(healthStatus, healthRetryBtn);
 
-  const statusBadge = doc.createElement('span');
-  statusBadge.id = PROMPT_DOM_IDS.STATUS;
-  statusBadge.className = PROMPT_CLASSES.STATUS_BADGE;
-  statusBadge.textContent = 'State: idle';
-
-  const usageBadge = doc.createElement('span');
-  usageBadge.id = PROMPT_DOM_IDS.USAGE;
-  usageBadge.className = PROMPT_CLASSES.USAGE;
-
-  const finishReasonBadge = doc.createElement('span');
-  finishReasonBadge.id = PROMPT_DOM_IDS.FINISH_REASON;
-  finishReasonBadge.className = PROMPT_CLASSES.FINISH_REASON;
-
-  meta.append(statusBadge, usageBadge, finishReasonBadge);
-
-  // Form container: one prompt textarea above paginated output
+  // Form
   const form = doc.createElement('form');
   form.id = PROMPT_DOM_IDS.FORM;
   form.className = PROMPT_CLASSES.FORM;
   form.noValidate = true;
 
-  // Prompt input section
+  // Prompt input
   const promptGroup = doc.createElement('div');
   promptGroup.className = PROMPT_CLASSES.FIELD_GROUP;
 
@@ -222,7 +146,7 @@ export function mountPrompt(root, options = {}) {
   const promptInput = doc.createElement('textarea');
   promptInput.id = PROMPT_DOM_IDS.INPUT;
   promptInput.className = PROMPT_CLASSES.TEXTAREA;
-  promptInput.rows = 3;
+  promptInput.rows = 4;
   promptInput.value = defaultPrompt;
   promptInput.placeholder = 'Enter prompt here...';
   promptInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_PROMPT);
@@ -234,65 +158,95 @@ export function mountPrompt(root, options = {}) {
 
   promptGroup.append(promptLabel, promptInput, promptError);
 
-  // Output section with bounded paged view
-  const outputContainer = doc.createElement('div');
-  outputContainer.className = PROMPT_CLASSES.OUTPUT_CONTAINER;
+  // Controls grid
+  const controlsGrid = doc.createElement('div');
+  controlsGrid.className = PROMPT_CLASSES.CONTROLS_GRID;
 
-  const outputLabel = doc.createElement('label');
-  outputLabel.htmlFor = PROMPT_DOM_IDS.OUTPUT;
-  outputLabel.className = PROMPT_CLASSES.LABEL;
-  outputLabel.textContent = 'Generated Output:';
+  // Max tokens
+  const maxTokensGroup = doc.createElement('div');
+  maxTokensGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  const maxTokensLabel = doc.createElement('label');
+  maxTokensLabel.htmlFor = PROMPT_DOM_IDS.MAX_TOKENS;
+  maxTokensLabel.className = PROMPT_CLASSES.LABEL;
+  maxTokensLabel.textContent = 'Max tokens (1..128):';
+  const maxTokensInput = doc.createElement('input');
+  maxTokensInput.id = PROMPT_DOM_IDS.MAX_TOKENS;
+  maxTokensInput.type = 'number';
+  maxTokensInput.className = PROMPT_CLASSES.INPUT_NUM;
+  maxTokensInput.min = '1';
+  maxTokensInput.max = '128';
+  maxTokensInput.value = String(defaultMaxTokens);
+  maxTokensInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_MAX_TOKENS);
+  const maxTokensError = doc.createElement('div');
+  maxTokensError.id = PROMPT_DOM_IDS.ERROR_MAX_TOKENS;
+  maxTokensError.className = PROMPT_CLASSES.INLINE_ERROR;
+  maxTokensError.setAttribute('role', 'alert');
+  maxTokensGroup.append(maxTokensLabel, maxTokensInput, maxTokensError);
 
-  const outputEmpty = doc.createElement('div');
-  outputEmpty.id = PROMPT_DOM_IDS.OUTPUT_EMPTY;
-  outputEmpty.className = PROMPT_CLASSES.OUTPUT_EMPTY;
-  outputEmpty.textContent = 'No output yet. Enter a prompt and press Generate (or Ctrl+Enter) once the model is ready.';
+  // Temperature
+  const tempGroup = doc.createElement('div');
+  tempGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  const tempLabel = doc.createElement('label');
+  tempLabel.htmlFor = PROMPT_DOM_IDS.TEMPERATURE;
+  tempLabel.className = PROMPT_CLASSES.LABEL;
+  tempLabel.textContent = 'Temperature (0..2):';
+  const tempInput = doc.createElement('input');
+  tempInput.id = PROMPT_DOM_IDS.TEMPERATURE;
+  tempInput.type = 'number';
+  tempInput.className = PROMPT_CLASSES.INPUT_NUM;
+  tempInput.min = '0';
+  tempInput.max = '2';
+  tempInput.step = '0.1';
+  tempInput.value = String(defaultTemperature);
+  tempInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_TEMPERATURE);
+  const tempError = doc.createElement('div');
+  tempError.id = PROMPT_DOM_IDS.ERROR_TEMPERATURE;
+  tempError.className = PROMPT_CLASSES.INLINE_ERROR;
+  tempError.setAttribute('role', 'alert');
+  tempGroup.append(tempLabel, tempInput, tempError);
 
-  const outputPre = doc.createElement('pre');
-  outputPre.id = PROMPT_DOM_IDS.OUTPUT;
-  outputPre.className = PROMPT_CLASSES.OUTPUT;
-  outputPre.tabIndex = 0;
-  outputPre.setAttribute('aria-label', 'Model output');
+  // Top K
+  const topKGroup = doc.createElement('div');
+  topKGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  const topKLabel = doc.createElement('label');
+  topKLabel.htmlFor = PROMPT_DOM_IDS.TOP_K;
+  topKLabel.className = PROMPT_CLASSES.LABEL;
+  topKLabel.textContent = 'Top-K (1..50257):';
+  const topKInput = doc.createElement('input');
+  topKInput.id = PROMPT_DOM_IDS.TOP_K;
+  topKInput.type = 'number';
+  topKInput.className = PROMPT_CLASSES.INPUT_NUM;
+  topKInput.min = '1';
+  topKInput.max = '50257';
+  topKInput.value = String(defaultTopK);
+  topKInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_TOP_K);
+  const topKError = doc.createElement('div');
+  topKError.id = PROMPT_DOM_IDS.ERROR_TOP_K;
+  topKError.className = PROMPT_CLASSES.INLINE_ERROR;
+  topKError.setAttribute('role', 'alert');
+  topKGroup.append(topKLabel, topKInput, topKError);
 
-  const pager = doc.createElement('div');
-  pager.id = PROMPT_DOM_IDS.PAGER;
-  pager.className = PROMPT_CLASSES.PAGER;
-  pager.hidden = true;
-  pager.style.display = 'none';
+  // Optional memory-only API key (no persistence)
+  const apiKeyGroup = doc.createElement('div');
+  apiKeyGroup.className = PROMPT_CLASSES.FIELD_GROUP;
+  const apiKeyLabel = doc.createElement('label');
+  apiKeyLabel.htmlFor = PROMPT_DOM_IDS.API_KEY;
+  apiKeyLabel.className = PROMPT_CLASSES.LABEL;
+  apiKeyLabel.textContent = 'API Key (optional, in-memory):';
+  const apiKeyInput = doc.createElement('input');
+  apiKeyInput.id = PROMPT_DOM_IDS.API_KEY;
+  apiKeyInput.type = 'password';
+  apiKeyInput.className = PROMPT_CLASSES.INPUT_TEXT;
+  apiKeyInput.placeholder = 'Optional bearer token';
+  apiKeyInput.autocomplete = 'off';
+  apiKeyInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.API_KEY_HELP);
+  const apiKeyHelp = doc.createElement('div');
+  apiKeyHelp.id = PROMPT_DOM_IDS.API_KEY_HELP;
+  apiKeyHelp.className = PROMPT_CLASSES.LABEL;
+  apiKeyHelp.textContent = 'Optional bearer token. Kept in memory for this tab only.';
+  apiKeyGroup.append(apiKeyLabel, apiKeyInput, apiKeyHelp);
 
-  const pagerPrevBtn = doc.createElement('button');
-  pagerPrevBtn.id = PROMPT_DOM_IDS.PAGER_PREV;
-  pagerPrevBtn.type = 'button';
-  pagerPrevBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.PAGER_BTN} ${PROMPT_CLASSES.PAGER_PREV}`;
-  pagerPrevBtn.textContent = 'Previous';
-  pagerPrevBtn.setAttribute('aria-label', 'Previous output page');
-  pagerPrevBtn.disabled = true;
-
-  const pagerStatus = doc.createElement('span');
-  pagerStatus.id = PROMPT_DOM_IDS.PAGER_STATUS;
-  pagerStatus.className = PROMPT_CLASSES.PAGER_STATUS;
-  pagerStatus.setAttribute('role', 'status');
-  pagerStatus.setAttribute('aria-live', 'polite');
-  pagerStatus.textContent = 'Page 1 of 1';
-
-  const pagerNextBtn = doc.createElement('button');
-  pagerNextBtn.id = PROMPT_DOM_IDS.PAGER_NEXT;
-  pagerNextBtn.type = 'button';
-  pagerNextBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.PAGER_BTN} ${PROMPT_CLASSES.PAGER_NEXT}`;
-  pagerNextBtn.textContent = 'Next';
-  pagerNextBtn.setAttribute('aria-label', 'Next output page');
-  pagerNextBtn.disabled = true;
-
-  const pagerLatestBtn = doc.createElement('button');
-  pagerLatestBtn.id = PROMPT_DOM_IDS.PAGER_LATEST;
-  pagerLatestBtn.type = 'button';
-  pagerLatestBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.PAGER_BTN} ${PROMPT_CLASSES.PAGER_LATEST}`;
-  pagerLatestBtn.textContent = 'Latest';
-  pagerLatestBtn.setAttribute('aria-label', 'Latest output page');
-  pagerLatestBtn.disabled = true;
-
-  pager.append(pagerPrevBtn, pagerStatus, pagerNextBtn, pagerLatestBtn);
-  outputContainer.append(outputLabel, outputEmpty, outputPre, pager);
+  controlsGrid.append(maxTokensGroup, tempGroup, topKGroup, apiKeyGroup);
 
   // General error banner
   const generalError = doc.createElement('div');
@@ -300,7 +254,7 @@ export function mountPrompt(root, options = {}) {
   generalError.className = PROMPT_CLASSES.GENERAL_ERROR;
   generalError.setAttribute('role', 'alert');
 
-  // Action buttons: Generate, Stop, Copy
+  // Action buttons
   const actions = doc.createElement('div');
   actions.className = PROMPT_CLASSES.ACTIONS;
 
@@ -314,27 +268,79 @@ export function mountPrompt(root, options = {}) {
   cancelBtn.id = PROMPT_DOM_IDS.CANCEL_BTN;
   cancelBtn.type = 'button';
   cancelBtn.className = PROMPT_CLASSES.BTN;
-  cancelBtn.textContent = 'Stop';
+  cancelBtn.textContent = 'Cancel';
   cancelBtn.disabled = true;
+
+  const clearBtn = doc.createElement('button');
+  clearBtn.id = PROMPT_DOM_IDS.CLEAR_BTN;
+  clearBtn.type = 'button';
+  clearBtn.className = PROMPT_CLASSES.BTN;
+  clearBtn.textContent = 'Clear';
 
   const copyBtn = doc.createElement('button');
   copyBtn.id = PROMPT_DOM_IDS.COPY_BTN;
   copyBtn.type = 'button';
   copyBtn.className = PROMPT_CLASSES.BTN;
-  copyBtn.textContent = 'Copy';
+  copyBtn.textContent = 'Copy Output';
   copyBtn.disabled = true;
 
-  actions.append(generateBtn, cancelBtn, copyBtn);
-  form.append(promptGroup, outputContainer, generalError, actions);
+  actions.append(generateBtn, cancelBtn, clearBtn, copyBtn);
+  form.append(promptGroup, controlsGrid, generalError, actions);
 
-  // Live announcement region for screen readers
+  // Metadata / Telemetry row (run ID, state, usage - never claims token/fire alignment)
+  const meta = doc.createElement('div');
+  meta.className = PROMPT_CLASSES.META;
+
+  const statusBadge = doc.createElement('span');
+  statusBadge.id = PROMPT_DOM_IDS.STATUS;
+  statusBadge.className = PROMPT_CLASSES.STATUS_BADGE;
+  statusBadge.textContent = 'State: idle';
+
+  const runIdBadge = doc.createElement('span');
+  runIdBadge.id = PROMPT_DOM_IDS.RUN_ID;
+  runIdBadge.className = PROMPT_CLASSES.RUN_ID;
+  runIdBadge.textContent = 'Run ID: -';
+
+  const usageBadge = doc.createElement('span');
+  usageBadge.id = PROMPT_DOM_IDS.USAGE;
+  usageBadge.className = PROMPT_CLASSES.USAGE;
+
+  const finishReasonBadge = doc.createElement('span');
+  finishReasonBadge.id = PROMPT_DOM_IDS.FINISH_REASON;
+  finishReasonBadge.className = PROMPT_CLASSES.FINISH_REASON;
+
+  meta.append(statusBadge, runIdBadge, usageBadge, finishReasonBadge);
+
+  // Output display (preserves Unicode whitespace, rendered as textContent NOT innerHTML)
+  const outputContainer = doc.createElement('div');
+  outputContainer.className = PROMPT_CLASSES.OUTPUT_CONTAINER;
+
+  const outputLabel = doc.createElement('label');
+  outputLabel.htmlFor = PROMPT_DOM_IDS.OUTPUT;
+  outputLabel.className = PROMPT_CLASSES.LABEL;
+  outputLabel.textContent = 'Generated Output:';
+
+  const outputPre = doc.createElement('pre');
+  outputPre.id = PROMPT_DOM_IDS.OUTPUT;
+  outputPre.className = PROMPT_CLASSES.OUTPUT;
+  outputPre.tabIndex = 0;
+  outputPre.setAttribute('aria-label', 'Model output');
+
+  const outputEmpty = doc.createElement('div');
+  outputEmpty.id = PROMPT_DOM_IDS.OUTPUT_EMPTY;
+  outputEmpty.className = PROMPT_CLASSES.OUTPUT_EMPTY;
+  outputEmpty.textContent = 'No output yet. Enter a prompt and press Generate (or Ctrl+Enter) once the model is ready.';
+
+  outputContainer.append(outputLabel, outputEmpty, outputPre);
+
+  // Live announcement region for screen readers (announces completions/errors, not every token)
   const announcement = doc.createElement('div');
   announcement.id = PROMPT_DOM_IDS.ANNOUNCEMENT;
   announcement.className = PROMPT_CLASSES.ANNOUNCEMENT;
   announcement.setAttribute('role', 'status');
   announcement.setAttribute('aria-live', 'polite');
 
-  container.append(header, meta, form, announcement);
+  container.append(header, form, meta, outputContainer, announcement);
 
   if (typeof root.replaceChildren === 'function') {
     root.replaceChildren(container);
@@ -342,174 +348,65 @@ export function mountPrompt(root, options = {}) {
     root.innerHTML = '';
     root.appendChild?.(container);
   }
-
-  // Pager state
-  let userNavigatedPage = false;
-  let currentPageIndex = 0;
-  let cachedPages = [''];
-
-  let measureContext = null;
-  let measureFont = '';
-  const glyphWidths = new Map();
-
-  function outputPageLimits(text) {
-    const defaults = { lines: PAGER_LIMITS.MAX_LINES, columns: Infinity };
-    if (!outputPre.clientWidth || !outputPre.clientHeight ||
-        typeof globalThis.getComputedStyle !== 'function') return defaults;
-    const style = getComputedStyle(outputPre);
-    measureContext ??= doc.createElement('canvas').getContext('2d');
-    if (!measureContext) return defaults;
-    const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-    if (font !== measureFont) {
-      measureFont = font;
-      measureContext.font = font;
-      glyphWidths.clear();
-    }
-    let widest = measureContext.measureText('M').width;
-    for (const character of text) {
-      if (character === '\n' || character === '\r') continue;
-      let width = glyphWidths.get(character);
-      if (width === undefined) {
-        width = measureContext.measureText(character === '\t' ? '  ' : character).width;
-        glyphWidths.set(character, width);
-      }
-      widest = Math.max(widest, width);
-    }
-    const width = outputPre.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-    const height = outputPre.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    const lines = Math.max(1, Math.floor(height / parseFloat(style.lineHeight)) - 1);
-    return {
-      lines: Math.min(PAGER_LIMITS.MAX_LINES, lines),
-      columns: Math.max(1, Math.floor(width / widest)),
-    };
-  }
-
-  function updatePagerDisplay() {
-    const totalPages = cachedPages.length;
-    if (currentPageIndex >= totalPages) {
-      currentPageIndex = Math.max(0, totalPages - 1);
-    }
-    if (currentPageIndex < 0) {
-      currentPageIndex = 0;
-    }
-
-    outputPre.textContent = cachedPages[currentPageIndex] || '';
-    pagerStatus.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
-    pagerPrevBtn.disabled = currentPageIndex <= 0;
-    pagerNextBtn.disabled = currentPageIndex >= totalPages - 1;
-    pagerLatestBtn.disabled = currentPageIndex >= totalPages - 1;
-  }
-
-  function handlePagerPrev() {
-    if (currentPageIndex > 0) {
-      currentPageIndex--;
-      userNavigatedPage = true;
-      updatePagerDisplay();
-    }
-  }
-
-  function handlePagerNext() {
-    const totalPages = cachedPages.length;
-    if (currentPageIndex < totalPages - 1) {
-      currentPageIndex++;
-      if (currentPageIndex >= totalPages - 1) {
-        userNavigatedPage = false;
-      } else {
-        userNavigatedPage = true;
-      }
-      updatePagerDisplay();
-    }
-  }
-
-  function handlePagerLatest() {
-    const totalPages = cachedPages.length;
-    currentPageIndex = Math.max(0, totalPages - 1);
-    userNavigatedPage = false;
-    updatePagerDisplay();
-  }
-
   // State synchronization and accessibility updates
   let previousState = controller.getState().state;
   let actionError = null;
-  const COPY_DEFAULT_LABEL = 'Copy';
+  const COPY_DEFAULT_LABEL = 'Copy Output';
   let copyTimer = null;
 
-  // Connection readiness subscription state
-  let connectionState = null;
-  let unsubscribeConnection = null;
+  if (controller.getApiKey()) {
+    apiKeyInput.value = controller.getApiKey();
+  }
 
-  function isReadyToGenerate(health) {
-    const healthReady = Boolean(health?.ready);
-    const connReady = typeof options.subscribeConnection === 'function'
-      ? Boolean(connectionState?.ready)
-      : true;
-    return healthReady && connReady;
+  function handleApiKeySync() {
+    controller.setApiKey(apiKeyInput.value);
   }
 
   function render(state) {
     statusBadge.textContent = `State: ${state.state}`;
     statusBadge.setAttribute('data-state', state.state);
 
-    const active = isGenerationActive(state.state);
-    if (active && !isGenerationActive(previousState)) {
-      userNavigatedPage = false;
-      currentPageIndex = 0;
-    }
-
-    // Output pagination
-    const fullText = state.text || '';
-    const limits = outputPageLimits(fullText);
-    cachedPages = paginateText(fullText, limits.lines, PAGER_LIMITS.MAX_CODEPOINTS, limits.columns);
-    const totalPages = cachedPages.length;
-
-    if (!userNavigatedPage) {
-      currentPageIndex = Math.max(0, totalPages - 1);
-    } else {
-      if (currentPageIndex >= totalPages) {
-        currentPageIndex = Math.max(0, totalPages - 1);
-      }
-      if (currentPageIndex < 0) {
-        currentPageIndex = 0;
-      }
-    }
-
-    outputPre.textContent = cachedPages[currentPageIndex] || '';
+    // Output rendered with textContent to preserve Unicode whitespace and avoid HTML injection
+    outputPre.textContent = state.text || '';
     outputPre.setAttribute('data-state', state.state);
-    outputEmpty.hidden = Boolean(fullText);
-    outputEmpty.style.display = fullText ? 'none' : '';
+    outputEmpty.hidden = Boolean(state.text);
 
-    // Only show output page controls when multiple pages
-    const multiPage = totalPages > 1;
-    pager.hidden = !multiPage;
-    pager.style.display = multiPage ? '' : 'none';
-
-    pagerStatus.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
-    pagerPrevBtn.disabled = currentPageIndex <= 0;
-    pagerNextBtn.disabled = currentPageIndex >= totalPages - 1;
-    pagerLatestBtn.disabled = currentPageIndex >= totalPages - 1;
-
-    // Health status display: model identity visible
-    const healthMsg = state.health.message || 'Model status unknown';
-    healthStatus.textContent = healthMsg;
-    healthStatus.title = healthMsg;
+    // Health status display: checkpoint identity only when the launcher reports it
+    healthStatus.textContent = state.health.message || 'Model status unknown';
     healthStatus.setAttribute('data-status', state.health.status);
 
-    // Validation and error presentation
+    // Inline validation error presentation
+    promptError.textContent = state.validationErrors?.prompt || '';
+    promptInput.setAttribute('aria-invalid', state.validationErrors?.prompt ? 'true' : 'false');
+
+    maxTokensError.textContent = state.validationErrors?.maxTokens || '';
+    maxTokensInput.setAttribute('aria-invalid', state.validationErrors?.maxTokens ? 'true' : 'false');
+
+    tempError.textContent = state.validationErrors?.temperature || '';
+    tempInput.setAttribute('aria-invalid', state.validationErrors?.temperature ? 'true' : 'false');
+
+    topKError.textContent = state.validationErrors?.topK || '';
+    topKInput.setAttribute('aria-invalid', state.validationErrors?.topK ? 'true' : 'false');
+
     const hasValidationErrors = Object.keys(state.validationErrors || {}).length > 0;
 
+    // Hide generic validation banner whenever ANY validationErrors exist
+    // and avoid stale run metadata displayed as new failed validation
     if (hasValidationErrors) {
-      promptError.textContent = state.validationErrors?.prompt || '';
-      promptInput.setAttribute('aria-invalid', state.validationErrors?.prompt ? 'true' : 'false');
-      const otherErrors = Object.entries(state.validationErrors)
-        .filter(([k]) => k !== 'prompt')
-        .map(([, v]) => v);
-      generalError.textContent = otherErrors.join(', ');
+      generalError.textContent = '';
+      runIdBadge.textContent = 'Run ID: -';
       usageBadge.textContent = '';
       finishReasonBadge.textContent = '';
     } else {
-      promptError.textContent = '';
-      promptInput.setAttribute('aria-invalid', 'false');
       generalError.textContent = state.error || actionError || '';
+
+      if (state.runId) {
+        runIdBadge.textContent = state.modelCompletionId
+          ? `Run ID: ${state.runId} (${state.modelCompletionId})`
+          : `Run ID: ${state.runId}`;
+      } else {
+        runIdBadge.textContent = 'Run ID: -';
+      }
 
       if (state.usage) {
         usageBadge.textContent = `Tokens: ${state.usage.prompt_tokens} prompt + ${state.usage.completion_tokens} completion = ${state.usage.total_tokens} total`;
@@ -524,9 +421,11 @@ export function mountPrompt(root, options = {}) {
       }
     }
 
-    const ready = isReadyToGenerate(state.health);
+    const active = isGenerationActive(state.state);
+    const ready = Boolean(state.health?.ready);
     generateBtn.disabled = active || !ready;
     cancelBtn.disabled = !active;
+    clearBtn.disabled = active;
     copyBtn.disabled = !state.text;
 
     // Accessible announcements on key lifecycle transitions (never per-token or per-health poll)
@@ -544,23 +443,8 @@ export function mountPrompt(root, options = {}) {
     }
   }
 
-  // Subscribe to connection readiness if provided
-  if (typeof options.subscribeConnection === 'function') {
-    unsubscribeConnection = options.subscribeConnection((snapshot) => {
-      connectionState = snapshot;
-      render(controller.getState());
-    });
-  }
-
   const unsubscribe = controller.subscribe(render);
   render(controller.getState());
-
-  const outputResizeObserver = typeof ResizeObserver === 'function'
-    ? new ResizeObserver(() => {
-      if (outputPre.clientWidth && outputPre.clientHeight) render(controller.getState());
-    })
-    : null;
-  outputResizeObserver?.observe(outputPre);
 
   // Form submission handler
   async function handleSubmit(event) {
@@ -569,13 +453,15 @@ export function mountPrompt(root, options = {}) {
     }
     actionError = null;
     const currentState = controller.getState();
-    if (controller.isActive() || !isReadyToGenerate(currentState.health)) return;
+    if (controller.isActive() || !currentState.health?.ready) return;
+
+    controller.setApiKey(apiKeyInput.value);
 
     const params = {
       prompt: promptInput.value,
-      maxTokens: defaultMaxTokens,
-      temperature: defaultTemperature,
-      topK: defaultTopK,
+      maxTokens: maxTokensInput.value,
+      temperature: tempInput.value,
+      topK: topKInput.value,
     };
 
     await controller.submit(params, { onGenerate: options.onGenerate });
@@ -590,7 +476,7 @@ export function mountPrompt(root, options = {}) {
     }
   }
 
-  // Copy full output (Unicode whitespace preserved across all pages)
+  // Copy output only (Unicode whitespace preserved)
   async function handleCopy() {
     const text = controller.getState().text || '';
     if (!text) return;
@@ -613,7 +499,8 @@ export function mountPrompt(root, options = {}) {
       copyBtn.textContent = 'Copied!';
       announcement.textContent = 'Generated text copied to clipboard.';
       actionError = null;
-      if (!controller.getState().error) {
+      const hasValidationErrors = Object.keys(controller.getState().validationErrors || {}).length > 0;
+      if (!hasValidationErrors && !controller.getState().error) {
         generalError.textContent = '';
       }
 
@@ -624,7 +511,10 @@ export function mountPrompt(root, options = {}) {
       }, 1500);
     } catch {
       actionError = 'Unable to copy to clipboard.';
-      generalError.textContent = actionError;
+      const hasValidationErrors = Object.keys(controller.getState().validationErrors || {}).length > 0;
+      if (!hasValidationErrors) {
+        generalError.textContent = actionError;
+      }
     }
   }
 
@@ -632,14 +522,27 @@ export function mountPrompt(root, options = {}) {
     controller.cancel();
   }
 
+  function handleClear() {
+    if (controller.isActive()) return;
+    actionError = null;
+    promptInput.value = '';
+    controller.clear();
+    announcement.textContent = 'Prompt and output cleared.';
+  }
+
+  function handleRetryHealth() {
+    controller.setApiKey(apiKeyInput.value);
+    controller.checkHealth();
+  }
+
   form.addEventListener('submit', handleSubmit);
   promptInput.addEventListener('keydown', handleKeyDown);
+  apiKeyInput.addEventListener('input', handleApiKeySync);
+  apiKeyInput.addEventListener('change', handleApiKeySync);
   cancelBtn.addEventListener('click', handleCancel);
+  clearBtn.addEventListener('click', handleClear);
   copyBtn.addEventListener('click', handleCopy);
-
-  pagerPrevBtn.addEventListener('click', handlePagerPrev);
-  pagerNextBtn.addEventListener('click', handlePagerNext);
-  pagerLatestBtn.addEventListener('click', handlePagerLatest);
+  healthRetryBtn.addEventListener('click', handleRetryHealth);
 
   // Initialize health check
   if (options.pollHealth !== false) {
@@ -650,20 +553,15 @@ export function mountPrompt(root, options = {}) {
 
   // Disposer function
   function dispose() {
-    outputResizeObserver?.disconnect();
     unsubscribe();
-    if (typeof unsubscribeConnection === 'function') {
-      unsubscribeConnection();
-      unsubscribeConnection = null;
-    }
     form.removeEventListener('submit', handleSubmit);
     promptInput.removeEventListener('keydown', handleKeyDown);
+    apiKeyInput.removeEventListener('input', handleApiKeySync);
+    apiKeyInput.removeEventListener('change', handleApiKeySync);
     cancelBtn.removeEventListener('click', handleCancel);
+    clearBtn.removeEventListener('click', handleClear);
     copyBtn.removeEventListener('click', handleCopy);
-
-    pagerPrevBtn.removeEventListener('click', handlePagerPrev);
-    pagerNextBtn.removeEventListener('click', handlePagerNext);
-    pagerLatestBtn.removeEventListener('click', handlePagerLatest);
+    healthRetryBtn.removeEventListener('click', handleRetryHealth);
 
     clearTimeout(copyTimer);
     copyTimer = null;

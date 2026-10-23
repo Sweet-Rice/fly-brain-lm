@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-test("a bare app entry auto-connects its configured stream and gates requests on a mapping", async t => {
+test("recording controls reset the graph and switch cleanly between files and live input", async t => {
   const elements = new Map();
   class Element extends EventTarget {
     _id = "";
@@ -38,9 +39,6 @@ test("a bare app entry auto-connects its configured stream and gates requests on
     autocomplete = "";
     clientWidth = 800;
     clientHeight = 600;
-    classList = {
-      add: (...names) => { this.className = [...new Set([...this.className.split(/\s+/).filter(Boolean), ...names])].join(" "); },
-    };
 
     setAttribute(k, v) { this.attributes.set(k, String(v)); }
     getAttribute(k) { return this.attributes.get(k) ?? null; }
@@ -128,23 +126,62 @@ test("a bare app entry auto-connects its configured stream and gates requests on
     }
   }
 
-  let completionRequests = 0;
-  const stubFetch = async input => {
+  let apiAvailable = false;
+  const stubFetch = async (input) => {
     const url = String(input);
-    if (url === "/app-config") {
-      return Response.json({ stream_url: "/stream" });
+    if (url.includes("/health")) {
+      if (!apiAvailable) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: { get: h => h.toLowerCase() === "content-type" ? "application/json" : null },
+          json: async () => ({ status: "unavailable" }),
+          text: async () => JSON.stringify({ status: "unavailable" }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: h => h.toLowerCase() === "content-type" ? "application/json" : null },
+        json: async () => ({ status: "ok", model: "vibe2" }),
+        text: async () => JSON.stringify({ status: "ok", model: "vibe2" }),
+      };
     }
-    if (url === "/health") return Response.json({ status: "ok", model: "vibe2" });
-    if (url === "/v1/completions") {
-      completionRequests++;
-      return new Response(new ReadableStream({
+    if (url.includes("/v1/completions")) {
+      if (!apiAvailable) {
+        return {
+          ok: false,
+          status: 503,
+          statusText: "Service Unavailable",
+          headers: { get: h => h.toLowerCase() === "content-type" ? "application/json" : null },
+          json: async () => ({ error: { message: "Model unavailable" } }),
+          text: async () => JSON.stringify({ error: { message: "Model unavailable" } }),
+        };
+      }
+      const stream = new ReadableStream({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('data: {"choices":[{"text":"Hello fly"}],"model":"vibe2"}\n\ndata: [DONE]\n\n'));
+          controller.enqueue(new TextEncoder().encode("data: {\"choices\":[{\"text\":\"Hello fly\"}],\"model\":\"vibe2\"}\n\ndata: [DONE]\n\n"));
           controller.close();
         },
-      }), { headers: { "Content-Type": "text/event-stream" } });
+      });
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: h => h.toLowerCase() === "content-type" ? "text/event-stream" : null },
+        body: stream,
+      };
     }
-    throw new Error(`Unexpected app request: ${url}`);
+    return {
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+      headers: { get: () => null },
+      json: async () => ({}),
+      text: async () => "",
+    };
   };
 
   const docBody = new Element();
@@ -156,11 +193,6 @@ test("a bare app entry auto-connects its configured stream and gates requests on
       const el = new Element();
       el.tagName = tag.toUpperCase();
       el.ownerDocument = doc;
-      return el;
-    },
-    createElementNS: (namespace, tag) => {
-      const el = doc.createElement(tag);
-      el.namespaceURI = namespace;
       return el;
     },
     execCommand: () => true,
@@ -177,8 +209,6 @@ test("a bare app entry auto-connects its configured stream and gates requests on
     isSecureContext: false,
     WebSocket: Socket,
     fetch: stubFetch,
-    requestAnimationFrame: callback => setTimeout(() => callback(performance.now()), 0),
-    cancelAnimationFrame: clearTimeout,
   })) {
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -194,34 +224,125 @@ test("a bare app entry auto-connects its configured stream and gates requests on
   });
   const mapping = JSON.stringify({ type: "mapping", version: 1, groups: [{ id: 0, name: "PN" }], nodes: [{ id: 7, group: 0 }], edges: [[7, 7]] });
   const fire = t => JSON.stringify({ type: "fire", t, pairs: [[7, 7]] });
+  const file = new Blob([[mapping, fire(0), fire(100)].join("\n")]);
+  file.name = "example.ndjson";
+  const events = [];
+  for (const type of ["mapping", "fire", "reset", "telemetry"]) element("viewport").addEventListener(type, event => events.push({ type, detail: event.detail }));
   await import("../main.js");
+  const click = id => element(id).dispatchEvent(new Event("click"));
   const settle = async predicate => {
-    for (let i = 0; i < 30 && !predicate(); i++) await new Promise(setImmediate);
+    for (let i = 0; i < 20 && !predicate(); i++) await new Promise(setImmediate);
     assert.ok(predicate(), "expected UI state did not arrive");
   };
-  await settle(() => sockets.length === 1);
-  const socket = sockets[0];
-  assert.equal(element("prompt-generate-btn").disabled, true, "API health alone cannot enable generation");
+  element("recording").files = [file];
+  element("recording").dispatchEvent(new Event("change"));
+  await settle(() => element("fires").textContent === 1);
+  assert.equal(element("recording-pause").disabled, false);
+  click("recording-pause");
+  assert.equal(element("recording-play").disabled, false);
+  assert.equal(element("recording-pause").disabled, true);
+  assert.match(element("source-status").textContent, /paused/i);
+  element("recording-speed").value = "4";
+  element("recording-speed").dispatchEvent(new Event("change"));
+  const beforeRestart = events.length;
+  click("recording-restart");
+  await settle(() => events.slice(beforeRestart).some(event => event.type === "fire"));
+  const restarted = events.slice(beforeRestart);
+  assert.equal(restarted[0].type, "reset");
+  assert.deepEqual(restarted.filter(event => event.type === "fire").map(event => event.detail.t), [0]);
+  assert.match(element("protocol-status").textContent, /epoch 0/);
+
+  element("endpoint").value = "ws://127.0.0.1:9000/stream";
+  element("connection").dispatchEvent(new Event("submit", { cancelable: true }));
+  assert.equal(element("recording-restart").disabled, true);
+  assert.equal(element("recording-speed").disabled, true);
+  assert.equal(element("recording").value, "");
+  sockets[0].onmessage({ data: mapping });
+  sockets[0].onmessage({ data: fire(7) });
+  assert.equal(element("step").textContent, 7);
+  click("recording-play");
+  await new Promise(setImmediate);
+  assert.equal(element("step").textContent, 7, "old playback cannot overwrite live input");
+  element("recording").files = [file];
+  element("recording").dispatchEvent(new Event("change"));
+  assert.equal(sockets[0].closed, true);
+  await settle(() => element("step").textContent === 0);
+  click("disconnect");
+  assert.equal(element("nodes").textContent, 0);
+  assert.equal(element("recording-play").disabled, true);
+  assert.equal(element("recording-restart").disabled, true);
+  // Integration regression: generate from recorded mode cannot leave old file modifying live graph
+  element("recording").files = [file];
+  element("recording").dispatchEvent(new Event("change"));
+  await settle(() => element("fires").textContent === 1);
+  assert.equal(element("recording-pause").disabled, false);
+
+  apiAvailable = true;
+  click("prompt-health-retry-btn");
+  await settle(() => element("prompt-generate-btn").disabled === false);
+
   element("prompt-input").value = "Analyze fly connectome";
   element("prompt-form").dispatchEvent(new Event("submit", { cancelable: true }));
   await new Promise(setImmediate);
-  assert.equal(completionRequests, 0, "no generation before a graph mapping is accepted");
 
-  socket.onopen();
-  socket.onmessage({ data: mapping });
-  await settle(() => element("prompt-generate-btn").disabled === false);
-  socket.onmessage({ data: fire(7) });
-  element("prompt-form").dispatchEvent(new Event("submit", { cancelable: true }));
-  await settle(() => completionRequests === 1 && !element("prompt-generate-btn").disabled);
-  element("prompt-form").dispatchEvent(new Event("submit", { cancelable: true }));
-  await settle(() => completionRequests === 2 && !element("prompt-generate-btn").disabled);
-  assert.equal(sockets.length, 1, "repeated generation preserves the live connection");
-  assert.equal(element("step").textContent, 7, "generation does not reset accepted graph activity");
+  // File recording controls are cleared and playback stopped
+  assert.equal(element("recording").value, "");
+  assert.equal(element("recording-play").disabled, true);
+  assert.equal(element("recording-restart").disabled, true);
+  assert.equal(element("recording-speed").disabled, true);
 
-  socket.onclose({ code: 1006, reason: "" });
-  assert.equal(element("prompt-generate-btn").disabled, true);
-  assert.equal(element("nodes").textContent, 0);
+  // Old file playback cannot modify the graph after generation switch
+  click("recording-play");
+  await new Promise(setImmediate);
+  assert.equal(element("step").textContent, "—", "old file playback cannot modify live graph after generate");
+
+  // New live endpoint receives updates
+  const activeLiveSocket = sockets.at(-1);
+  assert.equal(activeLiveSocket.url, "ws://127.0.0.1:9000/stream");
+  activeLiveSocket.onmessage({ data: mapping });
+  activeLiveSocket.onmessage({ data: fire(88) });
+  await settle(() => element("step").textContent === 88);
+  assert.equal(element("step").textContent, 88);
+
+  // Another generation while already connected to the same live endpoint does not reset live graph
+  const socketCount = sockets.length;
+  element("prompt-input").value = "Second query";
   element("prompt-form").dispatchEvent(new Event("submit", { cancelable: true }));
   await new Promise(setImmediate);
-  assert.equal(completionRequests, 2, "disconnection blocks new model requests");
+  assert.equal(sockets.length, socketCount, "no new socket created when live already connected to same endpoint");
+  assert.equal(element("step").textContent, 88, "live graph not reset when prompt generated on same live connection");
+
+  const telemetry = { type: "stream_status", run_id: "run-integration", epoch: 7,
+    seq: 10, event: "resync", dropped_steps: 0, server_time_ms: 123 };
+  activeLiveSocket.onmessage({ data: JSON.stringify(telemetry) });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(events.at(-1), { type: "telemetry", detail: telemetry });
+  assert.match(element("timeline-identity").textContent, /run-integration · epoch 7/);
+  assert.equal(element("step").textContent, 88, "telemetry cannot advance graph time");
+
+  const memoryFrames = readFileSync(new URL('./fixtures/memory.ndjson', import.meta.url), 'utf8')
+    .trim().split('\n').map(JSON.parse).filter(message => message.type.startsWith('memory_'));
+  for (const message of memoryFrames) activeLiveSocket.onmessage({ data: JSON.stringify(message) });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(element("memory-identity").textContent, /run-memory-fixture · epoch 7/);
+  assert.match(element("memory-details").textContent, /req-fixture.*rev 0 → 1/);
+  assert.equal(element("timeline-identity").textContent, "Run run-integration · epoch 7");
+  assert.equal(element("step").textContent, 88, "memory cannot consume graph steps");
+
+  const telemetryFile = new Blob([mapping, "\n", JSON.stringify(telemetry)]);
+  telemetryFile.name = "telemetry.ndjson";
+  element("recording").files = [telemetryFile];
+  element("recording").dispatchEvent(new Event("change"));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(element("timeline-identity").textContent, /run-integration · epoch 7/);
+  click("recording-restart");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(element("timeline-identity").textContent, /run-integration · epoch 7/);
+  click("disconnect");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(element("timeline-identity").textContent, "No run telemetry received.");
+  assert.equal(element("memory-identity").textContent, "No memory telemetry received.");
+
+  await settle(() => element("prompt-output").textContent.includes("Hello fly"));
+  assert.ok(element("prompt-output").textContent.includes("Hello fly"));
 });

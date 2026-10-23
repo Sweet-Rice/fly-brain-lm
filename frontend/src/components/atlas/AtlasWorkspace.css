@@ -1,0 +1,934 @@
+/* Scoped styles for the live neural atlas workspace */
+
+@layer components {
+  /* Scoped accessibility utility */
+  .sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+  }
+
+  .atlas-workspace-container {
+    margin-top: var(--space-5);
+  }
+
+  .atlas-workspace-grid {
+    display: grid;
+    gap: var(--space-4);
+    align-items: stretch;
+  }
+
+  .atlas-viewport-panel,
+  .atlas-inspector-panel {
+    min-width: 0;
+  }
+
+  /* Header bar inside atlas panels */
+  .atlas-panel__header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .atlas-panel__header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .atlas-viewport-content {
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-4) var(--space-5) var(--space-5);
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  /* Canvas container: dark graph field in BOTH light and dark themes */
+  .atlas-viewport__canvas-container {
+    position: relative;
+    width: 100%;
+    height: 480px;
+    min-height: 400px;
+    background-color: #0c1410;
+    border: 1px solid #23352c;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    box-shadow: inset 0 2px 14px rgb(0 0 0 / 0.45);
+  }
+
+  .atlas-viewport__canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+    background-color: #0c1410;
+    cursor: grab;
+  }
+
+  .atlas-viewport__canvas:active {
+    cursor: grabbing;
+  }
+
+  .atlas-viewport__canvas:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -2px;
+  }
+
+  /* Graph node labels overlay */
+  .atlas-viewport__labels {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .atlas-viewport__labels span,
+  .atlas-viewport__labels .graph-callout {
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #eef2e8;
+    background: rgba(12, 20, 16, 0.88);
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(52, 68, 61, 0.85);
+    pointer-events: none;
+    transform: translate(-50%, -100%);
+    margin-top: -6px;
+  }
+
+  /* Schematic layout indicator chip: hidden by default, shown ONLY for brain layout */
+  .atlas-viewport__schematic-chip {
+    display: none;
+    position: absolute;
+    top: 0.75rem;
+    left: 0.75rem;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(12, 20, 16, 0.85);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(82, 98, 92, 0.4);
+    color: #a7b5ac;
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  canvas[data-layout='brain'] ~ .atlas-viewport__schematic-chip,
+  .atlas-viewport__canvas-container:has(canvas[data-layout='brain'])
+    .atlas-viewport__schematic-chip {
+    display: inline-flex;
+  }
+
+  .atlas-viewport__schematic-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--lime);
+  }
+
+  /* Canvas viewport controls (Fit, Zoom In, Zoom Out) on bottom right: 44px min hit targets */
+  .atlas-viewport__controls {
+    position: absolute;
+    bottom: 0.75rem;
+    right: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(12, 20, 16, 0.85);
+    backdrop-filter: blur(8px);
+    padding: 0.3rem;
+    border-radius: 999px;
+    border: 1px solid rgba(82, 98, 92, 0.4);
+    z-index: 2;
+  }
+
+  .atlas-viewport__controls-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    height: 44px;
+    padding: 0 0.75rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #eef2e8;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .atlas-viewport__controls-button:hover:not(:disabled) {
+    background: rgba(52, 68, 61, 0.5);
+    border-color: rgba(155, 212, 185, 0.4);
+  }
+
+  .atlas-viewport__controls-button:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  /* Readout overlay layer */
+  .atlas-viewport__readout {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .readout-links {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .readout-mbon-link {
+    stroke: var(--lime);
+    stroke-opacity: 0.45;
+    stroke-width: 1.25px;
+    stroke-dasharray: 3 4;
+    fill: none;
+  }
+
+  .readout-hub-link {
+    stroke: var(--lime);
+    stroke-opacity: 0.85;
+    stroke-width: 1.25px;
+    fill: none;
+  }
+
+  .readout-hub-node {
+    fill: var(--lime);
+    stroke: #0c1410;
+  }
+
+  .readout-hub-label {
+    fill: var(--lime);
+    font-family: var(--font-mono);
+  }
+
+  .readout-card {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    width: clamp(160px, 28%, 230px);
+    background: rgba(16, 23, 20, 0.92);
+    backdrop-filter: blur(8px);
+    border: 1px solid #34443d;
+    border-radius: var(--radius-sm);
+    color: #eef2e8;
+    pointer-events: auto;
+    padding: 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .readout-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .readout-pipeline-label {
+    color: var(--lime);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+  }
+
+  .readout-source-badge,
+  .readout-token-meta,
+  .readout-pos-label {
+    color: #a7b5ac;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+  }
+
+  .readout-source-badge {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .readout-architecture-note {
+    color: #6e8077;
+    font-style: italic;
+    font-size: 0.68rem;
+    line-height: 1.3;
+    margin: 0.15rem 0;
+  }
+
+  .readout-token-view {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .readout-token-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.5rem;
+  }
+
+  .readout-token-status[data-status='stepped_fired'] {
+    color: var(--coral);
+  }
+
+  .readout-piece-group {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .readout-text-box {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.35;
+    background: rgba(12, 20, 16, 0.95);
+    border: 1px solid #23352c;
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.5rem;
+    min-height: 32px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: #eef2e8;
+  }
+
+  .readout-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.3rem;
+    margin-top: 0.25rem;
+  }
+
+  .readout-pos-label {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    text-align: center;
+  }
+
+  .readout-btn {
+    border-radius: 999px;
+    border: 1px solid #34443d;
+    background: rgba(12, 20, 16, 0.6);
+    color: #eef2e8;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    min-height: 28px;
+    padding: 0.2rem 0.4rem;
+    cursor: pointer;
+    transition:
+      border-color 120ms ease,
+      background 120ms ease;
+  }
+
+  .readout-btn:hover:not(:disabled) {
+    border-color: var(--lime);
+    background: rgba(30, 42, 36, 0.8);
+  }
+
+  .readout-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .readout-btn:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  /* Fallback message overlay when WebGPU is not supported */
+  .atlas-viewport__gpu-banner {
+    position: absolute;
+    inset: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(16, 23, 20, 0.94);
+    backdrop-filter: blur(6px);
+    border: 1px solid #34443d;
+    border-radius: var(--radius-sm);
+    padding: 2rem 1.5rem;
+    text-align: center;
+    color: #eef2e8;
+    z-index: 4;
+  }
+
+  .atlas-viewport__gpu-banner strong {
+    color: var(--amber);
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .atlas-viewport__gpu-banner p {
+    max-width: 480px;
+    font-size: 0.85rem;
+    color: #a7b5ac;
+    margin-bottom: 0.75rem;
+    line-height: 1.45;
+  }
+
+  .atlas-viewport__gpu-banner small {
+    font-size: 0.75rem;
+    color: #6e8077;
+  }
+
+  /* Keyboard hint bar */
+  .atlas-viewport__keyboard-hint {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+  }
+
+  .atlas-viewport__keyboard-hint kbd {
+    display: inline-block;
+    padding: 0.15rem 0.35rem;
+    border-radius: 4px;
+    background: var(--paper-soft);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-size: 0.68rem;
+  }
+
+  /* Telemetry counters strip */
+  .atlas-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .atlas-metrics > div {
+    background: var(--paper-raised);
+    padding: var(--space-2) var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .atlas-metrics dt {
+    color: var(--ink-soft);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-family: var(--font-mono);
+  }
+
+  .atlas-metrics dd {
+    font-family: var(--font-mono);
+    font-size: 1.05rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  /* Inspector and Circuit Details Panel */
+  .atlas-inspector-content {
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-5);
+    gap: var(--space-5);
+    min-width: 0;
+  }
+
+  /* Imperative subtree mount container */
+  .atlas-inspector-mount {
+    min-width: 0;
+  }
+
+  /* Ensure native hidden attribute is respected despite display:flex on children */
+  .atlas-inspector-mount [hidden] {
+    display: none !important;
+  }
+
+  /* Locally scoped Inspector CSS (matching existing inspector.js output) */
+  .atlas-inspector-mount .inspector-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .atlas-inspector-mount .inspector-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 0.5rem;
+  }
+
+  .atlas-inspector-mount .inspector-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  .atlas-inspector-mount .inspector-status {
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    color: var(--ink-soft);
+    overflow-wrap: anywhere;
+  }
+
+  .atlas-inspector-mount .inspector-select-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .atlas-inspector-mount .inspector-label {
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+    margin: 0;
+  }
+
+  .atlas-inspector-mount .inspector-input-group {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .atlas-inspector-mount .inspector-input {
+    flex: 1 1 80px;
+    min-width: 0;
+    background: var(--paper-soft);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    color: var(--ink);
+    padding: 0.45rem 0.65rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+
+  .atlas-inspector-mount .inspector-input:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  .atlas-inspector-mount .inspector-btn {
+    cursor: pointer;
+    background: var(--paper-raised);
+    color: var(--ink);
+    font-weight: 750;
+    padding: 0.45rem 0.85rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    font-size: 0.8rem;
+    min-height: 44px;
+    transition:
+      border-color 120ms ease,
+      background 120ms ease,
+      color 120ms ease;
+  }
+
+  .atlas-inspector-mount .inspector-btn:hover:not(:disabled) {
+    border-color: var(--moss);
+    color: var(--moss);
+  }
+
+  .atlas-inspector-mount .inspector-btn:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  /* Inspector tabs */
+  .atlas-inspector-mount .inspector-tabs {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-3);
+  }
+
+  .atlas-inspector-mount .inspector-tab {
+    cursor: pointer;
+    border-radius: 999px;
+    min-height: 36px;
+    padding: 0.35rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: var(--paper-soft);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    transition:
+      border-color 120ms ease,
+      background 120ms ease,
+      color 120ms ease;
+  }
+
+  .atlas-inspector-mount .inspector-tab:hover:not([aria-selected='true']) {
+    border-color: var(--moss);
+    color: var(--moss);
+  }
+
+  .atlas-inspector-mount .inspector-tab[aria-selected='true'] {
+    background: var(--moss-deep);
+    color: var(--paper);
+    border-color: var(--moss-deep);
+  }
+
+  .atlas-inspector-mount .inspector-tab:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  .atlas-inspector-mount .inspector-error {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-sm);
+    padding: 0.45rem 0.65rem;
+    font-size: 0.75rem;
+  }
+
+  .atlas-inspector-mount .inspector-error:empty {
+    display: none;
+  }
+
+  .atlas-inspector-mount .inspector-error:not(:empty)::before {
+    content: 'Error: ';
+    font-weight: 700;
+  }
+
+  .atlas-inspector-mount .inspector-empty {
+    padding: 1.25rem 1rem;
+    background: var(--paper-soft);
+    border-radius: var(--radius-sm);
+    color: var(--ink-soft);
+    text-align: center;
+    font-style: italic;
+    font-size: 0.8rem;
+    border: 1px dashed var(--line);
+  }
+
+  .atlas-inspector-mount .neuron-details {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .atlas-inspector-mount .neuron-section {
+    border-top: 1px solid var(--line);
+    padding-top: 0.65rem;
+  }
+
+  .atlas-inspector-mount .neuron-section:first-child {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  .atlas-inspector-mount .neuron-heading {
+    font-size: 0.7rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-family: var(--font-mono);
+  }
+
+  .atlas-inspector-mount .neuron-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.15rem 0;
+    font-size: 0.82rem;
+    flex-wrap: wrap;
+  }
+
+  .atlas-inspector-mount .neuron-label {
+    color: var(--ink-soft);
+    font-size: 0.82rem;
+  }
+
+  .atlas-inspector-mount .neuron-value {
+    font-weight: 700;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+
+  .atlas-inspector-mount .neuron-pagination {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.35rem 0;
+    flex-wrap: wrap;
+  }
+
+  .atlas-inspector-mount .neuron-sublabel {
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+    font-weight: 600;
+  }
+
+  .atlas-inspector-mount .neuron-page-info {
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+    font-family: var(--font-mono);
+  }
+
+  .atlas-inspector-mount .neuron-neighbors-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.4rem 0 0.75rem;
+  }
+
+  .atlas-inspector-mount .inspector-neighbor-btn {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.35rem 0.65rem;
+    min-height: 44px;
+    min-width: 44px;
+    background: var(--paper-raised);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease;
+  }
+
+  .atlas-inspector-mount .inspector-neighbor-btn:hover {
+    background: var(--paper-soft);
+    border-color: var(--moss);
+    color: var(--moss);
+  }
+
+  .atlas-inspector-mount .inspector-neighbor-btn:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  .atlas-inspector-mount .neuron-empty-neighbors {
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+    font-style: italic;
+    padding: 0.25rem 0;
+  }
+
+  .atlas-inspector-mount .neuron-caveat {
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+    margin-top: 0.5rem;
+    font-style: italic;
+    line-height: 1.45;
+    border-left: 2px solid var(--line);
+    padding-left: 0.5rem;
+  }
+
+  /* Groups Legend block */
+  .atlas-groups-block {
+    border-top: 1px solid var(--line);
+    padding-top: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .atlas-groups-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .atlas-groups-header h3 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  .atlas-groups-count {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--ink-soft);
+  }
+
+  .atlas-groups-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--paper-raised);
+  }
+
+  .atlas-groups-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    text-align: left;
+  }
+
+  .atlas-groups-table th,
+  .atlas-groups-table td {
+    padding: 0.45rem 0.65rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .atlas-groups-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .atlas-groups-table th {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-soft);
+    font-family: var(--font-mono);
+    background: var(--paper-soft);
+  }
+
+  .atlas-groups-table td code {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  .atlas-group-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    vertical-align: middle;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+  }
+
+  .atlas-placement-tag {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+  }
+
+  .atlas-empty-notice {
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+    font-style: italic;
+    margin: 0;
+  }
+
+  .atlas-caveat-box {
+    background: var(--paper-soft);
+    border-left: 3px solid var(--moss);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem 0.85rem;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: var(--ink-soft);
+  }
+
+  .atlas-caveat-box strong {
+    color: var(--ink);
+  }
+}
+
+/* Responsive breakpoint rules within @layer responsive */
+@layer responsive {
+  @media (min-width: 1024px) {
+    .atlas-workspace-grid {
+      grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.85fr);
+      align-items: stretch;
+    }
+
+    .atlas-viewport-panel,
+    .atlas-inspector-panel {
+      min-width: 0;
+      min-height: 44rem;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .atlas-workspace-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .atlas-viewport-panel,
+    .atlas-inspector-panel {
+      min-width: 0;
+    }
+
+    .atlas-viewport__canvas-container {
+      height: 380px;
+      min-height: 320px;
+    }
+    .readout-card {
+      width: min(46%, 200px);
+    }
+  }
+
+  @media (max-width: 759px) {
+    .atlas-panel__header-row,
+    .atlas-viewport-content,
+    .atlas-inspector-content {
+      padding-inline: var(--space-4);
+    }
+
+    .atlas-inspector-mount .inspector-btn,
+    .atlas-inspector-mount .inspector-neighbor-btn,
+    .atlas-viewport__controls-button {
+      min-height: 44px;
+      min-width: 44px;
+    }
+
+    .atlas-viewport__schematic-chip {
+      font-size: 0.65rem;
+    }
+  }
+}

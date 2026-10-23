@@ -863,72 +863,9 @@ def test_validate_loopback_ws_url():
     "ws://127.0.0.1:0/stream",
     "ws://127.0.0.1:65536/stream",
 ])
-def test_app_config_rejects_sensitive_or_unusable_stream_urls(url):
+def test_rejects_sensitive_or_unusable_stream_urls(url):
     with pytest.raises(ValueError):
         make_server(port=0, viz_url=url)
-
-
-def test_app_config_endpoint_with_configured_viz_url():
-    """Verify app-config is uncached, supports HEAD, and rejects mutation."""
-    server = make_server(port=0, viz_url="ws://127.0.0.1:8765/stream")
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
-
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", port)
-
-        # GET /app-config
-        conn.request("GET", "/app-config")
-        resp = conn.getresponse()
-        assert resp.status == 200
-        assert "application/json" in resp.getheader("Content-Type")
-        assert resp.getheader("Cache-Control") == "no-store"
-
-        resp.read()
-
-
-        # HEAD /app-config
-        conn.request("HEAD", "/app-config")
-        head_resp = conn.getresponse()
-        assert head_resp.status == 200
-        assert "application/json" in head_resp.getheader("Content-Type")
-        assert head_resp.getheader("Cache-Control") == "no-store"
-        assert head_resp.read() == b""
-
-        # POST /app-config -> 405 Method Not Allowed
-        conn.request("POST", "/app-config", body=b"{}", headers={"Content-Type": "application/json"})
-        post_resp = conn.getresponse()
-        assert post_resp.status == 405
-        assert "application/json" in post_resp.getheader("Content-Type")
-        post_resp.read()
-
-        conn.close()
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-def test_app_config_endpoint_without_configured_viz_url():
-    """Verify GET /app-config returns stream_url: null when graph is not configured (not guessed 8765)."""
-    server = make_server(port=0, viz_url=None)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
-
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", port)
-        conn.request("GET", "/app-config")
-        resp = conn.getresponse()
-        assert resp.status == 200
-        assert "application/json" in resp.getheader("Content-Type")
-        assert resp.getheader("Cache-Control") == "no-store"
-
-        data = json.loads(resp.read().decode("utf-8"))
-        assert data == {"stream_url": None}
-        conn.close()
-    finally:
-        server.shutdown()
-        server.server_close()
-
 
 @pytest.mark.parametrize("viz_url", [
     "ws://127.0.0.1:9999/stream",

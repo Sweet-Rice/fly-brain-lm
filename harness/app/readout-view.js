@@ -92,7 +92,6 @@ export function splitIntoPieces(text, size = PIECE_SIZE) {
  * @param {HTMLElement} root - Container (div#readout-workspace inside .graph-view)
  * @param {HTMLCanvasElement} canvas - Graph WebGPU canvas
  * @returns {{
- *   accept: (raw: string) => boolean,
  *   setGeneration: (state: any) => void,
  *   reset: () => void,
  *   dispose: () => void,
@@ -549,8 +548,21 @@ export function mountReadout(root, canvas) {
     layoutNodes = detail?.nodes ? detail.nodes.slice() : [];
     updateLinksGeometry();
   };
-  canvas?.addEventListener('readout-layout', onReadoutLayout);
+  const onTelemetry = (event) => {
+    if (isDisposed) return;
+    acceptMessage(event?.detail);
+  };
+  const onMapping = () => {
+    if (!isDisposed) reset();
+  };
+  const onReset = () => {
+    if (!isDisposed) reset();
+  };
 
+  canvas?.addEventListener('readout-layout', onReadoutLayout);
+  canvas?.addEventListener('telemetry', onTelemetry);
+  canvas?.addEventListener('mapping', onMapping);
+  canvas?.addEventListener('reset', onReset);
 
   const onResize = () => {
     if (!isDisposed) updateLinksGeometry();
@@ -565,21 +577,13 @@ export function mountReadout(root, canvas) {
     resizeObserver.observe(root);
   }
 
-  // --- Public Interface ---
-  const accept = (raw) => {
-    if (isDisposed || typeof raw !== 'string') return false;
-
-    let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return false;
-    }
+  // --- Telemetry Ingestion ---
+  const acceptMessage = (msg) => {
+    if (isDisposed) return false;
 
     if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.type !== 'string') {
       return false;
     }
-
     // Ignore memory telemetry extensions
     if (msg.type === 'memory_summary' || msg.type === 'memory_slice') {
       return false;
@@ -755,12 +759,14 @@ export function mountReadout(root, canvas) {
     resizeObserver?.disconnect();
     window.removeEventListener('resize', onResize);
     canvas?.removeEventListener('readout-layout', onReadoutLayout);
+    canvas?.removeEventListener('telemetry', onTelemetry);
+    canvas?.removeEventListener('mapping', onMapping);
+    canvas?.removeEventListener('reset', onReset);
     root.replaceChildren();
     root.style.display = 'none';
   };
 
   return {
-    accept,
     setGeneration,
     reset,
     dispose,

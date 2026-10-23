@@ -12,9 +12,7 @@ This module provides a no-build, stdlib-only HTTP server combining:
      POST /v1/completions
      POST /v1/chat/completions
    All other proxy routes or arbitrary URLs are rejected.
-3. Application configuration endpoint:
-   GET /app-config returns JSON {"stream_url": "/stream" or null}, no-store.
-4. Incremental SSE (Server-Sent Events) streaming with cancellation propagation:
+3. Incremental SSE (Server-Sent Events) streaming with cancellation propagation:
    When downstream clients (such as browser AbortController) disconnect, the proxy
    detects the disconnection via bounded select polling, breaks the stream, and
    immediately tears down and closes the upstream HTTP connection (resetting the socket
@@ -24,7 +22,7 @@ This module provides a no-build, stdlib-only HTTP server combining:
    completes its in-progress token step and halts upon its next socket write or flush
    when BrokenPipeError/ConnectionResetError is raised, releasing the engine lock and
    generation resources.
-5. Optional model-server child launcher (--model-ckpt):
+4. Optional model-server child launcher (--model-ckpt):
    Launches harness.telemetry.serve as an owned child, deriving stream_url from child
    arguments (default port 8765, explicit --viz-port), distinguishes model loading
    (HTTP 503 model_loading) from child exit (HTTP 503 model_exited), refuses to
@@ -398,21 +396,6 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
-    def _send_app_config(self, send_body: bool = True) -> None:
-        """Send application configuration manifest containing stream_url."""
-        manifest = {"stream_url": "/stream" if self.server.viz_url else None}
-        body = json.dumps(manifest).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        if send_body:
-            try:
-                self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                pass
-
     def _send_json_error(self, code: int, msg: str, error_type: str = "invalid_request_error") -> None:
         """Send a standard JSON error response conforming to OpenAI error conventions."""
         self._send_json(code, {"error": {"message": msg, "type": error_type}})
@@ -422,22 +405,13 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         self._send_json_error(code, message or "Error", "invalid_request_error")
 
     def do_HEAD(self) -> None:
-        """Handle HEAD requests for static assets or app config."""
-        url_split = urllib.parse.urlsplit(self.path)
-        norm_path = posixpath.normpath(url_split.path.rstrip("/"))
-        if norm_path == "/app-config":
-            self._send_app_config(send_body=False)
-            return
+        """Handle HEAD requests for static assets."""
         self._handle_static_or_redirect(send_body=False)
 
     def do_GET(self) -> None:
-        """Route GET requests: whitelisted model proxy routes, app config, or static assets."""
+        """Route GET requests: whitelisted model proxy routes or static assets."""
         url_split = urllib.parse.urlsplit(self.path)
         norm_path = posixpath.normpath(url_split.path.rstrip("/"))
-
-        if norm_path == "/app-config":
-            self._send_app_config(send_body=True)
-            return
 
         if norm_path == "/stream":
             self._proxy_stream()
@@ -457,10 +431,6 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         """Route POST requests: whitelisted model proxy routes only."""
         url_split = urllib.parse.urlsplit(self.path)
         norm_path = posixpath.normpath(url_split.path.rstrip("/"))
-
-        if norm_path == "/app-config":
-            self._send_json_error(405, f"Method POST not allowed for {norm_path}", "invalid_request_error")
-            return
 
         if norm_path in PROXY_POST_ROUTES:
             self._proxy_request(norm_path, url_split.query)

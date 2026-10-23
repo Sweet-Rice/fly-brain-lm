@@ -1,83 +1,102 @@
 import { ProtocolReceiver } from "./protocol.js";
 import { LiveSource } from "./sources.js";
+import { RecordingSource } from "./playback.js";
 import { initializeGPU } from "./gpu.js";
 import { mountPrompt } from "./prompt-view.js";
 import { mountInspector } from "./inspector.js";
-import { mountReadout } from "./readout-view.js";
-import { GenerationController } from "./generation.js";
+import { mountTimeline } from "./timeline-view.js";
+import { mountMemory } from "./memory-view.js";
+import { groupStyle } from "./brain-atlas.js";
 
 const receiver = new ProtocolReceiver();
 const element = (id) => document.getElementById(id);
 const canvas = element("viewport");
-let fires = 0;
-let disposed = false;
-let connection = { ready: false, message: "Connecting to the model…" };
-const connectionListeners = new Set();
-const startupAbort = new AbortController();
-const readout = mountReadout(element("readout-workspace"), canvas);
-const generation = new GenerationController();
-let health = generation.getState().health;
-const unsubscribeGeneration = generation.subscribe((state) => {
-  health = state.health;
-  readout.setGeneration(state);
-  renderConnection();
-});
+let fires = 0, dropped = 0, droppedPairs = 0;
 
-function setView(view) {
-  element("workspace-shell").setAttribute("data-view", view);
-  for (const name of ["brain", "generate", "inspector"]) {
-    element(`view-${name}`).setAttribute("aria-pressed", String(name === view));
+function renderMapping() {
+  const mapping = receiver.mapping;
+  const nodesEl = element("nodes");
+  if (nodesEl) nodesEl.textContent = mapping?.nodes.length ?? 0;
+  const edgesEl = element("edges");
+  if (edgesEl) edgesEl.textContent = mapping?.edges.length ?? 0;
+  const counts = new Map(mapping?.groups.map((group) => [group.id, 0]));
+  for (const node of mapping?.nodes ?? []) counts.set(node.group, counts.get(node.group) + 1);
+  const rows = (mapping?.groups ?? []).map((group, index) => {
+    const style = groupStyle(group, index);
+    const row = document.createElement("tr");
+
+    const swatchCell = document.createElement("td");
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.setAttribute("aria-hidden", "true");
+    const [r, g, b] = style.color;
+    swatch.style.background = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+    swatchCell.append(swatch);
+    row.append(swatchCell);
+
+    for (const text of [group.name, group.id, counts.get(group.id), style.placement]) {
+      const cell = document.createElement("td");
+      cell.textContent = text;
+      row.append(cell);
+    }
+    return row;
+  });
+  if (!rows.length) {
+    const row = document.createElement("tr"), cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.textContent = mapping ? "This mapping has no groups." : "No mapping received.";
+    row.append(cell);
+    rows.push(row);
   }
-  element("workbench").hidden = view === "brain";
-  for (const [name, id] of Object.entries({
-    generate: "prompt-panel",
-    inspector: "inspector-panel-section",
-  })) element(id).hidden = name !== view;
-}
-
-for (const name of ["brain", "generate", "inspector"]) {
-  element(`view-${name}`).addEventListener("click", () => setView(name));
-}
-canvas?.addEventListener("node-select", ({ detail }) => {
-  if (detail?.id != null) setView("inspector");
-});
-
-function renderMapping(mapping = receiver.mapping) {
-  element("nodes").textContent = mapping?.nodes.length ?? 0;
-  element("edges").textContent = mapping?.edges.length ?? 0;
+  element("groups")?.replaceChildren(...rows);
 }
 
 function renderCounters() {
-  element("step").textContent = receiver.lastT ?? "—";
-  element("fires").textContent = fires;
+  const stepEl = element("step");
+  if (stepEl) stepEl.textContent = receiver.lastT ?? "—";
+  const firesEl = element("fires");
+  if (firesEl) firesEl.textContent = fires;
+  const droppedEl = element("dropped");
+  if (droppedEl) droppedEl.textContent = dropped;
+  const pairsDroppedEl = element("pairs-dropped");
+  if (pairsDroppedEl) pairsDroppedEl.textContent = droppedPairs;
 }
 
 function clearDisplay() {
-  fires = 0;
-  renderMapping(null);
-  readout.reset();
-  element("step").textContent = "—";
-  element("fires").textContent = 0;
-  canvas.dispatchEvent(new Event("reset"));
+  fires = dropped = droppedPairs = 0;
+  renderMapping();
+  renderCounters();
+  const protocolStatus = element("protocol-status");
+  if (protocolStatus) protocolStatus.textContent = "Waiting for a mapping.";
+  const lastFire = element("last-fire");
+  if (lastFire) lastFire.textContent = "No accepted fire event.";
+  canvas?.dispatchEvent(new Event("reset"));
 }
 
-function onEvent(event, raw) {
-  if (disposed) return;
+function onEvent(event) {
   if (event.action === "replace_mapping") {
-    fires = 0;
-    readout.reset();
+    fires = dropped = droppedPairs = 0;
     renderMapping();
-    canvas.dispatchEvent(new CustomEvent("mapping", { detail: receiver.mapping }));
-    setConnection(true, "Live graph connected");
+    const protocolStatus = element("protocol-status");
+    if (protocolStatus) protocolStatus.textContent = `Mapping accepted · epoch ${event.epoch}.`;
+    const lastFire = element("last-fire");
+    if (lastFire) lastFire.textContent = "No accepted fire event.";
+    canvas?.dispatchEvent(new CustomEvent("mapping", { detail: receiver.mapping }));
   } else if (event.action === "accept_fire") {
     fires++;
-    canvas.dispatchEvent(new CustomEvent("fire", { detail: { t: event.t, pairs: event.pairs } }));
-  } else if (event.action === "ignore_message" && receiver.mapping) {
-    readout.accept(raw);
-    return;
+    droppedPairs += event.dropped_pairs.length;
+    const preview = event.pairs.slice(0, 8).map(([src, dst]) => `${src} → ${dst}`).join(", ");
+    const lastFire = element("last-fire");
+    if (lastFire) lastFire.textContent = `Step ${event.t}: ${event.pairs.length} accepted pairs${preview ? ` · ${preview}` : ""}${event.pairs.length > 8 ? ", …" : ""}.`;
+    canvas?.dispatchEvent(new CustomEvent("fire", { detail: { t: event.t, pairs: event.pairs } }));
+  } else if (event.action === "accept_telemetry") {
+    canvas?.dispatchEvent(new CustomEvent("telemetry", { detail: event.message }));
+  } else if (event.action === "drop_message") {
+    dropped++;
   } else if (event.action === "close") {
-    clearDisplay();
-    setConnection(false, "The model stream uses an unsupported protocol.");
+    const protocolStatus = element("protocol-status");
+    if (protocolStatus) protocolStatus.textContent = `Unsupported mapping version (protocol code ${event.code}).`;
+    canvas?.dispatchEvent(new Event("reset"));
   }
   renderCounters();
 }
@@ -85,61 +104,66 @@ function onEvent(event, raw) {
 const live = new LiveSource(receiver, {
   onEvent,
   onStatus({ state, message }) {
-    if (disposed) return;
-    if (state === "connected") {
-      setConnection(false, "Waiting for the model's graph mapping…");
-    } else {
-      clearDisplay();
-      setConnection(false, message);
+    const sourceStatus = element("source-status");
+    if (sourceStatus) sourceStatus.textContent = message;
+    if (["connecting", "reconnecting", "disconnected", "background"].includes(state)) clearDisplay();
+    if (state === "unsupported") {
+      renderMapping();
+      renderCounters();
     }
   },
 });
 
-
-function renderConnection() {
-  const status = element("source-status");
-  const model = health.modelId;
-  status.textContent = model
-    ? `${model} · ${connection.message}${health.ready ? "" : " · model API unavailable"}`
-    : connection.message;
-  status.title = status.textContent;
-  status.dataset.ready = String(connection.ready && health.ready);
-}
-
-function setConnection(ready, message) {
-  connection = { ready, message };
-  renderConnection();
-  for (const listener of connectionListeners) listener({ ...connection });
-}
-
-function subscribeConnection(listener) {
-  connectionListeners.add(listener);
-  listener({ ...connection });
-  return () => connectionListeners.delete(listener);
-}
+const recording = new RecordingSource(receiver, {
+  onEvent,
+  onReset: clearDisplay,
+  onStatus({ state, message }) {
+    const sourceStatus = element("source-status");
+    if (sourceStatus) sourceStatus.textContent = message;
+    const playBtn = element("recording-play");
+    if (playBtn) playBtn.disabled = state !== "paused";
+    const pauseBtn = element("recording-pause");
+    if (pauseBtn) pauseBtn.disabled = state !== "playing";
+    const restartBtn = element("recording-restart");
+    if (restartBtn) restartBtn.disabled = !recording.file;
+    const speedBtn = element("recording-speed");
+    if (speedBtn) speedBtn.disabled = !recording.file;
+    if (state === "unsupported") {
+      const protocolStatus = element("protocol-status");
+      if (protocolStatus) protocolStatus.textContent = "Unsupported recording protocol version.";
+    }
+  },
+});
 
 function handleGenerate() {
-  if (!connection.ready || !receiver.mapping || live.socket?.readyState !== 1) {
-    throw new Error("The live model graph is disconnected. Generation is disabled until it reconnects.");
-  }
-}
-
-async function connectApp() {
   try {
-    const response = await fetch("/app-config", { cache: "no-store", signal: startupAbort.signal });
-    if (!response.ok) throw new Error(`App connection configuration unavailable (HTTP ${response.status}).`);
-    const config = await response.json();
-    if (disposed) return;
-    if (typeof config.stream_url !== "string" || !config.stream_url.trim()) {
-      throw new Error("No model stream is configured. Start the app server with --model-ckpt.");
+    const targetUrl = element("endpoint")?.value?.trim() || "";
+    const inRecordingMode = Boolean(
+      recording &&
+      (recording.file || recording.state === "playing" || recording.state === "paused")
+    );
+    const isLiveActive = Boolean(
+      live &&
+      live.socket &&
+      !live.socket.closed &&
+      (typeof live.socket.readyState !== "number" || live.socket.readyState <= 1)
+    );
+    const endpointChanged = !live?.url || live.url !== targetUrl;
+
+    if (inRecordingMode) {
+      recording.disconnect();
+      const recInput = element("recording");
+      if (recInput) recInput.value = "";
+      if (targetUrl) {
+        live.connect(targetUrl);
+      }
+    } else if (!isLiveActive || endpointChanged) {
+      if (targetUrl) {
+        live.connect(targetUrl);
+      }
     }
-    const stream = new URL(config.stream_url, globalThis.location.href);
-    if (stream.protocol === "http:") stream.protocol = "ws:";
-    if (stream.protocol === "https:") stream.protocol = "wss:";
-    if (!["ws:", "wss:"].includes(stream.protocol)) throw new Error("The configured model stream URL is invalid.");
-    live.connect(stream.href);
-  } catch (error) {
-    if (!disposed && !startupAbort.signal.aborted) setConnection(false, error.message);
+  } catch (_err) {
+    // Viz connection failure must never block text generation
   }
 }
 
@@ -147,9 +171,7 @@ let disposePrompt = null;
 const promptWorkspace = element("prompt-workspace");
 if (promptWorkspace) {
   disposePrompt = mountPrompt(promptWorkspace, {
-    controller: generation,
     onGenerate: handleGenerate,
-    subscribeConnection,
   });
 }
 
@@ -159,26 +181,56 @@ if (inspectorWorkspace) {
   disposeInspector = mountInspector(inspectorWorkspace, canvas);
 }
 
-connectApp();
+const timelineWorkspace = element("timeline-workspace");
+const disposeTimeline = timelineWorkspace ? mountTimeline(timelineWorkspace, canvas) : null;
+const memoryWorkspace = element("memory-workspace");
+const disposeMemory = memoryWorkspace ? mountMemory(memoryWorkspace, canvas) : null;
+
+const endpointEl = element("endpoint");
+if (endpointEl) {
+  endpointEl.value = new URLSearchParams(location.search).get("ws") || "ws://127.0.0.1:8765/stream";
+}
+element("connection")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  recording.disconnect();
+  const recInput = element("recording");
+  if (recInput) recInput.value = "";
+  const ep = element("endpoint");
+  if (ep?.value) live.connect(ep.value);
+});
+element("disconnect")?.addEventListener("click", () => {
+  recording.disconnect();
+  live.disconnect();
+  clearDisplay();
+});
+element("recording")?.addEventListener("change", () => {
+  const file = element("recording")?.files?.[0];
+  if (!file) return;
+  live.disconnect();
+  recording.load(file);
+});
+element("recording-play")?.addEventListener("click", () => recording.play());
+element("recording-pause")?.addEventListener("click", () => recording.pause());
+element("recording-restart")?.addEventListener("click", () => recording.restart());
+element("recording-speed")?.addEventListener("change", () => recording.setSpeed(Number(element("recording-speed")?.value)));
 
 const gpuStatusEl = element("gpu-status");
 const labelsEl = element("graph-labels");
 const gpuReady = initializeGPU(canvas, (message) => {
   if (gpuStatusEl) gpuStatusEl.textContent = message;
-  if (gpuStatusEl) gpuStatusEl.hidden = message.startsWith("WebGPU ready.");
 }, labelsEl);
 element("fit-graph")?.addEventListener("click", () => canvas?.dispatchEvent(new Event("fit")));
 element("zoom-in")?.addEventListener("click", () => canvas?.dispatchEvent(new CustomEvent("zoom", { detail: 1.25 })));
 element("zoom-out")?.addEventListener("click", () => canvas?.dispatchEvent(new CustomEvent("zoom", { detail: 0.8 })));
 window.addEventListener("pagehide", () => {
-  disposed = true;
-  startupAbort.abort();
+  recording.disconnect();
   live.dispose();
   gpuReady.then((dispose) => dispose?.());
   disposePrompt?.();
   disposeInspector?.();
-  unsubscribeGeneration();
-  generation.dispose();
-  readout.dispose();
-  connectionListeners.clear();
+  disposeTimeline?.();
+  disposeMemory?.();
 });
+if (new URLSearchParams(location.search).has("ws") && element("endpoint")?.value) {
+  live.connect(element("endpoint").value);
+}

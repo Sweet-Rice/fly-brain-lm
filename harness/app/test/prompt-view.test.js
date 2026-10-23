@@ -6,17 +6,8 @@ import {
 } from '../generation.js';
 import {
   mountPrompt,
-  paginateText,
   PROMPT_DOM_IDS,
 } from '../prompt-view.js';
-
-test('output pages respect wrapped lines and preserve astral Unicode and whitespace', () => {
-  const text = '🧠界ab🪰cdefghijklmnop\r\n\t末尾';
-  const pages = paginateText(text, 2, 7, 2);
-  assert.equal(pages[0], '🧠界ab');
-  assert.equal(pages.join(''), text);
-  assert.ok(pages.every(page => page.isWellFormed() && [...page].length <= 7));
-});
 
 class MockElement extends EventTarget {
   constructor(tagName = 'div') {
@@ -38,7 +29,6 @@ class MockElement extends EventTarget {
     this.max = '';
     this.step = '';
     this.tabIndex = 0;
-    this.hidden = false;
   }
 
   setAttribute(k, v) {
@@ -47,58 +37,6 @@ class MockElement extends EventTarget {
 
   getAttribute(k) {
     return this.attributes.get(k);
-  }
-
-  hasAttribute(k) {
-    return this.attributes.has(k);
-  }
-
-  removeAttribute(k) {
-    this.attributes.delete(k);
-  }
-
-  querySelector(selector) {
-    const search = el => {
-      if (selector.startsWith('.')) {
-        const cls = selector.slice(1);
-        if (el.className && el.className.split(/\s+/).includes(cls)) return el;
-      } else if (selector.startsWith('[')) {
-        const match = selector.match(/\[([a-zA-Z0-9_-]+)(?:=['"]?([^'"]+)['"]?)?\]/);
-        if (match) {
-          const attr = match[1];
-          const val = match[2];
-          if (val !== undefined ? el.getAttribute(attr) === val : el.hasAttribute(attr)) return el;
-        }
-      }
-      for (const child of el.children) {
-        const found = search(child);
-        if (found) return found;
-      }
-      return null;
-    };
-    return search(this);
-  }
-
-  querySelectorAll(selector) {
-    const results = [];
-    const search = el => {
-      if (selector.startsWith('.')) {
-        const cls = selector.slice(1);
-        if (el.className && el.className.split(/\s+/).includes(cls)) results.push(el);
-      } else if (selector.startsWith('[')) {
-        const match = selector.match(/\[([a-zA-Z0-9_-]+)(?:=['"]?([^'"]+)['"]?)?\]/);
-        if (match) {
-          const attr = match[1];
-          const val = match[2];
-          if (val !== undefined ? el.getAttribute(attr) === val : el.hasAttribute(attr)) results.push(el);
-        }
-      }
-      for (const child of el.children) {
-        search(child);
-      }
-    };
-    search(this);
-    return results;
   }
 
   append(...children) {
@@ -178,78 +116,63 @@ function createMockReadableStream(chunks) {
   });
 }
 
-test('subscribeConnection gates Generate and handles disconnects during runs', async () => {
+test('Typed API key reaches health retry and clear removes header', async () => {
   const { root } = createDOM();
+  const capturedHealthHeaders = [];
 
-  let connectionListener = null;
-  let unsubscribed = false;
-  const subscribeConnection = (listener) => {
-    connectionListener = listener;
-    // Supply initial disconnected snapshot immediately
-    listener({ ready: false, message: 'Connecting...' });
-    return () => {
-      unsubscribed = true;
+  const mockFetch = async (url, options = {}) => {
+    if (url.includes('/health')) {
+      capturedHealthHeaders.push({ ...options.headers });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ status: 'ok', model: 'test-model' }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      body: createMockReadableStream(['data: [DONE]\n\n']),
     };
   };
 
   const controller = new GenerationController({
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ status: 'ok', model: 'test-model' }),
-      body: createMockReadableStream(['data: [DONE]\n\n']),
-    }),
+    fetch: mockFetch,
+    endpoint: '/v1/completions',
+    healthEndpoint: '/health',
   });
-  // Model health is ready, but connection is not ready yet
-  controller.health = { status: 'ready', ready: true, message: 'Model ready' };
 
-  let submitted = false;
-  controller.submit = async () => {
-    submitted = true;
-    return { success: true };
-  };
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
 
-  const dispose = mountPrompt(root, { controller, pollHealth: false, subscribeConnection });
-  const generateBtn = root.getElementById(PROMPT_DOM_IDS.GENERATE_BTN);
-  const cancelBtn = root.getElementById(PROMPT_DOM_IDS.CANCEL_BTN);
-  const form = root.getElementById(PROMPT_DOM_IDS.FORM);
+  const apiKeyInput = root.getElementById(PROMPT_DOM_IDS.API_KEY);
+  const retryBtn = root.getElementById(PROMPT_DOM_IDS.HEALTH_RETRY_BTN);
 
-  // Health ready, but connection not ready -> Generate must be disabled
-  assert.equal(generateBtn.disabled, true);
-  form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  assert.equal(submitted, false, 'Submission blocked while connection not ready');
+  // Type API key
+  apiKeyInput.value = 'my-secret-key-1';
+  apiKeyInput.dispatchEvent(new Event('input'));
+  apiKeyInput.dispatchEvent(new Event('change'));
 
-  // Connection becomes ready -> Generate enabled
-  connectionListener({ ready: true, message: 'Graph connected' });
-  assert.equal(generateBtn.disabled, false);
+  // Click Retry Health
+  retryBtn.click();
+  await new Promise(r => setTimeout(r, 10));
 
-  // Active run starts
-  controller.state = GENERATION_STATES.STREAMING;
-  controller.notify();
-  assert.equal(generateBtn.disabled, true);
-  assert.equal(cancelBtn.disabled, false);
+  assert.ok(capturedHealthHeaders.length > 0);
+  const lastHeaders = capturedHealthHeaders.at(-1);
+  assert.equal(lastHeaders['Authorization'], 'Bearer my-secret-key-1');
 
-  // Disconnect occurs mid-stream
-  connectionListener({ ready: false, message: 'Stream disconnected' });
-  // Disconnect must NOT disable Stop button during active run
-  assert.equal(cancelBtn.disabled, false, 'Stop button must remain enabled during stream disconnect');
-  assert.equal(generateBtn.disabled, true);
+  // Clear API key
+  apiKeyInput.value = '';
+  apiKeyInput.dispatchEvent(new Event('input'));
+  apiKeyInput.dispatchEvent(new Event('change'));
 
-  // Finish run
-  controller.state = GENERATION_STATES.COMPLETED;
-  controller.notify();
-  // Now inactive: since connection is still not ready, Generate stays disabled
-  assert.equal(generateBtn.disabled, true);
-  assert.equal(cancelBtn.disabled, true);
+  // Click Retry Health again
+  retryBtn.click();
+  await new Promise(r => setTimeout(r, 10));
 
-  // Reconnect
-  connectionListener({ ready: true, message: 'Reconnected' });
-  assert.equal(generateBtn.disabled, false);
+  const afterClearHeaders = capturedHealthHeaders.at(-1);
+  assert.equal(afterClearHeaders['Authorization'], undefined);
 
-  // Disposing mountPrompt must unsubscribe from connection listener
-  assert.equal(unsubscribed, false);
   dispose();
-  assert.equal(unsubscribed, true);
 });
 
 test('Keyboard shortcut ignores repeated keydown and IME composition', async () => {
@@ -375,46 +298,49 @@ test('Copy button rapid repeat feedback resets timer and restores constant label
   dispose();
 });
 
-test('New request replaces previous output', async () => {
+test('Clear action clears prompt input and output when inactive and is disabled while active', async () => {
   const { root } = createDOM();
 
   const controller = new GenerationController();
   controller.health = { status: 'ready', ready: true, message: 'Ready' };
-  controller.text = 'Previous generated output';
+  controller.text = 'Some generated text';
   controller.state = GENERATION_STATES.COMPLETED;
-
-  let submittedParams = null;
-  controller.submit = async (params) => {
-    submittedParams = params;
-    controller.text = 'New output';
-    controller.state = GENERATION_STATES.COMPLETED;
-    controller.notify();
-    return { success: true };
-  };
 
   const dispose = mountPrompt(root, {
     controller,
     pollHealth: false,
-    defaultPrompt: 'Second prompt',
+    defaultPrompt: 'Initial prompt text',
   });
 
   const promptInput = root.getElementById(PROMPT_DOM_IDS.INPUT);
   const outputPre = root.getElementById(PROMPT_DOM_IDS.OUTPUT);
-  const form = root.getElementById(PROMPT_DOM_IDS.FORM);
+  const clearBtn = root.getElementById(PROMPT_DOM_IDS.CLEAR_BTN);
 
-  assert.equal(promptInput.value, 'Second prompt');
-  assert.equal(outputPre.textContent, 'Previous generated output');
+  assert.equal(promptInput.value, 'Initial prompt text');
+  assert.equal(outputPre.textContent, 'Some generated text');
+  assert.equal(clearBtn.disabled, false);
 
-  form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  await new Promise(r => setImmediate(r));
+  // Click clear while idle/completed
+  clearBtn.click();
 
-  assert.equal(submittedParams.prompt, 'Second prompt');
-  assert.equal(outputPre.textContent, 'New output');
+  assert.equal(promptInput.value, '', 'Prompt input should be cleared');
+  assert.equal(outputPre.textContent, '', 'Output display should be cleared');
+  assert.equal(controller.getState().text, '', 'Controller state text should be cleared');
+
+  // When generation is active, clear button must be disabled
+  controller.state = GENERATION_STATES.STREAMING;
+  controller.notify();
+  assert.equal(clearBtn.disabled, true);
+
+  // Attempting to click while active does not change input or state
+  promptInput.value = 'Still active prompt';
+  clearBtn.click();
+  assert.equal(promptInput.value, 'Still active prompt');
 
   dispose();
 });
 
-test('Readiness gates Generate submission and Stop button controls active run', async () => {
+test('Readiness gates Generate submission and Cancel button controls active run', async () => {
   const { root } = createDOM();
   let submitCalled = false;
   let cancelCalled = false;
@@ -436,7 +362,6 @@ test('Readiness gates Generate submission and Stop button controls active run', 
   const cancelBtn = root.getElementById(PROMPT_DOM_IDS.CANCEL_BTN);
   const form = root.getElementById(PROMPT_DOM_IDS.FORM);
 
-
   // Unready: Generate is disabled and submit event is ignored
   assert.equal(generateBtn.disabled, true);
   assert.equal(cancelBtn.disabled, true);
@@ -455,9 +380,9 @@ test('Readiness gates Generate submission and Stop button controls active run', 
   controller.notify();
 
   assert.equal(generateBtn.disabled, true, 'Generate disabled during active run');
-  assert.equal(cancelBtn.disabled, false, 'Stop enabled during active run');
+  assert.equal(cancelBtn.disabled, false, 'Cancel enabled during active run');
 
-  // Click Stop
+  // Click Cancel
   cancelBtn.click();
   assert.equal(cancelCalled, true);
   assert.equal(cancelBtn.disabled, true);
@@ -470,23 +395,26 @@ test('Injected controller is not disposed by mountPrompt disposer', () => {
   const { root } = createDOM();
 
   const callerController = new GenerationController({
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ status: 'ok', model: 'test' }),
-      body: createMockReadableStream([]),
-    }),
+    healthEndpoint: '/health',
   });
 
-  let disposed = false;
-  callerController.dispose = () => {
-    disposed = true;
-  };
+  let callerListenerNotified = false;
+  callerController.subscribe(() => {
+    callerListenerNotified = true;
+  });
 
-  const unmount = mountPrompt(root, { controller: callerController, pollHealth: false });
-  unmount();
+  const dispose = mountPrompt(root, {
+    controller: callerController,
+    pollHealth: false,
+  });
 
-  assert.equal(disposed, false, 'Caller controller must NOT be disposed by mountPrompt');
+  assert.equal(callerController.disposed, false);
+
+  dispose();
+
+  assert.equal(callerController.disposed, false, 'Caller controller should not be disposed');
+  callerController.notify();
+  assert.equal(callerListenerNotified, true, 'Caller listeners should remain intact');
 });
 
 test('Preserve action result through unrelated health updates', async t => {
@@ -527,21 +455,26 @@ test('Preserve action result through unrelated health updates', async t => {
   dispose();
 });
 
-test('Validation failure clears stale usage and finish reason metadata', () => {
+test('Validation failure hides generic banner and clears stale run metadata', () => {
   const { root } = createDOM();
 
   const controller = new GenerationController();
+  // Prior successful run metadata in controller state
+  controller.currentRunId = 'run-old-999';
+  controller.modelCompletionId = 'cmpl-old-abc';
   controller.usage = { prompt_tokens: 15, completion_tokens: 25, total_tokens: 40 };
   controller.finishReason = 'stop';
   controller.state = GENERATION_STATES.COMPLETED;
 
   const dispose = mountPrompt(root, { controller, pollHealth: false });
 
+  const runIdBadge = root.getElementById(PROMPT_DOM_IDS.RUN_ID);
   const usageBadge = root.getElementById(PROMPT_DOM_IDS.USAGE);
   const finishReasonBadge = root.getElementById(PROMPT_DOM_IDS.FINISH_REASON);
   const generalError = root.getElementById(PROMPT_DOM_IDS.ERROR_GENERAL);
   const promptError = root.getElementById(PROMPT_DOM_IDS.ERROR_PROMPT);
 
+  assert.ok(runIdBadge.textContent.includes('run-old-999'));
   assert.ok(usageBadge.textContent.includes('40 total'));
   assert.ok(finishReasonBadge.textContent.includes('stop'));
 
@@ -553,6 +486,7 @@ test('Validation failure clears stale usage and finish reason metadata', () => {
 
   assert.equal(promptError.textContent, 'Prompt cannot be blank');
   assert.equal(generalError.textContent, '', 'Generic banner must be hidden when field errors exist');
+  assert.equal(runIdBadge.textContent, 'Run ID: -', 'Stale run ID must not be displayed');
   assert.equal(usageBadge.textContent, '', 'Stale usage must not be displayed');
   assert.equal(finishReasonBadge.textContent, '', 'Stale finish reason must not be displayed');
 
@@ -581,7 +515,7 @@ test('Terminal announcement counts Unicode codepoints accurately and ignores hea
   dispose();
 });
 
-test('empty state is visible initially and hidden when output is present', () => {
+test('empty state is visible initially, hidden with output, visible after clear', () => {
   const { root } = createDOM();
   const controller = new GenerationController();
   const dispose = mountPrompt(root, { controller, pollHealth: false });
@@ -598,6 +532,10 @@ test('empty state is visible initially and hidden when output is present', () =>
   controller.state = GENERATION_STATES.COMPLETED;
   controller.notify();
   assert.equal(empty.hidden, true);
+
+  const clearBtn = root.getElementById(PROMPT_DOM_IDS.CLEAR_BTN);
+  clearBtn.click();
+  assert.equal(empty.hidden, false);
 
   dispose();
 });
@@ -630,7 +568,7 @@ test('cancelled and failed set distinct data-state on status and output', () => 
   dispose();
 });
 
-test('health status exposes data-status for loading and model identity', () => {
+test('health status exposes data-status for loading', () => {
   const { root } = createDOM();
   const controller = new GenerationController();
   const dispose = mountPrompt(root, { controller, pollHealth: false });
@@ -656,28 +594,54 @@ test('health status exposes data-status for loading and model identity', () => {
   controller.health = {
     status: 'ready',
     ready: true,
-    modelId: 'vibe2-untrained',
+    modelId: 'm',
     note: null,
     checkpoint: null,
-    message: 'Model ready: vibe2-untrained',
+    message: 'Model ready: m · checkpoint not reported',
   };
   controller.notify();
 
   assert.equal(healthStatus.getAttribute('data-status'), 'ready');
-  assert.ok(healthStatus.textContent.includes('vibe2-untrained'));
   assert.equal(generateBtn.disabled, false);
+
+  dispose();
+});
+
+test('API key input has an accessible description', () => {
+  const { root } = createDOM();
+
+  const controller = new GenerationController();
+  const dispose = mountPrompt(root, { controller, pollHealth: false });
+  const apiKeyInput = root.getElementById(PROMPT_DOM_IDS.API_KEY);
+  const apiKeyHelp = root.getElementById(PROMPT_DOM_IDS.API_KEY_HELP);
+
+  assert.equal(PROMPT_DOM_IDS.API_KEY_HELP, 'prompt-api-key-help');
+  assert.equal(apiKeyInput.getAttribute('aria-describedby'), 'prompt-api-key-help');
+  assert.ok(apiKeyHelp, 'API key help element must be rendered');
+  assert.equal(apiKeyHelp.textContent, 'Optional bearer token. Kept in memory for this tab only.');
 
   dispose();
 });
 
 const NATIVE_FOCUSABLE_TAGS = new Set(['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT']);
 
+// Browser defaults: only native controls are tabbable unless tabIndex is set explicitly.
 class FocusOrderDocument extends MockDocument {
   createElement(tag) {
     const el = super.createElement(tag);
     el.tabIndex = NATIVE_FOCUSABLE_TAGS.has(el.tagName) ? 0 : -1;
     return el;
   }
+}
+
+function tabOrder(root) {
+  const ids = [];
+  const walk = el => {
+    if (el !== root && el.tabIndex >= 0 && el.type !== 'hidden') ids.push(el.id);
+    for (const child of el.children) walk(child);
+  };
+  walk(root);
+  return ids;
 }
 
 async function waitFor(predicate, message) {
@@ -698,7 +662,7 @@ function ctrlEnterKeydown() {
   return event;
 }
 
-test('keyboard-only workflow: Ctrl+Enter generates, Stop and Copy are reachable and work', async t => {
+test('keyboard-only workflow: Ctrl+Enter generates, Cancel, Clear and Copy are reachable and work', async t => {
   let clipboardText = null;
   const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   Object.defineProperty(globalThis, 'navigator', {
@@ -744,7 +708,7 @@ test('keyboard-only workflow: Ctrl+Enter generates, Stop and Copy are reachable 
           status: 200,
           json: async () => ({
             status: 'ok',
-            model: 'vibe2-untrained',
+            model: 'flybrain-untrained',
             note: 'TEMPORARY, untrained',
           }),
         };
@@ -762,10 +726,25 @@ test('keyboard-only workflow: Ctrl+Enter generates, Stop and Copy are reachable 
     const promptInput = root.getElementById(PROMPT_DOM_IDS.INPUT);
     const generateBtn = root.getElementById(PROMPT_DOM_IDS.GENERATE_BTN);
     const cancelBtn = root.getElementById(PROMPT_DOM_IDS.CANCEL_BTN);
+    const clearBtn = root.getElementById(PROMPT_DOM_IDS.CLEAR_BTN);
     const copyBtn = root.getElementById(PROMPT_DOM_IDS.COPY_BTN);
     const output = root.getElementById(PROMPT_DOM_IDS.OUTPUT);
     const status = root.getElementById(PROMPT_DOM_IDS.STATUS);
     const announcement = root.getElementById(PROMPT_DOM_IDS.ANNOUNCEMENT);
+
+    assert.deepEqual(tabOrder(root), [
+      'prompt-health-retry-btn',
+      'prompt-input',
+      'prompt-max-tokens',
+      'prompt-temperature',
+      'prompt-top-k',
+      'prompt-api-key',
+      'prompt-generate-btn',
+      'prompt-cancel-btn',
+      'prompt-clear-btn',
+      'prompt-copy-btn',
+      'prompt-output',
+    ]);
 
     await waitFor(() => controller.getState().health.ready, 'health never became ready');
     assert.equal(generateBtn.disabled, false);
@@ -781,6 +760,7 @@ test('keyboard-only workflow: Ctrl+Enter generates, Stop and Copy are reachable 
     assert.equal(requests[0].prompt, 'Keyboard prompt');
     assert.equal(generateBtn.disabled, true);
     assert.equal(cancelBtn.disabled, false);
+    assert.equal(clearBtn.disabled, true);
 
     firstStream.enqueue(new TextEncoder().encode('data: {"choices":[{"text":"Partial keyboard "}]}\n\n'));
     await waitFor(() => output.textContent === 'Partial keyboard ', 'partial output never rendered');
@@ -793,10 +773,16 @@ test('keyboard-only workflow: Ctrl+Enter generates, Stop and Copy are reachable 
     assert.equal(status.textContent, 'State: cancelled');
     assert.equal(announcement.textContent, 'Generation cancelled. Preserved 17 characters.');
     assert.equal(cancelBtn.disabled, true);
+    assert.equal(clearBtn.disabled, false);
     assert.equal(generateBtn.disabled, false);
     assert.equal(copyBtn.disabled, false);
 
-    // Second run: starting new generation replaces output
+    clearBtn.click();
+    assert.equal(promptInput.value, '');
+    assert.equal(output.textContent, '');
+    assert.equal(controller.getState().state, GENERATION_STATES.IDLE);
+    assert.equal(copyBtn.disabled, true);
+
     promptInput.value = 'Second keyboard prompt';
     promptInput.dispatchEvent(ctrlEnterKeydown());
     await waitFor(() => controller.getState().state === GENERATION_STATES.COMPLETED, 'second run never completed');
@@ -812,72 +798,4 @@ test('keyboard-only workflow: Ctrl+Enter generates, Stop and Copy are reachable 
   } finally {
     dispose();
   }
-});
-
-test('Pager visibility only shows when multiple pages exist', () => {
-  const { root } = createDOM();
-  const controller = new GenerationController();
-  const dispose = mountPrompt(root, { controller, pollHealth: false });
-
-  const pager = root.getElementById(PROMPT_DOM_IDS.PAGER);
-  const prevBtn = root.getElementById(PROMPT_DOM_IDS.PAGER_PREV);
-  const nextBtn = root.getElementById(PROMPT_DOM_IDS.PAGER_NEXT);
-  const status = root.getElementById(PROMPT_DOM_IDS.PAGER_STATUS);
-
-  // Single page: pager hidden
-  controller.text = 'Short single-page output';
-  controller.state = GENERATION_STATES.COMPLETED;
-  controller.notify();
-  assert.equal(pager.hidden, true);
-
-  // Multiple pages: pager becomes visible
-  // With MAX_LINES = 6, 10 lines will create 2 pages
-  controller.text = 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\n';
-  controller.notify();
-  assert.equal(pager.hidden, false);
-  assert.equal(status.textContent, 'Page 2 of 2');
-  assert.equal(prevBtn.disabled, false);
-  assert.equal(nextBtn.disabled, true);
-
-  prevBtn.click();
-  assert.equal(status.textContent, 'Page 1 of 2');
-  assert.equal(prevBtn.disabled, true);
-  assert.equal(nextBtn.disabled, false);
-
-  dispose();
-});
-
-test('mountPrompt uses sampling defaults when submitted', async () => {
-  const { root } = createDOM();
-  const controller = new GenerationController();
-  controller.health = { status: 'ready', ready: true, message: 'Ready' };
-
-  let submittedParams = null;
-  controller.submit = async (params) => {
-    submittedParams = params;
-    return { success: true };
-  };
-
-  const dispose = mountPrompt(root, {
-    controller,
-    pollHealth: false,
-    defaultMaxTokens: 32,
-    defaultTemperature: 0.7,
-    defaultTopK: 20,
-  });
-
-  const promptInput = root.getElementById(PROMPT_DOM_IDS.INPUT);
-  const form = root.getElementById(PROMPT_DOM_IDS.FORM);
-
-  promptInput.value = 'Hello world';
-  form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-
-  assert.deepEqual(submittedParams, {
-    prompt: 'Hello world',
-    maxTokens: 32,
-    temperature: 0.7,
-    topK: 20,
-  });
-
-  dispose();
 });

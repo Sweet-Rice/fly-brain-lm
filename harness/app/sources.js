@@ -49,7 +49,7 @@ export class LiveSource {
     socket.onmessage = ({ data }) => {
       if (this.socket !== socket) return;
       const event = this.receiver.process(data);
-      this.onEvent(event, data);
+      this.onEvent(event);
       if (event.action === "close") {
         this.socket = null;
         this.url = null;
@@ -108,7 +108,7 @@ export async function readRecording(file, receiver, onEvent, { signal, beforeMes
     if (signal?.aborted) return;
     const event = receiver.process(line);
     result.events++;
-    onEvent(event, line);
+    onEvent(event);
     result.unsupported = event.action === "close";
   };
   try {

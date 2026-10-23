@@ -32,7 +32,8 @@ function fixture(t) {
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const view = mountReadout(createElement(), new EventTarget());
+  const canvas = new EventTarget();
+  const view = mountReadout(createElement(), canvas);
   t.after(() => {
     view.dispose();
     for (const [key, descriptor] of previous) {
@@ -42,6 +43,7 @@ function fixture(t) {
   });
   return {
     view,
+    canvas,
     el: id => elements.find(el => el.id === `readout-${id}`),
     flush() {
       const callbacks = [...frames.values()];
@@ -52,36 +54,49 @@ function fixture(t) {
 }
 
 function token(seq, overrides = {}) {
-  return JSON.stringify({
+  return {
     type: 'token_step', run_id: 'server', request_id: 'request', seq, epoch: 2,
     kind: 'completion', token_index: seq, token_id: seq, token_text: `token${seq}`,
     token_bytes: '61', step_status: 'unprocessed', t: -1,
     step_rel_us: 0, emit_rel_us: 0, step_ns: '0', emit_ns: '0', ...overrides,
-  });
+  };
 }
 
+
 test('stale epochs and malformed high sequences cannot overwrite or poison current output', t => {
-  const { view, el, flush } = fixture(t);
-  assert.equal(view.accept(token(1)), true);
-  assert.equal(view.accept(token(100, { epoch: 1 })), false);
-  assert.equal(view.accept(token(100, { token_id: -1 })), false);
-  assert.equal(view.accept(token(2)), true);
+  const { canvas, el, flush } = fixture(t);
+  canvas.dispatchEvent(new CustomEvent('telemetry', { detail: token(1) }));
+  flush();
+  assert.equal(JSON.parse(el('text').textContent), 'token1');
+
+  canvas.dispatchEvent(new CustomEvent('telemetry', { detail: token(100, { epoch: 1 }) }));
+  flush();
+  assert.equal(JSON.parse(el('text').textContent), 'token1');
+
+  canvas.dispatchEvent(new CustomEvent('telemetry', { detail: token(100, { token_id: -1 }) }));
+  flush();
+  assert.equal(JSON.parse(el('text').textContent), 'token1');
+
+  canvas.dispatchEvent(new CustomEvent('telemetry', { detail: token(2) }));
   flush();
   assert.equal(JSON.parse(el('text').textContent), 'token2');
-  view.accept(JSON.stringify({ type: 'stream_status', run_id: 'server', seq: 3,
-    epoch: 2, event: 'gap', dropped_steps: 1, server_time_ms: 0 }));
+
+  canvas.dispatchEvent(new CustomEvent('telemetry', { detail: { type: 'stream_status', run_id: 'server', seq: 3,
+    epoch: 2, event: 'gap', dropped_steps: 1, server_time_ms: 0 } }));
   flush();
   assert.equal(el('source-badge').getAttribute('data-source'), null);
   assert.equal(el('prev').disabled, true);
 });
 
 test('bounded history preserves a retained selection and exposes the oldest retained token', t => {
-  const { view, el, flush } = fixture(t);
-  for (let seq = 0; seq < 129; seq++) view.accept(token(seq));
+  const { canvas, el, flush } = fixture(t);
+  for (let seq = 0; seq < 129; seq++) {
+    canvas.dispatchEvent(new CustomEvent('telemetry', { detail: token(seq) }));
+  }
   flush();
   el('prev').click();
   assert.equal(JSON.parse(el('text').textContent), 'token127');
-  view.accept(token(129));
+  canvas.dispatchEvent(new CustomEvent('telemetry', { detail: token(129) }));
   flush();
   assert.equal(JSON.parse(el('text').textContent), 'token127');
   for (let clicks = 0; !el('prev').disabled && clicks < 128; clicks++) el('prev').click();
@@ -89,9 +104,9 @@ test('bounded history preserves a retained selection and exposes the oldest reta
 });
 
 test('long-token piece navigation preserves Unicode and new local runs discard old token identities', t => {
-  const { view, el, flush } = fixture(t);
+  const { view, canvas, el, flush } = fixture(t);
   const text = '\0'.repeat(32) + '🧠'.repeat(64) + ' final text';
-  view.accept(token(1, { token_text: text }));
+  canvas.dispatchEvent(new CustomEvent('telemetry', { detail: token(1, { token_text: text }) }));
   flush();
   const pieces = [JSON.parse(el('text').textContent)];
   while (!el('prev').disabled) {

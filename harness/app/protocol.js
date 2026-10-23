@@ -1,3 +1,6 @@
+import { validateTelemetryMessage } from "./timeline.js";
+import { validateMemoryMessage } from "./memory.js";
+
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const isId = value => Number.isInteger(value) && value >= 0;
 const isPair = value => Array.isArray(value) && value.length === 2 && value.every(isId);
@@ -76,6 +79,14 @@ export class ProtocolReceiver {
       };
     }
 
+    if (["request_lifecycle", "token_step", "stream_status"].includes(message.type)) {
+      if (!this.mapping || !validateTelemetryMessage(message)) return { action: "drop_message" };
+      return { action: "accept_telemetry", message };
+    }
+    if (["memory_summary", "memory_slice"].includes(message.type)) {
+      if (!this.mapping || !validateMemoryMessage(message)) return { action: "drop_message" };
+      return { action: "accept_telemetry", message };
+    }
     if (message.type !== "fire") return { action: "ignore_message" };
     if (this.mapping === null || !isId(message.t) || !Array.isArray(message.pairs)
         || (this.lastT !== null && message.t <= this.lastT)) return { action: "drop_message" };

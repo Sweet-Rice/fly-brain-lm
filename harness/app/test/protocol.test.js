@@ -13,6 +13,25 @@ const mapping = {
 };
 const send = (receiver, message) => receiver.process(JSON.stringify(message));
 
+test('telemetry needs a mapping and never advances graph time or local epoch', () => {
+  const receiver = new ProtocolReceiver();
+  const status = { type: 'stream_status', run_id: 'run-test', seq: 10, epoch: 7,
+    event: 'resync', dropped_steps: 0, server_time_ms: 123 };
+  assert.deepEqual(send(receiver, status), { action: 'drop_message' });
+  send(receiver, mapping);
+  send(receiver, { type: 'fire', t: 8, pairs: [[3, 91]] });
+  assert.deepEqual(send(receiver, status), { action: 'accept_telemetry', message: status });
+  assert.equal(receiver.lastT, 8);
+  assert.equal(receiver.epoch, 0, 'server telemetry epoch is independent of local connection epoch');
+  assert.deepEqual(send(receiver, { ...status, seq: true }), { action: 'drop_message' });
+  assert.deepEqual(send(receiver, { type: 'token_step' }), { action: 'drop_message' });
+  assert.deepEqual(send(receiver, { type: 'memory_summary' }), { action: 'drop_message' });
+  assert.deepEqual(send(receiver, { type: 'future_extension' }), { action: 'ignore_message' });
+  assert.equal(send(receiver, { type: 'fire', t: 9, pairs: [[3, 91]] }).action, 'accept_fire');
+  receiver.reset();
+  assert.deepEqual(send(receiver, status), { action: 'drop_message' });
+});
+
 test('real-model review recording accepts both epochs and every declared fire', () => {
   const recording = new URL('../../recordings/reference.ndjson', import.meta.url);
   const metadata = JSON.parse(readFileSync(new URL(`${recording.href}.metadata.json`), 'utf8'));

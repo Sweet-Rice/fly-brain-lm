@@ -37,7 +37,7 @@ download unless that data is cached.
 
 [GitHub Actions CI](../.github/workflows/ci.yml) runs independent checks on PRs,
 pushes to `main`, and manual dispatches. The Python checks use CPU-only PyTorch;
-the separate browser-harness check uses Node.js without model dependencies:
+the browser harness and React frontend checks use Node.js without model dependencies:
 
 | Check | Scope |
 |---|---|
@@ -46,7 +46,8 @@ the separate browser-harness check uses Node.js without model dependencies:
 | HTTP API & App server proxy | `test/test_serve.py` and `test/test_app_server.py` (10 tests) |
 | Graph/WebSocket | `test/test_viz_stream.py` and `test/test_protocol_contract.py` |
 | Smoke (vibe / vibe2 checkpoint, serve, record) | Independent jobs for both implementations: build a real-wiring checkpoint, export and schema-validate its mapping, compare it with real inference's recorded mapping, run the finite workflow, then feed its fresh recording through the shipped JavaScript playback, receiver, graph layout and edge activity |
-| Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers, node picking and overlay selection, neuron inspector topology indexing and bounded fire history, prompt composer validation and rejection, state transitions, SSE stream parsing, and error handling; see [`harness/app/README.md`](../harness/app/README.md) |
+| Browser harness | Actual JavaScript receiver against shared v1 fixtures, live/file parity, recording play/pause/restart/speed and error states, reconnects, cancellation, graph layout, activity highlights, camera navigation, static GPU buffers, node picking and overlay selection, neuron inspector topology indexing and bounded fire history, shared live atlas module lifecycle (`live-atlas.js`) and consumer state machine integration, prompt composer validation and rejection, state transitions, SSE stream parsing, and error handling; see [`harness/app/README.md`](../harness/app/README.md) |
+| React frontend | Clean dependency install, formatting, linting, TypeScript checks, and a Vite production build (CI does not run or claim browser tests); see [`frontend/README.md`](../frontend/README.md) |
 The jobs have no dependency edges. A failed suite does not cancel the other
 suites or skip the smoke check. Each test job prints individual cases and adds
 their results, timings, and failure details to the run's **Summary** page;
@@ -109,6 +110,7 @@ so a later-mounted view cannot revert to an earlier attempt's state.
 | `protocol.test.js` | Shared v1 contract fixtures, action outputs, invalid line and version handling |
 | `sources.test.js` & `playback.test.js` | Live WebSocket and file stream ingestion, cadence pacing, pause/play/restart, gap handling, and replacement mappings |
 | `activity.test.js` & `camera.test.js` & `renderer.test.js` | Highlight decay, reduced motion, camera pan/zoom/fit coordinate math, WGSL pipeline upload, and burst buffer reuse |
+| `live-atlas.test.js` | Shared live atlas module lifecycle (`mountLiveAtlas`), snapshot derivation, state machine transitions, batched counter snapshots preventing per-fire render churn, connection lifecycle (`ensureConnected`, `connect`, `disconnect`, `dispose`), disconnect reset and reconnect restoring mapping with restarted counters, auto-reconnection without socket leaks, synchronous disposal and post-disposal event suppression, non-throwing error handling, and inspector integration |
 
 ## Network and visual checks
 
