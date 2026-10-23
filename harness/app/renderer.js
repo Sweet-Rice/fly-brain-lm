@@ -36,9 +36,87 @@ struct Vertex {
   return input.color;
 }`;
 
+const dotShader = `
+struct DotCamera {
+  center: vec2f,
+  scale: f32,
+  time: f32,
+  viewport: vec2f,
+  duration: f32,
+  reducedMotion: f32,
+};
+@group(0) @binding(0) var<uniform> camera: DotCamera;
+@group(0) @binding(1) var<storage, read> starts: array<f32>;
+
+struct DotVertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) color: vec3f,
+  @location(1) dotCoord: vec2f,
+  @location(2) totalLength: f32,
+  @location(3) @interpolate(flat) progress: f32,
+};
+
+@vertex fn vertex(
+  @location(0) position: vec2f,
+  @location(1) dotCoord: vec2f,
+  @location(2) color: vec3f,
+  @location(3) totalLength: f32,
+  @location(4) activityIndex: f32
+) -> DotVertexOutput {
+  let clip = (position - camera.center) * camera.scale * 2.0 / camera.viewport;
+  // Negative progress means the connection is idle and draws nothing.
+  var progress: f32 = -1.0;
+  if (activityIndex >= 0.0) {
+    let index = u32(activityIndex);
+    if (index < arrayLength(&starts)) {
+      let start = starts[index];
+      let age = camera.time - start;
+      if (start >= 0.0 && age >= 0.0 && age < camera.duration) {
+        progress = age / camera.duration;
+      }
+    }
+  }
+  return DotVertexOutput(
+    vec4f(clip.x, -clip.y, 0.0, 1.0),
+    mix(color, vec3f(1.0), 0.35),
+    dotCoord,
+    totalLength,
+    progress
+  );
+}
+
+@fragment fn fragment(input: DotVertexOutput) -> @location(0) vec4f {
+  if (input.progress < 0.0) {
+    discard;
+  }
+  let minWorldRadius = 1.5 / max(camera.scale, 0.1);
+  let dotRadius = clamp(max(1.6, minWorldRadius), 1.6, 3.2);
+  let stripHalfWidth = 3.5;
+  let s = input.dotCoord.x;
+  let distAcross = input.dotCoord.y * stripHalfWidth;
+  var distAlong: f32;
+  if (camera.reducedMotion > 0.5) {
+    // Without motion, stationary dots mark the fired connection for the same duration.
+    let spacing = min(max(24.0, dotRadius * 6.0), max(input.totalLength, 1.0));
+    let phase = ((s % spacing) + spacing) % spacing;
+    distAlong = phase - spacing * 0.5;
+  } else {
+    // One dot travels from source to target once per fire.
+    distAlong = s - input.progress * input.totalLength;
+  }
+  let dist = length(vec2f(distAlong, distAcross));
+  if (dist > dotRadius) {
+    discard;
+  }
+  let alpha = (1.0 - smoothstep(dotRadius * 0.45, dotRadius, dist)) * 0.95;
+  return vec4f(input.color, alpha);
+};
+`;
+
 const NO_REGIONS = new Float32Array(0);
 
-export function createRenderer(device, format) {
+export function createRenderer(device, format, options = {}) {
+  const connectionStyle = options?.connectionStyle ?? 'lines';
   const module = device.createShaderModule({ code: shader });
   const pipeline = device.createRenderPipeline({
     layout: 'auto',
@@ -56,9 +134,29 @@ export function createRenderer(device, format) {
     } }] },
     primitive: { topology: 'triangle-list' },
   });
+  const dotModule = connectionStyle === 'dots' ? device.createShaderModule({ code: dotShader }) : null;
+  const dotPipeline = connectionStyle === 'dots' ? device.createRenderPipeline({
+    layout: 'auto',
+    vertex: { module: dotModule, entryPoint: 'vertex', buffers: [{
+      arrayStride: 36,
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x2' },
+        { shaderLocation: 1, offset: 8, format: 'float32x2' },
+        { shaderLocation: 2, offset: 16, format: 'float32x3' },
+        { shaderLocation: 3, offset: 28, format: 'float32' },
+        { shaderLocation: 4, offset: 32, format: 'float32' },
+      ],
+    }] },
+    fragment: { module: dotModule, entryPoint: 'fragment', targets: [{ format, blend: {
+      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    } }] },
+    primitive: { topology: 'triangle-list' },
+  }) : null;
   const uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const uniforms = new Float32Array(8);
   let bindGroup;
+  let dotBindGroup;
   let activity = null;
   let activityBuffer;
   let currentGraph = null;
@@ -75,12 +173,24 @@ export function createRenderer(device, format) {
   return {
     setGraph(graph, nextActivity) {
       if (disposed) throw new Error('Renderer has been destroyed');
-      const arrays = graph ? [graph.regions ?? NO_REGIONS, graph.edges, graph.nodes] : [];
-      for (const data of arrays) {
-        if (!(data instanceof Float32Array) || data.length % 21 !== 0) {
+      if (graph?.connectionStyle && graph.connectionStyle !== connectionStyle) {
+        throw new Error('Graph connection style does not match the renderer');
+      }
+      const rawArrays = graph ? [
+        { data: graph.regions ?? NO_REGIONS, kind: 'regions' },
+        { data: graph.edges, kind: 'edges' },
+        { data: graph.nodes, kind: 'nodes' },
+      ] : [];
+      for (const item of rawArrays) {
+        const data = item.data;
+        const isDots = item.kind === 'edges' && connectionStyle === 'dots';
+        const modulo = isDots ? 27 : 21;
+        if (!(data instanceof Float32Array) || data.length % modulo !== 0) {
           throw new Error('Graph geometry must contain interleaved triangle vertices');
         }
         if (data.byteLength > device.limits.maxBufferSize) throw new Error('Graph exceeds the GPU buffer size limit');
+        item.isDots = isDots;
+        item.floatStride = isDots ? 9 : 7;
       }
       nextActivity ??= graph ? new EdgeActivity(graph.edgePairs, graph.nodeIndexMap ?? graph.nodeIds ?? graph.positions) : null;
       if (nextActivity && (nextActivity.starts.byteLength > device.limits.maxBufferSize ||
@@ -91,14 +201,20 @@ export function createRenderer(device, format) {
       const nextBuffers = [];
       let nextActivityBuffer;
       let nextBindGroup;
+      let nextDotBindGroup;
       let nextOverlayBuffer = null;
       let nextOverlayCount = 0;
       try {
-        for (const data of arrays) {
+        for (const item of rawArrays) {
+          const data = item.data;
           if (!data.length) continue;
           const buffer = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
           nextBuffers.push(buffer);
-          next.push({ buffer, count: data.length / 7 });
+          next.push({
+            buffer,
+            count: data.length / item.floatStride,
+            pipeline: item.isDots ? dotPipeline : pipeline,
+          });
           device.queue.writeBuffer(buffer, 0, data);
         }
         if (nextActivity) {
@@ -107,12 +223,18 @@ export function createRenderer(device, format) {
           });
           nextBuffers.push(nextActivityBuffer);
           device.queue.writeBuffer(nextActivityBuffer, 0, nextActivity.starts);
+          const entries = [
+            { binding: 0, resource: { buffer: uniform } },
+            { binding: 1, resource: { buffer: nextActivityBuffer } },
+          ];
           nextBindGroup = device.createBindGroup({
-            layout: pipeline.getBindGroupLayout(0), entries: [
-              { binding: 0, resource: { buffer: uniform } },
-              { binding: 1, resource: { buffer: nextActivityBuffer } },
-            ],
+            layout: pipeline.getBindGroupLayout(0), entries,
           });
+          if (dotPipeline) {
+            nextDotBindGroup = device.createBindGroup({
+              layout: dotPipeline.getBindGroupLayout(0), entries,
+            });
+          }
         }
         if (selectedNodeId !== null && graph?.positions?.has(selectedNodeId)) {
           const data = buildSelectionGeometry(graph, selectedNodeId);
@@ -141,6 +263,7 @@ export function createRenderer(device, format) {
       activity = nextActivity;
       activityBuffer = nextActivityBuffer;
       bindGroup = nextBindGroup;
+      dotBindGroup = nextDotBindGroup;
       uploadedVersion = activity?.version ?? -1;
       currentGraph = graph;
       overlayBuffer = nextOverlayBuffer;
@@ -221,13 +344,15 @@ export function createRenderer(device, format) {
         uploadedVersion = activity.version;
       }
       device.queue.writeBuffer(uniform, 0, uniforms);
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bindGroup);
-      for (const { buffer, count } of current) {
+      for (const { buffer, count, pipeline: itemPipeline } of current) {
+        pass.setPipeline(itemPipeline);
+        pass.setBindGroup(0, itemPipeline === dotPipeline ? dotBindGroup : bindGroup);
         pass.setVertexBuffer(0, buffer);
         pass.draw(count);
       }
       if (overlayBuffer && overlayCount > 0) {
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
         pass.setVertexBuffer(0, overlayBuffer);
         pass.draw(overlayCount);
       }

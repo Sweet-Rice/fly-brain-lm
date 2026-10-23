@@ -199,8 +199,7 @@ export function mountInspector(root, canvas = null) {
 
   const header = createEl("div", "inspector-header", "inspector-header");
   const title = createEl("h3", "inspector-title", "inspector-title", "Neuron Inspector");
-  const status = createEl("span", "inspector-status", "inspector-status", "No mapping received.");
-  header.append(title, status);
+  header.append(title);
 
   // Selection form
   const form = createEl("form", "inspector-select-form", "inspector-select-form");
@@ -345,6 +344,8 @@ export function mountInspector(root, canvas = null) {
   actSection.setAttribute("role", "tabpanel");
   actSection.setAttribute("aria-labelledby", "inspector-tab-activity");
   const actHeading = createEl("h4", null, "neuron-heading", "Observed Activity");
+  actHeading.title = MISSING_DATA_CAVEAT;
+  tabButtons.activity.title = MISSING_DATA_CAVEAT;
 
   const countRow = createEl("div", null, "neuron-row");
   const countLabel = createEl("span", null, "neuron-label", "Observed fires: ");
@@ -361,9 +362,7 @@ export function mountInspector(root, canvas = null) {
   const recentVal = createEl("span", "neuron-recent-steps", "neuron-value", "none");
   recentRow.append(recentLabel, recentVal);
 
-  const caveat = createEl("div", "neuron-fire-caveat", "neuron-caveat", MISSING_DATA_CAVEAT);
-
-  actSection.append(actHeading, countRow, stepRow, recentRow, caveat);
+  actSection.append(actHeading, countRow, stepRow, recentRow);
 
   function setActiveTab(tabName) {
     activeTab = tabName;
@@ -466,7 +465,6 @@ export function mountInspector(root, canvas = null) {
     countVal.textContent = String(node.count);
     stepVal.textContent = node.lastStep !== null ? String(node.lastStep) : "—";
     recentVal.textContent = node.recentSteps.length > 0 ? node.recentSteps.join(", ") : "none";
-    caveat.textContent = MISSING_DATA_CAVEAT;
   }
 
   function render() {
@@ -474,8 +472,8 @@ export function mountInspector(root, canvas = null) {
       details.hidden = true;
       emptyNotice.hidden = false;
       emptyNotice.textContent = index.nodeCount > 0
-        ? "Select a neuron to inspect details."
-        : "Waiting for a mapping.";
+        ? "Select a neuron."
+        : "Waiting for mapping.";
       return;
     }
 
@@ -643,7 +641,6 @@ export function mountInspector(root, canvas = null) {
       cancelFrame(frameHandle);
       updateScheduled = false;
     }
-    status.textContent = mapping ? `Mapping active · ${index.nodeCount} nodes` : "No mapping received.";
     render();
   };
 
@@ -671,7 +668,6 @@ export function mountInspector(root, canvas = null) {
       cancelFrame(frameHandle);
       updateScheduled = false;
     }
-    status.textContent = "No mapping received.";
     render();
   };
 

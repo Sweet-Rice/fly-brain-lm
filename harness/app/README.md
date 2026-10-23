@@ -29,6 +29,8 @@ const handle = mountLiveAtlas({
   labels: document.querySelector(".labels-container"),
   inspector: document.querySelector(".inspector-container"),
   readout: document.querySelector(".readout-container"),
+  // Optional: "lines" by default; the React workspace selects "dots".
+  connectionStyle: "dots",
   onState: (snapshot) => {
     // snapshot: LiveAtlasSnapshot
     console.log(snapshot.connectionState, snapshot.nodeCount, snapshot.acceptedFires);
@@ -47,6 +49,14 @@ handle.zoom(1.25);        // Zooms camera relative to current view (+/- keys zoo
 handle.dispose();         // Synchronously tears down socket, timers, and GPU resources
 ```
 
+`connectionStyle` selects directed connection lines or fire dots without changing
+node picking, selection highlights, the readout, or activity validation. In dots mode,
+idle connections draw nothing; each observed fire sends one dot from source to target
+over the activity window, so the renderer schedules frames only while a dot travels.
+`prefers-reduced-motion: reduce` shows stationary dots on the fired connection instead.
+Connection geometry stays on the GPU; dot position comes from the per-edge fire
+timestamp, without rebuilding or uploading vertices each frame.
+
 ### MBON readout overlay
 
 Pass an optional `readout` container element in the `mountLiveAtlas` options to mount
@@ -58,6 +68,11 @@ canvas events:
 
 Call `handle.setGeneration(state)` to synchronize the latest client generation snapshot
 (`runId`, completion `text`, and lifecycle `state`) to the readout card.
+
+The compact card shows `Readout` with a `Live` or `Local` source badge. Request/run
+identifiers, token index/step, and the architectural-not-attribution caveat remain
+available in hover titles instead of permanent explanatory paragraphs. Token IDs,
+observed status, decoded pieces, and Previous/Next/Latest paging remain visible.
 
 Observed in Chromium with the trained `vibe2-tinystories` checkpoint: the React atlas
 displayed 1,959 nodes and 19,037 edges, live firing highlights, 15 dashed lime MBON

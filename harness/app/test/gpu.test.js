@@ -921,3 +921,18 @@ test("pre-aborted signal disposes synchronously without querying WebGPU", async 
   assert.equal(mock.calls.listeners.size, 0, "no listeners retained");
   assert.equal(mock.statuses.length, 0, "no error status reported");
 });
+
+test("dot connections schedule no idle frames; a fire animates once and stops at expiry", async t => {
+  const mock = platform(t);
+  const dispose = await initializeGPU(mock.canvas, mock.status, mock.labels, { connectionStyle: "dots" });
+  mock.emit("mapping", { detail: mapping });
+  await mock.flush();
+  assert.equal(mock.frames.size, 0, "idle connections draw nothing and keep no animation loop");
+  mock.emit("fire", { detail: { t: 0, pairs: [[2, 99]] } });
+  assert.equal(mock.frames.size, 1);
+  await mock.flush(1300);
+  assert.equal(mock.frames.size, 1, "the dot is still travelling");
+  await mock.flush(1600);
+  assert.equal(mock.frames.size, 0, "the dot has arrived and drawing stops");
+  dispose();
+});

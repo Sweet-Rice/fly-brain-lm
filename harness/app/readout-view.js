@@ -18,7 +18,6 @@ export const READOUT_DOM_IDS = Object.freeze({
   HEADER: 'readout-header',
   PIPELINE: 'readout-pipeline-label',
   SOURCE_BADGE: 'readout-source-badge',
-  NOTE: 'readout-architecture-note',
   TOKEN_VIEW: 'readout-token-view',
   TOKEN_META: 'readout-token-meta',
   TOKEN_ID: 'readout-token-id',
@@ -44,7 +43,6 @@ export const READOUT_CLASSES = Object.freeze({
   HEADER: 'readout-header',
   PIPELINE: 'readout-pipeline-label',
   SOURCE_BADGE: 'readout-source-badge',
-  NOTE: 'readout-architecture-note',
   TOKEN_VIEW: 'readout-token-view',
   TOKEN_META: 'readout-token-meta',
   TOKEN_ID: 'readout-token-id',
@@ -153,20 +151,14 @@ export function mountReadout(root, canvas) {
   const pipelineLabel = document.createElement('div');
   pipelineLabel.id = READOUT_DOM_IDS.PIPELINE;
   pipelineLabel.className = READOUT_CLASSES.PIPELINE;
-  pipelineLabel.textContent = 'MBON → model readout → decoded text';
+  pipelineLabel.textContent = 'Readout';
+  pipelineLabel.title = 'MBON → model readout → decoded text. Architectural path, not attribution.';
 
   const sourceBadge = document.createElement('span');
   sourceBadge.id = READOUT_DOM_IDS.SOURCE_BADGE;
   sourceBadge.className = READOUT_CLASSES.SOURCE_BADGE;
-  sourceBadge.textContent = 'Awaiting output';
 
   header.append(pipelineLabel, sourceBadge);
-
-  // Architectural disclaimer note
-  const archNote = document.createElement('div');
-  archNote.id = READOUT_DOM_IDS.NOTE;
-  archNote.className = READOUT_CLASSES.NOTE;
-  archNote.textContent = 'Architectural path, not attribution';
 
   // Token Details Area
   const tokenView = document.createElement('div');
@@ -178,12 +170,10 @@ export function mountReadout(root, canvas) {
   const tokenIdBadge = document.createElement('span');
   tokenIdBadge.id = READOUT_DOM_IDS.TOKEN_ID;
   tokenIdBadge.className = READOUT_CLASSES.TOKEN_ID;
-  tokenIdBadge.textContent = 'Token: —';
 
   const tokenStatusBadge = document.createElement('span');
   tokenStatusBadge.id = READOUT_DOM_IDS.TOKEN_STATUS;
   tokenStatusBadge.className = READOUT_CLASSES.TOKEN_STATUS;
-  tokenStatusBadge.textContent = 'Status: —';
 
   const pieceGroup = document.createElement('span');
   pieceGroup.className = READOUT_CLASSES.PIECE_GROUP;
@@ -201,7 +191,7 @@ export function mountReadout(root, canvas) {
   const textBox = document.createElement('div');
   textBox.id = READOUT_DOM_IDS.TEXT_BOX;
   textBox.className = READOUT_CLASSES.TEXT_BOX;
-  textBox.textContent = 'No output yet';
+  textBox.textContent = '—';
 
   tokenView.append(tokenMeta, textBox);
 
@@ -234,7 +224,7 @@ export function mountReadout(root, canvas) {
 
   controls.append(prevBtn, posLabel, nextBtn, latestBtn);
 
-  card.append(header, archNote, tokenView, controls);
+  card.append(header, tokenView, controls);
   root.replaceChildren(svg, card);
 
   // Default initial state: hide overlay until MBON nodes arrive
@@ -278,25 +268,26 @@ export function mountReadout(root, canvas) {
       }
 
       // Source badge (Stream)
-      const reqShort = activeToken.request_id ? activeToken.request_id.slice(0, 8) : '—';
-      sourceBadge.textContent = `Stream · Req: ${reqShort}`;
+      sourceBadge.textContent = 'Live';
       sourceBadge.title = `Stream run: ${currentRunId}; request: ${activeToken.request_id}${lifecycle ? `; ${lifecycle.impl}, ${lifecycle.model_id}, checkpoint ${lifecycle.ckpt_digest}` : ''}`;
       sourceBadge.setAttribute('data-source', 'stream');
 
       // Token ID & status
-      tokenIdBadge.textContent = `#${activeToken.token_id} (idx ${activeToken.token_index})`;
+      tokenIdBadge.textContent = `#${activeToken.token_id}`;
+      tokenIdBadge.title = `Token index ${activeToken.token_index}`;
+      tokenStatusBadge.title = `Graph step ${activeToken.t}`;
 
       if (activeToken.t === -1 || activeToken.step_status === 'unprocessed') {
-        tokenStatusBadge.textContent = 'unprocessed (t=-1)';
+        tokenStatusBadge.textContent = 'unprocessed';
         tokenStatusBadge.setAttribute('data-status', 'unprocessed');
       } else if (activeToken.step_status === 'stepped_fired') {
-        tokenStatusBadge.textContent = `stepped · fired (t=${activeToken.t})`;
+        tokenStatusBadge.textContent = 'fired';
         tokenStatusBadge.setAttribute('data-status', 'stepped_fired');
       } else if (activeToken.step_status === 'stepped_silent') {
-        tokenStatusBadge.textContent = `stepped · silent (t=${activeToken.t})`;
+        tokenStatusBadge.textContent = 'silent';
         tokenStatusBadge.setAttribute('data-status', 'stepped_silent');
       } else {
-        tokenStatusBadge.textContent = `stepped (t=${activeToken.t})`;
+        tokenStatusBadge.textContent = 'stepped';
         tokenStatusBadge.setAttribute('data-status', 'stepped');
       }
 
@@ -331,7 +322,7 @@ export function mountReadout(root, canvas) {
       latestBtn.disabled = followLatest || (tokIdx === totalTokens - 1 && pieceIdx === totalPieces - 1);
       controls.style.display = totalTokens > 1 || totalPieces > 1 ? '' : 'none';
 
-      posLabel.textContent = `${tokIdx + 1}/${totalTokens} · cap 128${omittedTokens ? ` · ${omittedTokens} omitted` : ''}`;
+      posLabel.textContent = `${tokIdx + 1}/${totalTokens}${omittedTokens ? ` · ${omittedTokens} omitted` : ''}`;
 
     } else if (hasLocalText) {
       // 2. LOCAL SSE FALLBACK MODE
@@ -345,12 +336,13 @@ export function mountReadout(root, canvas) {
       }
 
       // Source badge (Local SSE)
-      const runShort = localGenerationState.runId ? localGenerationState.runId.slice(0, 8) : '—';
-      sourceBadge.textContent = `Local SSE · Run: ${runShort}`;
+      sourceBadge.textContent = 'Local';
       sourceBadge.title = `Local frontend run: ${localGenerationState.runId || 'unknown'}`;
       sourceBadge.setAttribute('data-source', 'local_sse');
 
       tokenIdBadge.textContent = `Piece ${pieceIdx + 1}/${totalPieces}`;
+      tokenIdBadge.title = '';
+      tokenStatusBadge.title = '';
       tokenStatusBadge.textContent = localGenerationState.state || 'local SSE';
       tokenStatusBadge.setAttribute('data-status', 'local');
 
@@ -371,19 +363,21 @@ export function mountReadout(root, canvas) {
       nextBtn.disabled = pieceIdx === totalPieces - 1;
       latestBtn.disabled = followLatest || pieceIdx === totalPieces - 1;
       controls.style.display = totalPieces > 1 ? '' : 'none';
-      posLabel.textContent = `${pieceIdx + 1}/${totalPieces}${followLatest ? ' (latest)' : ''}`;
+      posLabel.textContent = `${pieceIdx + 1}/${totalPieces}`;
 
     } else {
       // 3. AWAITING OUTPUT
-      sourceBadge.textContent = 'Awaiting output';
+      sourceBadge.textContent = '';
       sourceBadge.title = 'No stream or local generation output received yet';
       sourceBadge.removeAttribute('data-source');
-      tokenIdBadge.textContent = 'Token: —';
-      tokenStatusBadge.textContent = 'Status: —';
+      tokenIdBadge.textContent = '';
+      tokenIdBadge.title = '';
+      tokenStatusBadge.textContent = '';
+      tokenStatusBadge.title = '';
       tokenStatusBadge.removeAttribute('data-status');
       pieceGroup.style.display = 'none';
       pieceBadge.textContent = '';
-      textBox.textContent = 'No output yet';
+      textBox.textContent = '—';
       textBox.setAttribute('data-state', 'none');
       prevBtn.disabled = true;
       nextBtn.disabled = true;
@@ -461,7 +455,7 @@ export function mountReadout(root, canvas) {
     hubLabel.setAttribute('fill', '#ffb848');
     hubLabel.setAttribute('font-size', '9px');
     hubLabel.setAttribute('font-family', 'sans-serif');
-    hubLabel.textContent = 'Model Readout';
+    hubLabel.textContent = 'Readout';
     elements.push(hubLabel);
 
     svg.replaceChildren(...elements);

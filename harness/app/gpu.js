@@ -38,6 +38,7 @@ export function pickNode(graph, camera, clientX, clientY, rect = { left: 0, top:
 }
 export async function initializeGPU(canvas, onStatus, labels = null, options = {}) {
   const signal = options?.signal;
+  const connectionStyle = options?.connectionStyle ?? "lines";
   let mapping = null, graph = null, activity = null, renderer, device, context, observer;
   let disposed = false, frame = null, drag = null;
   let busy = false, dirty = false, mappingPending = true, resizePending = true;
@@ -127,7 +128,7 @@ export async function initializeGPU(canvas, onStatus, labels = null, options = {
   function installMapping() {
     if (disposed || !renderer) return;
     try {
-      const next = mapping ? buildGraph(mapping) : null;
+      const next = mapping ? buildGraph(mapping, { connectionStyle }) : null;
       renderer.setGraph(next, activity);
       graph = next;
       markLayout(graph);
@@ -371,7 +372,7 @@ export async function initializeGPU(canvas, onStatus, labels = null, options = {
     if (!context) throw new Error("Cannot create a WebGPU canvas context");
     const format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format, alphaMode: "opaque" });
-    renderer = createRenderer(device, format);
+    renderer = createRenderer(device, format, { connectionStyle });
     observer = new ResizeObserver(() => { resizePending = true; invalidate(); });
     observer.observe(canvas);
     device.addEventListener("uncapturederror", () => {

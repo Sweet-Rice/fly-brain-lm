@@ -59,10 +59,32 @@ Open `http://127.0.0.1:5173/`.
   component/controller memory only and is never written to browser storage. Only the
   visual theme preference is persisted in `localStorage`.
 
+### Network HTTPS and WebGPU
+
+WebGPU requires a secure browser context: loopback HTTP or trusted HTTPS. Opening
+the workspace through a Tailnet IP over plain HTTP disables WebGPU; a private
+network alone does not make the browser origin secure.
+
+For private Tailscale HTTPS, enable Serve/HTTPS with your Tailnet administrator,
+then start Vite with the exact device hostname allowed:
+
+```console
+FLYBRAIN_ALLOWED_HOSTS=<device>.<tailnet>.ts.net npm --prefix frontend run dev -- --host 0.0.0.0
+tailscale serve --bg http://127.0.0.1:5173
+```
+
+Open the HTTPS URL reported by Tailscale, not the HTTP IP URL. Set
+`FLYBRAIN_API_URL` and `FLYBRAIN_STREAM_URL` as usual when the model uses
+non-default ports. `FLYBRAIN_ALLOWED_HOSTS` accepts a comma-separated explicit
+hostname list for both development and preview; it does not disable Vite's host
+checks. This uses private Serve, not public Funnel.
+
 ## Architecture and lifecycle
 
 - `src/App.tsx`: Page layout composing the prompt composer, model response bench, and
   `AtlasWorkspace`. It coordinates generation submission with atlas connection via `onGenerate`.
+- `src/components/GenerationSettings.tsx`: Native modal dialog for generation parameters
+  and the memory-only API key, with keyboard focus cycling and inline validation.
 - `src/components/atlas/AtlasWorkspace.tsx`: Mounts `mountLiveAtlas` from `harness/app/live-atlas.js`.
   It isolates DOM ownership within supplied container elements for the WebGPU canvas, region
   labels, and neuron inspector, and exposes an imperative `LiveAtlasHandle` (`ensureConnected`,
@@ -100,6 +122,13 @@ Open `http://127.0.0.1:5173/`.
   the camera without selecting; clicking the canvas background clears selection.
 - **Graph navigation**: Drag canvas or use keyboard arrow keys to pan; Fit, Zoom In (`+`), and
   Zoom Out (`-`) buttons control framing (`+`/`-` keys zoom, `0`/`Home` fit).
+- **Generation settings**: The composer’s Settings button opens a modal rather than expanding
+  the page. Done, the close button, Escape, or a backdrop click dismiss it and restore focus
+  to Settings. Invalid generation parameters reopen the dialog at the first invalid field.
+- **Connection dots**: Idle connections are not drawn. Each validated fire sends one dot
+  from source to target over the 600 ms activity window; a repeated fire restarts it.
+  Nothing animates between fires. Reduced motion shows stationary dots along the fired
+  connection for the same window, and hidden pages pause drawing.
 - **Connection controls**: Connect / Disconnect button. Disconnecting explicitly resets the
   cached mapping, counters, and node selection; reconnecting restores the mapping only while
   counters restart and selection stays cleared.
@@ -108,8 +137,8 @@ Open `http://127.0.0.1:5173/`.
   per node (capped at 32 steps) within the current epoch.
 - **Data caveats**: Coordinates are illustrative layout projections; connectome body IDs are
   not exported in standard mappings and are explicitly displayed as unavailable / not exported
-  (never inferred or speculative anatomy). "No observed fire does not mean inactive; fire means
-  positive KC code, not biological spikes."
+  (never inferred or speculative anatomy). The Activity tab's tooltip explains
+  that fires are positive KC code, not biological spikes; no observed fire does not mean inactive.
 - **Touch targets**: At least 44 px touch targets are guaranteed for mobile and viewport boundary
   controls; desktop inspector controls use a compact instrument layout without guaranteed 44 px targets.
 
@@ -160,11 +189,32 @@ stimulus/response bench at laptop and desktop widths. Research references includ
 [Ollama Chat UI](https://github.com/JithinM/ollama-chat-ui), and
 [assistant-ui](https://github.com/assistant-ui/assistant-ui).
 
+### One-screen desktop layout
+
+At viewports at least 1200 × 680 CSS pixels, the workspace fills the viewport:
+equally sized prompt and response panels share the top row, and the graph fills the
+wide row beneath both, with the readout overlaid at its lower right. The neuron
+inspector and group legend stack in the right column; group placement is in each
+row's hover title.
+Both 1920 × 1080 and 2560 × 1440 use the same panel arrangement and type sizes;
+additional space expands the writing surfaces rather than the controls.
+The main surface keeps only functional headings, state, and controls; marketing copy,
+keyboard-help paragraphs, endpoint URLs, and redundant counters are not shown.
+Diagnostic identifiers and readout caveats are available through hover titles.
+Long responses and inspector details scroll inside their panels, with rounded,
+theme-colored scrollbars. Generation settings open over the workspace without shifting
+the panels and can scroll within the dialog. The response region is keyboard-focusable
+for scrolling. Smaller or heavily zoomed viewports retain the normal scrolling document
+rather than clipping controls.
+
+`src/main.tsx` imports the global stylesheet before `App` so the declared cascade
+layer order is established before atlas component styles, including in production.
+
 ## Focused verification evidence
 
 - **Test suites**: Frontend lint, format:check, typecheck, and build passed cleanly. Shared
-  live atlas lifecycle and consumer integration are validated by 232/232 tests in the harness
-  test suite, including 6/6 tests in `live-atlas.test.js`.
+  live atlas lifecycle and consumer integration are validated by 240/240 tests in the harness
+  test suite, including reduced-motion, hidden-page, and graph-reset dot-flow transitions.
 - **Real model smoke**: Verified on CPU with a fresh untrained `vibe2` scratch checkpoint
   (HTTP 8771, WS 8765, Vite dev 5173): 1,958 real nodes and 19,037 edges loaded, real text
   generation and accepted activity with zero drops.
@@ -185,3 +235,27 @@ stimulus/response bench at laptop and desktop widths. Research references includ
   (2) live preview proxy smoke verified both default `/stream` WS proxy and HTTP
   `/health` + `/v1/completions` working on 4173 with 1,958 nodes, 19,037 edges, 4 generated
   tokens, 7 accepted fires, 0 drops, `layout='brain'`, and inspector node selection 700.
+- **Compact workspace smoke**: With the trained `vibe2-tinystories` model, the document
+  fit exactly at 1920 × 1080 and 2560 × 1440 without page overflow. The balanced
+  prompt/response arrangement was also checked at 1568 × 804, with a real 128-token
+  response overflowing only its own scroll region. Light/dark layouts, inspector
+  Links scrolling, and readout
+  Previous/Latest paging were exercised. A 128-token development run and an 8-token
+  production-preview run completed with zero dropped signals. Popup keyboard cycling,
+  Escape, backdrop dismissal, invalid-field focus, and the 390 × 844 mobile popup were
+  checked; 1280 × 720 retained document scrolling without horizontal overflow.
+  Actual GPU texture readback showed the dot geometry.
+
+- **Uncluttered workspace smoke**: At 1568 × 804 and 1280 × 720, the document,
+  graph tile, prompt/response panels, groups, and selected Activity inspector had
+  no overflow after an actual 8-token completion. Localhost provided a secure
+  context and working WebGPU; the Tailnet HTTP origin correctly reported
+  `HTTPS required for graph`. Through private Tailscale Serve HTTPS, the same
+  workspace had a secure context, drew the graph without the WebGPU banner, and
+  completed a 64-token generation with live readout paging (64/64) and no errors.
+- **Fire-dot and wide-graph smoke**: The graph canvas measured 1349 × 502 at
+  1920 × 1080 and 875 × 302 at 1280 × 720, with no page overflow. GPU texture
+  readback showed no connection dots while idle, with one GPU submission in 800 ms
+  rather than a continuous loop. During a real generation, consecutive frames showed
+  dots travelling from the antennal lobe through the calyx toward the lobe, with no
+  WebGPU errors.

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NeuronIndex, mountInspector, MAX_RECENT_STEPS, PAGE_SIZE, MISSING_DATA_CAVEAT } from "../inspector.js";
+import { NeuronIndex, mountInspector, MAX_RECENT_STEPS, PAGE_SIZE } from "../inspector.js";
 
 // Minimal DOM mock for testing DOM-bound components in Node.js
 class MockElement extends EventTarget {
@@ -310,8 +310,6 @@ test("mountInspector builds UI and renders mapping, identity, and explicit body_
 
     canvas.dispatchEvent(new CustomEvent("mapping", { detail: mapping }));
 
-    const status = findById(root, "inspector-status");
-    assert.match(status.textContent, /8 nodes/);
     // Inspect node 10 (has body_id)
     disposer.selectNode(10, { notifyCanvas: false });
 
@@ -561,7 +559,7 @@ test("mountInspector full neighbor list navigation and pagination handles high-d
   }
 });
 
-test("mountInspector activity shows fire counts, steps, and missing-data caveat", () => {
+test("mountInspector activity shows fire counts and steps", () => {
   const cleanup = setupMockDocument();
   try {
     const root = new MockElement("div");
@@ -581,10 +579,6 @@ test("mountInspector activity shows fire counts, steps, and missing-data caveat"
     canvas.dispatchEvent(new CustomEvent("mapping", { detail: mapping }));
     disposer.selectNode(5, { notifyCanvas: false });
 
-    // Verify caveat is explicitly present (without brittle copy/regex pinning)
-    const caveat = findById(root, "neuron-fire-caveat");
-    assert.ok(caveat);
-    assert.notEqual(caveat.textContent, "");
     // Initial state before fires
     assert.equal(findById(root, "neuron-fire-count").textContent, "0");
     assert.equal(findById(root, "neuron-last-step").textContent, "—");

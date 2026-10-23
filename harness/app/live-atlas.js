@@ -12,7 +12,7 @@ function resolveEndpoint(endpoint) {
 }
 
 export function mountLiveAtlas(options) {
-  const { canvas, labels, inspector, readout: readoutRoot, onState, WebSocketType } = options;
+  const { canvas, labels, inspector, readout: readoutRoot, onState, WebSocketType, connectionStyle = "lines" } = options;
   const endpoint = resolveEndpoint(options.endpoint);
 
   let disposed = false;
@@ -175,7 +175,7 @@ export function mountLiveAtlas(options) {
       emitSnapshot();
     },
     labels,
-    { signal: gpuAbortController.signal }
+    { signal: gpuAbortController.signal, connectionStyle }
   );
 
   gpuReady.then(

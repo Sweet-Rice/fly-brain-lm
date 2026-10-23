@@ -70,6 +70,9 @@ cd frontend && npx vite --host 0.0.0.0
 ```
 
 It is unauthenticated, and remote plain HTTP disables WebGPU drawing (prompting still works).
+Use trusted HTTPS for remote graph rendering, for example private Tailscale Serve;
+see [network HTTPS setup](frontend/README.md#network-https-and-webgpu). Plain HTTP
+on a network IP is not a secure browser context, even inside a Tailnet.
 
 ### Trained vibe2 checkpoint
 

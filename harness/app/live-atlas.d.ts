@@ -26,6 +26,7 @@ export interface LiveAtlasOptions {
   labels: HTMLElement;
   inspector: HTMLElement;
   readout?: HTMLElement;
+  connectionStyle?: 'lines' | 'dots';
   onState: (snapshot: LiveAtlasSnapshot) => void;
   endpoint?: string;
   WebSocketType?: { new (url: string | URL, protocols?: string | string[]): WebSocket };

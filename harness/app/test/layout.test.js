@@ -366,3 +366,44 @@ test('buildSelectionGeometry generates valid overlay following curved edges, and
   const nullGraph = buildSelectionGeometry(null, 10);
   assert.equal(nullGraph.length, 0);
 });
+test('buildGraph with connectionStyle dots builds 9-float edge quads along paths for both brain and grid layouts', () => {
+  const singleEdgeMapping = {
+    groups: [
+      { id: 1, name: 'Glomerulus', placement: 'al' },
+      { id: 2, name: 'KC_gamma', placement: 'calyx' },
+    ],
+    nodes: [
+      { id: 10, group: 1 },
+      { id: 20, group: 2 },
+    ],
+    edges: [[10, 20]],
+  };
+
+  const brainDotGraph = buildGraph(singleEdgeMapping, { connectionStyle: 'dots' });
+  assert.equal(brainDotGraph.connectionStyle, 'dots');
+  assert.ok(brainDotGraph.edges instanceof Float32Array);
+  assert.ok(brainDotGraph.edges.length > 0);
+  assert.equal(brainDotGraph.edges.length % 27, 0, 'Dot edge buffer must consist of 9-float triangle vertices');
+  assert.equal(brainDotGraph.nodeCount, 2);
+  assert.equal(brainDotGraph.edgeCount, 1);
+
+  for (let i = 0; i < brainDotGraph.edges.length; i += 9) {
+    const [x, y, s, v, r, g, b, totalLen, edgeIndex] = brainDotGraph.edges.subarray(i, i + 9);
+    assert.ok(Number.isFinite(x) && Number.isFinite(y));
+    assert.ok(s >= 0 && s <= totalLen + 0.001, `Arc length ${s} within [0, ${totalLen}]`);
+    assert.ok(Math.abs(v) === 1.0, `Normalized lateral coord must be +-1.0, got ${v}`);
+    assert.ok(totalLen > 0, 'Total edge length must be positive');
+    assert.equal(edgeIndex, 0);
+  }
+
+  const gridMapping = {
+    groups: [{ id: 10, name: 'G1' }, { id: 20, name: 'G2' }],
+    nodes: [{ id: 1, group: 10 }, { id: 2, group: 20 }],
+    edges: [[1, 2]],
+  };
+  const gridDotGraph = buildGraph(gridMapping, { connectionStyle: 'dots' });
+  assert.equal(gridDotGraph.connectionStyle, 'dots');
+  assert.equal(gridDotGraph.edges.length % 27, 0);
+  assert.equal(gridDotGraph.nodeCount, 2);
+  assert.equal(gridDotGraph.edgeCount, 1);
+});
