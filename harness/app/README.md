@@ -13,6 +13,11 @@ surfaces remain exclusively in the legacy dashboard and are not part of the Reac
 Existing visualization sources and receivers operate normally even when the model API is
 missing or unstarted. The existing `harness/example/` Canvas demo is unchanged.
 
+React's only inference engine is `vibe2/`: trained float32 WGSL compute, GPT-2 BPE,
+sampling, asset loading and in-page completion/SSE transport. The runtime emits its own
+mapping, block-0 KC fires and request/token telemetry. The standalone dashboard still
+uses the existing Python HTTP/WebSocket serving path unchanged.
+
 ## Shared live-atlas module (`live-atlas.js`)
 
 The shared `mountLiveAtlas` function provides a complete WebGPU brain viewer and neuron
@@ -33,20 +38,17 @@ const handle = mountLiveAtlas({
   connectionStyle: "dots",
   onState: (snapshot) => {
     // snapshot: LiveAtlasSnapshot
-    console.log(snapshot.connectionState, snapshot.nodeCount, snapshot.acceptedFires);
+    console.log(snapshot.nodeCount, snapshot.acceptedFires);
   },
-  // Optional: defaults to same-origin ws(s)://<host>/stream
-  endpoint: "ws://127.0.0.1:8765/stream",
 });
 
 // LiveAtlasHandle controls:
-handle.setGeneration(snapshot); // Syncs active generation snapshot to the readout card
-handle.ensureConnected(); // Reconnects if dropped; no-op if already connected
-handle.connect();         // Explicitly connects to the endpoint
-handle.disconnect();      // Disconnects and resets mapping, counters, and selection
+handle.setGeneration(snapshot); // Syncs client generation state to the readout card
+const unsubscribe = runtime.subscribeTelemetry(message => handle.publish(message));
 handle.fit();             // Centers and fits camera to the graph bounds (shortcut: 0 or Home)
 handle.zoom(1.25);        // Zooms camera relative to current view (+/- keys zoom; drag/arrows pan)
-handle.dispose();         // Synchronously tears down socket, timers, and GPU resources
+unsubscribe();
+handle.dispose();         // Synchronously tears down timers, inspector and GPU resources
 ```
 
 `connectionStyle` selects directed connection lines or fire dots without changing
@@ -62,7 +64,7 @@ timestamp, without rebuilding or uploading vertices each frame.
 Pass an optional `readout` container element in the `mountLiveAtlas` options to mount
 the MBON readout overlay (`readout-view.js`). When present, the readout view subscribes to
 canvas events:
-- `telemetry`: dispatched by `live-atlas.js` when the stream delivers validated producer
+- `telemetry`: dispatched by `live-atlas.js` when publish receives validated producer
   telemetry (`accept_telemetry`), forwarding token step and generation status to the readout card.
 - `mapping` and `reset`: resets readout state when the graph topology is reloaded or cleared.
 
@@ -74,33 +76,28 @@ identifiers, token index/step, and the architectural-not-attribution caveat rema
 available in hover titles instead of permanent explanatory paragraphs. Token IDs,
 observed status, decoded pieces, and Previous/Next/Latest paging remain visible.
 
-Observed in Chromium with the trained `vibe2-tinystories` checkpoint: the React atlas
-displayed 1,959 nodes and 19,037 edges, live firing highlights, 15 dashed lime MBON
-paths, and the Identity/Links/Activity neuron tabs. A greedy 64-token completion
-for `Once upon a time` began `, there was`; paging the producer-backed readout
-in both directions reproduced all 222 response characters with zero dropped signals.
-Both light and dark palettes were checked. Generation also worked over Tailscale
-HTTP, where the expected WebGPU-unavailable banner replaced drawing.
+Browser-only smoke with the trained `vibe2-tinystories` assets: 1,959 nodes,
+19,037 edges, exact 32-token greedy PyTorch parity, Live readout 32/32 with the final
+token unprocessed, and fire-dot GPU texture readback. Cancellation retained partial
+text. No model HTTP or WebSocket requests were made by React.
 
 ### Snapshot and state lifecycle
 
-- **`LiveAtlasSnapshot`**: Exposes read-only state: `connectionState`, `connectionMessage`,
-  `gpuMessage`, `nodeCount`, `edgeCount`, `groups` (`id`, `name`, `color`, `placement`, `count`),
-  `lastStep`, `acceptedFires`, `droppedMessages`, and `droppedPairs`.
+- **`LiveAtlasSnapshot`**: Read-only `gpuMessage`, `nodeCount`, `edgeCount`, `groups`
+  (`id`, `name`, `color`, `placement`, `count`), `lastStep`, `acceptedFires`,
+  `droppedMessages`, and `droppedPairs`.
 - **Batched counter snapshots**: Counter snapshots are coalesced and batched per animation frame;
   individual per-fire events stay out of consumer state to prevent render thrash during rapid
   token generation.
 - **GPU cancellation signal**: `initializeGPU` in `gpu.js` accepts an optional fourth options argument
   `{ signal }` so pending asynchronous adapter/device acquisition can be aborted cleanly
   on component unmount.
-- **Disconnect and reconnect**: `disconnect()` explicitly resets cached mapping, counter totals,
-  and inspector selection. `connect()` and `ensureConnected()` restore the mapping only, while
-  counters restart from zero and node selection stays cleared, without leaking sockets or firing
-  stale post-disposal callbacks.
-- **Stream semantics**: Live activity is the configured model's shared stream, not token-aligned
-  or per-request attribution; counters and step persist until an explicit source reset or reconnect.
-  `onGenerate` in consumers calls `ensureConnected()` to reconnect if disconnected, with no claimed
-  request/run correlation; the stream naturally persists across prompts.
+- **Publish semantics**: `publish(message)` uses `ProtocolReceiver` before dispatching
+  canvas events. Mapping replacement resets topology and fire counters. Invalid messages
+  increment the dropped counter and reset the display. No callbacks occur after disposal.
+- **Runtime semantics**: Requests are serialized and reset recurrent state. Graph step
+  numbers and telemetry sequence numbers persist across requests; final completion tokens
+  have no model step. The readout is request/token-aligned, not biological attribution.
 - **Data caveats**: Coordinates are illustrative layout projections; connectome body IDs are
   not exported in standard mappings and are explicitly displayed as unavailable / not exported
   (never inferred or speculative anatomy). "No observed fire does not mean inactive; fire means
@@ -112,7 +109,7 @@ its data limits follow the
 [dashboard visual redesign plan](dashboard-visual-redesign-plan.md); see
 [Fly-brain schematic](#fly-brain-schematic) below.
 
-## Run the live workspace (real model + app server)
+## Run the legacy workspace (real model + app server)
 
 ### Prerequisites
 

@@ -1,24 +1,14 @@
 import { ProtocolReceiver } from "./protocol.js";
-import { LiveSource } from "./sources.js";
 import { initializeGPU } from "./gpu.js";
 import { mountInspector } from "./inspector.js";
 import { mountReadout } from "./readout-view.js";
 import { groupStyle } from "./brain-atlas.js";
 
-function resolveEndpoint(endpoint) {
-  if (endpoint) return endpoint;
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/stream`;
-}
-
 export function mountLiveAtlas(options) {
-  const { canvas, labels, inspector, readout: readoutRoot, onState, WebSocketType, connectionStyle = "lines" } = options;
-  const endpoint = resolveEndpoint(options.endpoint);
+  const { canvas, labels, inspector, readout: readoutRoot, onState, connectionStyle = "lines" } = options;
 
   let disposed = false;
   const receiver = new ProtocolReceiver();
-  let connectionState = "connecting";
-  let connectionMessage = `Connecting to ${endpoint}`;
   let gpuMessage = "Initializing WebGPU...";
   let acceptedFires = 0;
   let droppedMessages = 0;
@@ -61,8 +51,6 @@ export function mountLiveAtlas(options) {
 
   function createSnapshot() {
     return Object.freeze({
-      connectionState,
-      connectionMessage,
       gpuMessage,
       nodeCount: cachedNodeCount,
       edgeCount: cachedEdgeCount,
@@ -111,7 +99,6 @@ export function mountLiveAtlas(options) {
 
   function clearDisplay() {
     acceptedFires = 0;
-    droppedMessages = 0;
     droppedPairs = 0;
     updateMappingCache();
     canvas.dispatchEvent(new Event("reset"));
@@ -145,21 +132,6 @@ export function mountLiveAtlas(options) {
     }
   }
 
-  function onStatus({ state, message }) {
-    if (disposed) return;
-    connectionState = state || "disconnected";
-    connectionMessage = message || "";
-
-    if (["connecting", "reconnecting", "disconnected", "background"].includes(state)) {
-      clearDisplay();
-    } else if (state === "unsupported") {
-      updateMappingCache();
-    }
-    cancelScheduledPublish();
-    emitSnapshot();
-  }
-
-  const live = new LiveSource(receiver, { onEvent, onStatus }, WebSocketType);
   const disposeInspector = mountInspector(inspector, canvas);
   const readout = readoutRoot ? mountReadout(readoutRoot, canvas) : null;
 
@@ -190,49 +162,9 @@ export function mountLiveAtlas(options) {
 
   emitSnapshot();
 
-  try {
-    live.connect(endpoint);
-  } catch (error) {
-    connectionState = "error";
-    connectionMessage = error.message;
-    emitSnapshot();
-  }
-
   const handle = {
-    ensureConnected() {
-      if (disposed) return;
-      try {
-        const isLiveActive = Boolean(
-          live &&
-          (
-            (live.socket && !live.socket.closed && (typeof live.socket.readyState !== "number" || live.socket.readyState <= 1)) ||
-            live.retryTimer !== null
-          )
-        );
-        if (!isLiveActive || !live.url || live.url !== endpoint) {
-          live.connect(endpoint);
-        }
-      } catch (error) {
-        connectionState = "error";
-        connectionMessage = error.message;
-        emitSnapshot();
-      }
-    },
-
-    connect() {
-      if (disposed) return;
-      try {
-        live.connect(endpoint);
-      } catch (error) {
-        connectionState = "error";
-        connectionMessage = error.message;
-        emitSnapshot();
-      }
-    },
-
-    disconnect() {
-      if (disposed) return;
-      live.disconnect();
+    publish(message) {
+      if (!disposed) onEvent(receiver.process(JSON.stringify(message)));
     },
 
     fit() {
@@ -258,7 +190,6 @@ export function mountLiveAtlas(options) {
       disposeGPU?.();
       disposeInspector();
       readout?.dispose();
-      live.dispose();
       labels?.replaceChildren();
     },
   };

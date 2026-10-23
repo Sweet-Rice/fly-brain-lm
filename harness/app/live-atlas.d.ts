@@ -9,8 +9,6 @@ export interface LiveAtlasGroup {
 }
 
 export interface LiveAtlasSnapshot {
-  readonly connectionState: string;
-  readonly connectionMessage: string;
   readonly gpuMessage: string;
   readonly nodeCount: number;
   readonly edgeCount: number;
@@ -28,14 +26,10 @@ export interface LiveAtlasOptions {
   readout?: HTMLElement;
   connectionStyle?: 'lines' | 'dots';
   onState: (snapshot: LiveAtlasSnapshot) => void;
-  endpoint?: string;
-  WebSocketType?: { new (url: string | URL, protocols?: string | string[]): WebSocket };
 }
 
 export interface LiveAtlasHandle {
-  ensureConnected(): void;
-  connect(): void;
-  disconnect(): void;
+  publish(message: Record<string, unknown>): void;
   fit(): void;
   zoom(factor: number): void;
   setGeneration(state: GenerationClientSnapshot): void;

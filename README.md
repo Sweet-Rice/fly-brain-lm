@@ -34,61 +34,47 @@ while recording playback and graph controls continue to work normally.
 
 ## Prompt laboratory and live brain workspace (React)
 
-The presentable frontend in [`frontend/`](frontend/README.md) is an integrated React,
-TypeScript, and Vite workspace pairing text prompt generation with an embedded live
-WebGPU brain viewer and neuron inspector. It mounts the shared `harness/app/live-atlas.js`
-module and reuses the tested `GenerationController` without duplicating client logic.
-The atlas shows MBON → model readout → decoded text from producer `token_step` telemetry, with a `Local SSE` fallback; the paths are architectural, not attribution.
+The React workspace in [`frontend/`](frontend/README.md) runs the trained
+`vibe2-tinystories` language model entirely in WebGPU compute shaders. The same
+in-browser engine produces completion text, block-0 KC fires and per-token readout
+telemetry. No Python server, API key, HTTP inference proxy or visualization socket
+is used by React. The MBON paths show architecture, not attribution.
 
 ### Quickstart
 
-Initialize an untrained scratch checkpoint (do not overwrite private checkpoints), start
-the model server, then launch the React dev server:
+Install Git LFS before cloning, or hydrate the weights in an existing checkout:
 
 ```console
-# Step 1: Initialize an untrained scratch checkpoint (vibe or vibe2) to a new path
-python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt
-
-# Step 2: Start the model server (HTTP API on 8771, visualization stream on 8765)
-python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8765
-
-# Step 3: In another terminal, start the React workspace
+git lfs install
+git lfs pull
 npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-Open **http://127.0.0.1:5173/**. The Vite dev server proxies HTTP `/health` and `/v1/*` to
-`http://127.0.0.1:8771` (`FLYBRAIN_API_URL`) and WebSocket `/stream` to `ws://127.0.0.1:8765`
-(`FLYBRAIN_STREAM_URL`). Connecting to same-origin `/stream` avoids extra endpoint
-configuration and browser mixed-content restrictions. In production, configure a reverse
-proxy to route both HTTP routes and WebSocket upgrades on `/stream`.
+Open **http://127.0.0.1:5173/** in a WebGPU-capable Chrome or Edge browser.
+The initial download is approximately 124 MB. Expect **1,959 nodes / 19,037 edges**.
+The trained float32 weights are committed through LFS; tokenizer, manifest and
+PyTorch parity vectors are ordinary Git files. Python `.pt` files stay gitignored.
+LFS clones consume approximately 124 MB each; the GitHub free tier includes 1 GB
+storage and 1 GB monthly bandwidth. CI does not download the LFS payload.
 
-For network access:
-
-```console
-cd frontend && npx vite --host 0.0.0.0
-```
-
-It is unauthenticated, and remote plain HTTP disables WebGPU drawing (prompting still works).
-Use trusted HTTPS for remote graph rendering, for example private Tailscale Serve;
-see [network HTTPS setup](frontend/README.md#network-https-and-webgpu). Plain HTTP
-on a network IP is not a secure browser context, even inside a Tailnet.
+Deploy `frontend/dist/` to a static HTTPS host after `npm --prefix frontend run build`.
+For remote development, bind Vite with `--host 0.0.0.0` and use trusted HTTPS,
+for example [private Tailscale Serve](frontend/README.md#network-https-and-webgpu).
+Remote plain HTTP disables both model inference and graph rendering.
 
 ### Trained vibe2 checkpoint
 
-Trained checkpoints are private and not bundled. Import the original TinyStories weights
-with their matching wiring using `model.vibe2.import_weights` per
-[`model/README.md#vibe2-trained-fly-dopamine-weights`](model/README.md#vibe2-trained-fly-dopamine-weights).
-Never run `model.init_model` onto the trained file (it overwrites weights with random untrained values).
-
-Launch from the repository root:
+To regenerate browser assets from an existing trained checkpoint:
 
 ```console
-python -m harness.telemetry.serve --ckpt model/checkpoints/vibe2_tinystories.pt --port 8771 --viz-port 8765 --model-id vibe2-tinystories
-npm --prefix frontend run dev
+python -m model.vibe2.export_webgpu --ckpt model/checkpoints/vibe2_tinystories.pt --out frontend/public/models/vibe2-tinystories
 ```
 
-Open **http://127.0.0.1:5173/**; expect **1,959 nodes / 19,037 edges**.
+The exporter preserves float32 parameters, derives wiring/recovery with the reference
+PyTorch expressions, and records 32 greedy tokens plus per-step logits and active KCs.
+Never initialize over a trained checkpoint. Original checkpoint import instructions
+remain in [`model/README.md`](model/README.md#vibe2-trained-fly-dopamine-weights).
 
 See [`frontend/README.md`](frontend/README.md) for full architecture, lifecycle details,
 data limits, preview/production deployment, and smoke verification evidence. Offline
