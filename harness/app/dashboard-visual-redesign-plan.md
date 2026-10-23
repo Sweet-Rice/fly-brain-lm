@@ -1,8 +1,14 @@
 # Dashboard Visual Redesign Plan
 
-- **Status**: Implemented in [#46](https://github.com/Sweet-Rice/fly-brain-lm/pull/46). The selection overlay uses fuchsia (incoming) and coral (outgoing) because the planned cyan and amber matched KC and MBON nodes. Rendering gates were checked on the SwiftShader software WebGPU adapter; no hardware adapter was available. Measurements and smoke evidence are in the [app README](README.md#fly-brain-schematic).
+- **Status**: Original visual redesign implemented in [#46](https://github.com/Sweet-Rice/fly-brain-lm/pull/46). The selection overlay uses fuchsia (incoming) and coral (outgoing) because the planned cyan and amber matched KC and MBON nodes. Rendering gates were checked on the SwiftShader software WebGPU adapter; no hardware adapter was available. Current behavior is documented in the [app README](README.md#graph-and-decoded-readout).
 - **Date**: 2026-10-21
 - **Related**: [#41](https://github.com/Sweet-Rice/fly-brain-lm/issues/41) run/token telemetry and [#42](https://github.com/Sweet-Rice/fly-brain-lm/issues/42) KC–MBON memory/dopamine telemetry. Both are future backend work and not prerequisites.
+
+This is the historical redesign plan, not the current control inventory. The
+subsequent live-only cutover removed Source/Settings, recording transport,
+parameter/auth fields, and redundant retry/clear controls. Its original
+"preserve every control" requirement and baseline setup below are superseded by
+the [current workspace guide](README.md).
 
 ## 1. Goal and non-goals
 
@@ -142,7 +148,7 @@ Untouched: `protocol.js`, `generation.js`, `sources.js`, `playback.js`, `camera.
 - At 390×844, the document was 4955px tall with no horizontal overflow; the static-mode 404 notice and Retry Health were visible.
 - The browser reported "No WebGPU adapter is available", so graph rendering was not observed. Rendering gates need a hardware-WebGPU browser.
 
-**Setup.** Offline: `python -m http.server 8772 --bind 127.0.0.1 --directory harness`, open `http://127.0.0.1:8772/app/`, and choose `harness/example/once_upon_a_time.ndjson`. Live: [Run the live workspace](README.md#run-the-live-workspace-real-model--app-server).
+**Current setup.** Use the [owned live workspace](README.md#run-the-live-workspace-real-model--app-server) or the separate [recorded Canvas viewer](../recordings/README.md#review-without-a-model). The original static-page file-picker setup is no longer supported by `/app/`.
 
 | Check | Setup | Expected |
 |---|---|---|

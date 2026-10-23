@@ -1,8 +1,8 @@
 /**
  * Prompt and Generation View Module.
  *
- * Mounts the compact tabbed prompt form, model health indicator, parameter controls,
- * accessible announcements, and bounded paged output into a root container.
+ * Mounts the minimal prompt form with a single prompt textarea above paginated output,
+ * model health indicator, accessible announcements, and action controls into a root container.
  */
 
 import {
@@ -15,45 +15,23 @@ export const PROMPT_DOM_IDS = Object.freeze({
   ROOT: 'prompt-root',
   FORM: 'prompt-form',
   HEALTH_STATUS: 'prompt-health-status',
-  HEALTH_RETRY_BTN: 'prompt-health-retry-btn',
   INPUT: 'prompt-input',
-  MAX_TOKENS: 'prompt-max-tokens',
-  TEMPERATURE: 'prompt-temperature',
-  TOP_K: 'prompt-top-k',
-  API_KEY: 'prompt-api-key',
-  API_KEY_HELP: 'prompt-api-key-help',
   GENERATE_BTN: 'prompt-generate-btn',
   CANCEL_BTN: 'prompt-cancel-btn',
-  CLEAR_BTN: 'prompt-clear-btn',
   COPY_BTN: 'prompt-copy-btn',
   STATUS: 'prompt-status',
-  RUN_ID: 'prompt-run-id',
   USAGE: 'prompt-usage',
   FINISH_REASON: 'prompt-finish-reason',
   OUTPUT: 'prompt-output',
   OUTPUT_EMPTY: 'prompt-output-empty',
   ANNOUNCEMENT: 'prompt-announcement',
   ERROR_PROMPT: 'prompt-error-prompt',
-  ERROR_MAX_TOKENS: 'prompt-error-max-tokens',
-  ERROR_TEMPERATURE: 'prompt-error-temperature',
-  ERROR_TOP_K: 'prompt-error-top-k',
   ERROR_GENERAL: 'prompt-error-general',
-  TABLIST: 'prompt-tablist',
-  TAB_COMPOSE: 'prompt-tab-compose',
-  TAB_OUTPUT: 'prompt-tab-output',
-  TAB_SETTINGS: 'prompt-tab-settings',
-  PANEL_COMPOSE: 'prompt-panel-compose',
-  PANEL_OUTPUT: 'prompt-panel-output',
-  PANEL_SETTINGS: 'prompt-panel-settings',
   PAGER: 'prompt-pager',
   PAGER_PREV: 'prompt-pager-prev',
   PAGER_NEXT: 'prompt-pager-next',
   PAGER_LATEST: 'prompt-pager-latest',
   PAGER_STATUS: 'prompt-pager-status',
-  SETTINGS_PAGER: 'prompt-settings-pager',
-  SETTINGS_PREV: 'prompt-settings-prev',
-  SETTINGS_NEXT: 'prompt-settings-next',
-  SETTINGS_PAGE: 'prompt-settings-page',
 });
 
 export const PROMPT_CLASSES = Object.freeze({
@@ -62,11 +40,8 @@ export const PROMPT_CLASSES = Object.freeze({
   HEALTH: 'prompt-health-status',
   FORM: 'prompt-form',
   FIELD_GROUP: 'prompt-field-group',
-  CONTROLS_GRID: 'prompt-controls-grid',
   LABEL: 'prompt-label',
   TEXTAREA: 'prompt-input',
-  INPUT_NUM: 'prompt-input-num',
-  INPUT_TEXT: 'prompt-input-text',
   INLINE_ERROR: 'prompt-inline-error',
   GENERAL_ERROR: 'prompt-general-error',
   ACTIONS: 'prompt-actions',
@@ -74,30 +49,18 @@ export const PROMPT_CLASSES = Object.freeze({
   BTN_PRIMARY: 'prompt-btn-primary',
   META: 'prompt-meta',
   STATUS_BADGE: 'prompt-status',
-  RUN_ID: 'prompt-run-id',
   USAGE: 'prompt-usage',
   FINISH_REASON: 'prompt-finish-reason',
   OUTPUT_CONTAINER: 'prompt-output-container',
   OUTPUT: 'prompt-output',
   OUTPUT_EMPTY: 'prompt-output-empty',
   ANNOUNCEMENT: 'prompt-announcement',
-  TABS: 'prompt-tabs',
-  TAB: 'prompt-tab',
-  TAB_ACTIVE: 'prompt-tab-active',
-  TABPANEL: 'prompt-tabpanel',
-  PANEL_COMPOSE: 'prompt-panel-compose',
-  PANEL_OUTPUT: 'prompt-panel-output',
-  PANEL_SETTINGS: 'prompt-panel-settings',
   PAGER: 'prompt-pager',
   PAGER_BTN: 'prompt-pager-btn',
   PAGER_PREV: 'prompt-pager-prev',
   PAGER_NEXT: 'prompt-pager-next',
   PAGER_LATEST: 'prompt-pager-latest',
   PAGER_STATUS: 'prompt-pager-status',
-  SETTINGS_PAGER: 'prompt-settings-pager',
-  SETTINGS_PREV: 'prompt-settings-prev',
-  SETTINGS_NEXT: 'prompt-settings-next',
-  SETTINGS_PAGE: 'prompt-settings-page',
 });
 
 export const PAGER_LIMITS = Object.freeze({
@@ -166,7 +129,7 @@ export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoi
 }
 
 /**
- * Mounts the prompt generation UI into root.
+ * Mounts the minimal prompt generation UI into root.
  *
  * @param {HTMLElement} root - Target container
  * @param {Object} options - Configuration options
@@ -179,6 +142,7 @@ export function paginateText(text, maxLines = PAGER_LIMITS.MAX_LINES, maxCodepoi
  * @param {number} [options.defaultTopK=50] - Default top_k (1..50257)
  * @param {boolean} [options.pollHealth=true] - Whether to poll health periodically
  * @param {GenerationController} [options.controller] - Custom controller instance
+ * @param {Function} [options.subscribeConnection] - Optional function returning unsubscribe to track connection readiness
  * @returns {Function} disposer function to dismantle UI and abort active operations
  */
 export function mountPrompt(root, options = {}) {
@@ -208,7 +172,7 @@ export function mountPrompt(root, options = {}) {
   container.id = PROMPT_DOM_IDS.ROOT;
   container.className = PROMPT_CLASSES.CONTAINER;
 
-  // Header: Health status & manual retry
+  // Header: Health status
   const header = doc.createElement('div');
   header.className = PROMPT_CLASSES.HEADER;
 
@@ -219,15 +183,9 @@ export function mountPrompt(root, options = {}) {
   healthStatus.title = 'Checking model status...';
   healthStatus.setAttribute('aria-live', 'polite');
 
-  const healthRetryBtn = doc.createElement('button');
-  healthRetryBtn.id = PROMPT_DOM_IDS.HEALTH_RETRY_BTN;
-  healthRetryBtn.type = 'button';
-  healthRetryBtn.className = PROMPT_CLASSES.BTN;
-  healthRetryBtn.textContent = 'Retry Health';
+  header.append(healthStatus);
 
-  header.append(healthStatus, healthRetryBtn);
-
-  // Metadata / Telemetry row (run ID, state, usage - never claims token/fire alignment)
+  // Metadata row (state, usage, finish reason)
   const meta = doc.createElement('div');
   meta.className = PROMPT_CLASSES.META;
 
@@ -235,11 +193,6 @@ export function mountPrompt(root, options = {}) {
   statusBadge.id = PROMPT_DOM_IDS.STATUS;
   statusBadge.className = PROMPT_CLASSES.STATUS_BADGE;
   statusBadge.textContent = 'State: idle';
-
-  const runIdBadge = doc.createElement('span');
-  runIdBadge.id = PROMPT_DOM_IDS.RUN_ID;
-  runIdBadge.className = PROMPT_CLASSES.RUN_ID;
-  runIdBadge.textContent = 'Run ID: -';
 
   const usageBadge = doc.createElement('span');
   usageBadge.id = PROMPT_DOM_IDS.USAGE;
@@ -249,60 +202,15 @@ export function mountPrompt(root, options = {}) {
   finishReasonBadge.id = PROMPT_DOM_IDS.FINISH_REASON;
   finishReasonBadge.className = PROMPT_CLASSES.FINISH_REASON;
 
-  meta.append(statusBadge, runIdBadge, usageBadge, finishReasonBadge);
+  meta.append(statusBadge, usageBadge, finishReasonBadge);
 
-  // Form container
+  // Form container: one prompt textarea above paginated output
   const form = doc.createElement('form');
   form.id = PROMPT_DOM_IDS.FORM;
   form.className = PROMPT_CLASSES.FORM;
   form.noValidate = true;
 
-  // Tabs navigation
-  const tablist = doc.createElement('div');
-  tablist.id = PROMPT_DOM_IDS.TABLIST;
-  tablist.className = PROMPT_CLASSES.TABS;
-  tablist.setAttribute('role', 'tablist');
-  tablist.setAttribute('aria-label', 'Prompt views');
-
-  const tabCompose = doc.createElement('button');
-  tabCompose.id = PROMPT_DOM_IDS.TAB_COMPOSE;
-  tabCompose.type = 'button';
-  tabCompose.setAttribute('role', 'tab');
-  tabCompose.className = `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`;
-  tabCompose.textContent = 'Compose';
-  tabCompose.setAttribute('aria-selected', 'true');
-  tabCompose.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_COMPOSE);
-  tabCompose.tabIndex = 0;
-
-  const tabOutput = doc.createElement('button');
-  tabOutput.id = PROMPT_DOM_IDS.TAB_OUTPUT;
-  tabOutput.type = 'button';
-  tabOutput.setAttribute('role', 'tab');
-  tabOutput.className = PROMPT_CLASSES.TAB;
-  tabOutput.textContent = 'Output';
-  tabOutput.setAttribute('aria-selected', 'false');
-  tabOutput.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_OUTPUT);
-  tabOutput.tabIndex = -1;
-
-  const tabSettings = doc.createElement('button');
-  tabSettings.id = PROMPT_DOM_IDS.TAB_SETTINGS;
-  tabSettings.type = 'button';
-  tabSettings.setAttribute('role', 'tab');
-  tabSettings.className = PROMPT_CLASSES.TAB;
-  tabSettings.textContent = 'Settings';
-  tabSettings.setAttribute('aria-selected', 'false');
-  tabSettings.setAttribute('aria-controls', PROMPT_DOM_IDS.PANEL_SETTINGS);
-  tabSettings.tabIndex = -1;
-
-  tablist.append(tabCompose, tabOutput, tabSettings);
-
-  // Compose Panel
-  const composePanel = doc.createElement('div');
-  composePanel.id = PROMPT_DOM_IDS.PANEL_COMPOSE;
-  composePanel.className = `${PROMPT_CLASSES.TABPANEL} ${PROMPT_CLASSES.PANEL_COMPOSE}`;
-  composePanel.setAttribute('role', 'tabpanel');
-  composePanel.setAttribute('aria-labelledby', PROMPT_DOM_IDS.TAB_COMPOSE);
-
+  // Prompt input section
   const promptGroup = doc.createElement('div');
   promptGroup.className = PROMPT_CLASSES.FIELD_GROUP;
 
@@ -325,16 +233,8 @@ export function mountPrompt(root, options = {}) {
   promptError.setAttribute('role', 'alert');
 
   promptGroup.append(promptLabel, promptInput, promptError);
-  composePanel.append(promptGroup);
 
-  // Output Panel (with bounded paged view)
-  const outputPanel = doc.createElement('div');
-  outputPanel.id = PROMPT_DOM_IDS.PANEL_OUTPUT;
-  outputPanel.className = `${PROMPT_CLASSES.TABPANEL} ${PROMPT_CLASSES.PANEL_OUTPUT}`;
-  outputPanel.setAttribute('role', 'tabpanel');
-  outputPanel.setAttribute('aria-labelledby', PROMPT_DOM_IDS.TAB_OUTPUT);
-  outputPanel.hidden = true;
-
+  // Output section with bounded paged view
   const outputContainer = doc.createElement('div');
   outputContainer.className = PROMPT_CLASSES.OUTPUT_CONTAINER;
 
@@ -357,6 +257,8 @@ export function mountPrompt(root, options = {}) {
   const pager = doc.createElement('div');
   pager.id = PROMPT_DOM_IDS.PAGER;
   pager.className = PROMPT_CLASSES.PAGER;
+  pager.hidden = true;
+  pager.style.display = 'none';
 
   const pagerPrevBtn = doc.createElement('button');
   pagerPrevBtn.id = PROMPT_DOM_IDS.PAGER_PREV;
@@ -391,147 +293,14 @@ export function mountPrompt(root, options = {}) {
 
   pager.append(pagerPrevBtn, pagerStatus, pagerNextBtn, pagerLatestBtn);
   outputContainer.append(outputLabel, outputEmpty, outputPre, pager);
-  outputPanel.append(outputContainer);
 
-  // Settings Panel
-  const settingsPanel = doc.createElement('div');
-  settingsPanel.id = PROMPT_DOM_IDS.PANEL_SETTINGS;
-  settingsPanel.className = `${PROMPT_CLASSES.TABPANEL} ${PROMPT_CLASSES.PANEL_SETTINGS}`;
-  settingsPanel.setAttribute('role', 'tabpanel');
-  settingsPanel.setAttribute('aria-labelledby', PROMPT_DOM_IDS.TAB_SETTINGS);
-  settingsPanel.setAttribute('data-page', '0');
-  settingsPanel.hidden = true;
-
-  const controlsGrid = doc.createElement('div');
-  controlsGrid.className = PROMPT_CLASSES.CONTROLS_GRID;
-
-  // Max tokens
-  const maxTokensGroup = doc.createElement('div');
-  maxTokensGroup.className = PROMPT_CLASSES.FIELD_GROUP;
-  maxTokensGroup.setAttribute('data-settings-page', '0');
-  const maxTokensLabel = doc.createElement('label');
-  maxTokensLabel.htmlFor = PROMPT_DOM_IDS.MAX_TOKENS;
-  maxTokensLabel.className = PROMPT_CLASSES.LABEL;
-  maxTokensLabel.textContent = 'Max tokens (1..128):';
-  const maxTokensInput = doc.createElement('input');
-  maxTokensInput.id = PROMPT_DOM_IDS.MAX_TOKENS;
-  maxTokensInput.type = 'number';
-  maxTokensInput.className = PROMPT_CLASSES.INPUT_NUM;
-  maxTokensInput.min = '1';
-  maxTokensInput.max = '128';
-  maxTokensInput.value = String(defaultMaxTokens);
-  maxTokensInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_MAX_TOKENS);
-  const maxTokensError = doc.createElement('div');
-  maxTokensError.id = PROMPT_DOM_IDS.ERROR_MAX_TOKENS;
-  maxTokensError.className = PROMPT_CLASSES.INLINE_ERROR;
-  maxTokensError.setAttribute('role', 'alert');
-  maxTokensGroup.append(maxTokensLabel, maxTokensInput, maxTokensError);
-
-  // Temperature
-  const tempGroup = doc.createElement('div');
-  tempGroup.className = PROMPT_CLASSES.FIELD_GROUP;
-  tempGroup.setAttribute('data-settings-page', '0');
-  const tempLabel = doc.createElement('label');
-  tempLabel.htmlFor = PROMPT_DOM_IDS.TEMPERATURE;
-  tempLabel.className = PROMPT_CLASSES.LABEL;
-  tempLabel.textContent = 'Temperature (0..2):';
-  const tempInput = doc.createElement('input');
-  tempInput.id = PROMPT_DOM_IDS.TEMPERATURE;
-  tempInput.type = 'number';
-  tempInput.className = PROMPT_CLASSES.INPUT_NUM;
-  tempInput.min = '0';
-  tempInput.max = '2';
-  tempInput.step = '0.1';
-  tempInput.value = String(defaultTemperature);
-  tempInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_TEMPERATURE);
-  const tempError = doc.createElement('div');
-  tempError.id = PROMPT_DOM_IDS.ERROR_TEMPERATURE;
-  tempError.className = PROMPT_CLASSES.INLINE_ERROR;
-  tempError.setAttribute('role', 'alert');
-  tempGroup.append(tempLabel, tempInput, tempError);
-
-  // Top K
-  const topKGroup = doc.createElement('div');
-  topKGroup.className = PROMPT_CLASSES.FIELD_GROUP;
-  topKGroup.setAttribute('data-settings-page', '1');
-  const topKLabel = doc.createElement('label');
-  topKLabel.htmlFor = PROMPT_DOM_IDS.TOP_K;
-  topKLabel.className = PROMPT_CLASSES.LABEL;
-  topKLabel.textContent = 'Top-K (1..50257):';
-  const topKInput = doc.createElement('input');
-  topKInput.id = PROMPT_DOM_IDS.TOP_K;
-  topKInput.type = 'number';
-  topKInput.className = PROMPT_CLASSES.INPUT_NUM;
-  topKInput.min = '1';
-  topKInput.max = '50257';
-  topKInput.value = String(defaultTopK);
-  topKInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.ERROR_TOP_K);
-  const topKError = doc.createElement('div');
-  topKError.id = PROMPT_DOM_IDS.ERROR_TOP_K;
-  topKError.className = PROMPT_CLASSES.INLINE_ERROR;
-  topKError.setAttribute('role', 'alert');
-  topKGroup.append(topKLabel, topKInput, topKError);
-
-  // Optional memory-only API key (no persistence)
-  const apiKeyGroup = doc.createElement('div');
-  apiKeyGroup.className = PROMPT_CLASSES.FIELD_GROUP;
-  apiKeyGroup.setAttribute('data-settings-page', '1');
-  const apiKeyLabel = doc.createElement('label');
-  apiKeyLabel.htmlFor = PROMPT_DOM_IDS.API_KEY;
-  apiKeyLabel.className = PROMPT_CLASSES.LABEL;
-  apiKeyLabel.textContent = 'API Key (optional, in-memory):';
-  const apiKeyInput = doc.createElement('input');
-  apiKeyInput.id = PROMPT_DOM_IDS.API_KEY;
-  apiKeyInput.type = 'password';
-  apiKeyInput.className = PROMPT_CLASSES.INPUT_TEXT;
-  apiKeyInput.placeholder = 'Optional bearer token';
-  apiKeyInput.autocomplete = 'off';
-  apiKeyInput.setAttribute('aria-describedby', PROMPT_DOM_IDS.API_KEY_HELP);
-  const apiKeyHelp = doc.createElement('div');
-  apiKeyHelp.id = PROMPT_DOM_IDS.API_KEY_HELP;
-  apiKeyHelp.className = PROMPT_CLASSES.LABEL;
-  apiKeyHelp.textContent = 'Optional bearer token. Kept in memory for this tab only.';
-  apiKeyGroup.append(apiKeyLabel, apiKeyInput, apiKeyHelp);
-
-  controlsGrid.append(maxTokensGroup, tempGroup, topKGroup, apiKeyGroup);
-
-  // Settings Pager (compact 2-page navigation)
-  const settingsPager = doc.createElement('div');
-  settingsPager.id = PROMPT_DOM_IDS.SETTINGS_PAGER;
-  settingsPager.className = PROMPT_CLASSES.SETTINGS_PAGER;
-
-  const settingsPrevBtn = doc.createElement('button');
-  settingsPrevBtn.id = PROMPT_DOM_IDS.SETTINGS_PREV;
-  settingsPrevBtn.type = 'button';
-  settingsPrevBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.SETTINGS_PREV}`;
-  settingsPrevBtn.textContent = 'Previous';
-  settingsPrevBtn.setAttribute('aria-label', 'Previous settings page');
-  settingsPrevBtn.disabled = true;
-
-  const settingsPageStatus = doc.createElement('span');
-  settingsPageStatus.id = PROMPT_DOM_IDS.SETTINGS_PAGE;
-  settingsPageStatus.className = PROMPT_CLASSES.SETTINGS_PAGE;
-  settingsPageStatus.setAttribute('role', 'status');
-  settingsPageStatus.setAttribute('aria-live', 'polite');
-  settingsPageStatus.textContent = 'Page 1 of 2';
-
-  const settingsNextBtn = doc.createElement('button');
-  settingsNextBtn.id = PROMPT_DOM_IDS.SETTINGS_NEXT;
-  settingsNextBtn.type = 'button';
-  settingsNextBtn.className = `${PROMPT_CLASSES.BTN} ${PROMPT_CLASSES.SETTINGS_NEXT}`;
-  settingsNextBtn.textContent = 'Next';
-  settingsNextBtn.setAttribute('aria-label', 'Next settings page');
-  settingsNextBtn.disabled = false;
-
-  settingsPager.append(settingsPrevBtn, settingsPageStatus, settingsNextBtn);
-  settingsPanel.append(controlsGrid, settingsPager);
   // General error banner
   const generalError = doc.createElement('div');
   generalError.id = PROMPT_DOM_IDS.ERROR_GENERAL;
   generalError.className = PROMPT_CLASSES.GENERAL_ERROR;
   generalError.setAttribute('role', 'alert');
 
-  // Action buttons
+  // Action buttons: Generate, Stop, Copy
   const actions = doc.createElement('div');
   actions.className = PROMPT_CLASSES.ACTIONS;
 
@@ -545,26 +314,20 @@ export function mountPrompt(root, options = {}) {
   cancelBtn.id = PROMPT_DOM_IDS.CANCEL_BTN;
   cancelBtn.type = 'button';
   cancelBtn.className = PROMPT_CLASSES.BTN;
-  cancelBtn.textContent = 'Cancel';
+  cancelBtn.textContent = 'Stop';
   cancelBtn.disabled = true;
-
-  const clearBtn = doc.createElement('button');
-  clearBtn.id = PROMPT_DOM_IDS.CLEAR_BTN;
-  clearBtn.type = 'button';
-  clearBtn.className = PROMPT_CLASSES.BTN;
-  clearBtn.textContent = 'Clear';
 
   const copyBtn = doc.createElement('button');
   copyBtn.id = PROMPT_DOM_IDS.COPY_BTN;
   copyBtn.type = 'button';
   copyBtn.className = PROMPT_CLASSES.BTN;
-  copyBtn.textContent = 'Copy Output';
+  copyBtn.textContent = 'Copy';
   copyBtn.disabled = true;
 
-  actions.append(generateBtn, cancelBtn, clearBtn, copyBtn);
-  form.append(tablist, composePanel, outputPanel, settingsPanel, generalError, actions);
+  actions.append(generateBtn, cancelBtn, copyBtn);
+  form.append(promptGroup, outputContainer, generalError, actions);
 
-  // Live announcement region for screen readers (announces completions/errors, not every token)
+  // Live announcement region for screen readers
   const announcement = doc.createElement('div');
   announcement.id = PROMPT_DOM_IDS.ANNOUNCEMENT;
   announcement.className = PROMPT_CLASSES.ANNOUNCEMENT;
@@ -578,118 +341,6 @@ export function mountPrompt(root, options = {}) {
   } else {
     root.innerHTML = '';
     root.appendChild?.(container);
-  }
-
-  // Tab switching state
-  let currentTab = 'compose'; // 'compose' | 'output' | 'settings'
-
-  function switchTab(tab) {
-    if (currentTab === tab) return;
-    currentTab = tab;
-
-    tabCompose.setAttribute('aria-selected', tab === 'compose' ? 'true' : 'false');
-    tabOutput.setAttribute('aria-selected', tab === 'output' ? 'true' : 'false');
-    tabSettings.setAttribute('aria-selected', tab === 'settings' ? 'true' : 'false');
-    tabCompose.tabIndex = tab === 'compose' ? 0 : -1;
-    tabOutput.tabIndex = tab === 'output' ? 0 : -1;
-    tabSettings.tabIndex = tab === 'settings' ? 0 : -1;
-
-    tabCompose.className = tab === 'compose'
-      ? `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`
-      : PROMPT_CLASSES.TAB;
-    tabOutput.className = tab === 'output'
-      ? `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`
-      : PROMPT_CLASSES.TAB;
-    tabSettings.className = tab === 'settings'
-      ? `${PROMPT_CLASSES.TAB} ${PROMPT_CLASSES.TAB_ACTIVE}`
-      : PROMPT_CLASSES.TAB;
-
-    composePanel.hidden = tab !== 'compose';
-    outputPanel.hidden = tab !== 'output';
-    settingsPanel.hidden = tab !== 'settings';
-  }
-
-  // Settings pager state
-  let currentSettingsPage = 0;
-  let lastHandledValidationErrors = null;
-
-  function areValidationErrorsIdentical(a, b) {
-    if (a === b) return true;
-    if (!a || !b) return false;
-    const aKeys = Object.keys(a);
-    const bKeys = Object.keys(b);
-    if (aKeys.length !== bKeys.length) return false;
-    for (const k of aKeys) {
-      if (a[k] !== b[k]) return false;
-    }
-    return true;
-  }
-
-  function setSettingsPage(pageIndex) {
-    currentSettingsPage = pageIndex === 1 ? 1 : 0;
-    settingsPanel.setAttribute('data-page', String(currentSettingsPage));
-    updateSettingsPagerDisplay();
-  }
-
-  function updateSettingsPagerDisplay() {
-    const valErrors = controller.getState()?.validationErrors || {};
-    const page0Errors = Boolean(valErrors.maxTokens || valErrors.temperature);
-    const page1Errors = Boolean(valErrors.topK || valErrors.apiKey);
-
-    settingsPrevBtn.disabled = currentSettingsPage <= 0;
-    settingsNextBtn.disabled = currentSettingsPage >= 1;
-
-    if (currentSettingsPage === 0) {
-      if (page1Errors) {
-        settingsPageStatus.textContent = 'Page 1 of 2 (errors on page 2)';
-        settingsPageStatus.setAttribute('data-has-errors', 'true');
-        settingsPager.setAttribute('data-other-page-errors', 'true');
-        settingsNextBtn.setAttribute('data-has-errors', 'true');
-        settingsNextBtn.setAttribute('aria-label', 'Next settings page (has errors)');
-        settingsNextBtn.title = 'Page 2 has validation errors';
-      } else {
-        settingsPageStatus.textContent = 'Page 1 of 2';
-        if (typeof settingsPageStatus.removeAttribute === 'function') settingsPageStatus.removeAttribute('data-has-errors');
-        if (typeof settingsPager.removeAttribute === 'function') settingsPager.removeAttribute('data-other-page-errors');
-        if (typeof settingsNextBtn.removeAttribute === 'function') settingsNextBtn.removeAttribute('data-has-errors');
-        settingsNextBtn.setAttribute('aria-label', 'Next settings page');
-        settingsNextBtn.title = '';
-      }
-      if (typeof settingsPrevBtn.removeAttribute === 'function') settingsPrevBtn.removeAttribute('data-has-errors');
-      settingsPrevBtn.setAttribute('aria-label', 'Previous settings page');
-      settingsPrevBtn.title = '';
-    } else {
-      if (page0Errors) {
-        settingsPageStatus.textContent = 'Page 2 of 2 (errors on page 1)';
-        settingsPageStatus.setAttribute('data-has-errors', 'true');
-        settingsPager.setAttribute('data-other-page-errors', 'true');
-        settingsPrevBtn.setAttribute('data-has-errors', 'true');
-        settingsPrevBtn.setAttribute('aria-label', 'Previous settings page (has errors)');
-        settingsPrevBtn.title = 'Page 1 has validation errors';
-      } else {
-        settingsPageStatus.textContent = 'Page 2 of 2';
-        if (typeof settingsPageStatus.removeAttribute === 'function') settingsPageStatus.removeAttribute('data-has-errors');
-        if (typeof settingsPager.removeAttribute === 'function') settingsPager.removeAttribute('data-other-page-errors');
-        if (typeof settingsPrevBtn.removeAttribute === 'function') settingsPrevBtn.removeAttribute('data-has-errors');
-        settingsPrevBtn.setAttribute('aria-label', 'Previous settings page');
-        settingsPrevBtn.title = '';
-      }
-      if (typeof settingsNextBtn.removeAttribute === 'function') settingsNextBtn.removeAttribute('data-has-errors');
-      settingsNextBtn.setAttribute('aria-label', 'Next settings page');
-      settingsNextBtn.title = '';
-    }
-  }
-
-  function handleSettingsPrev() {
-    if (currentSettingsPage > 0) {
-      setSettingsPage(0);
-    }
-  }
-
-  function handleSettingsNext() {
-    if (currentSettingsPage < 1) {
-      setSettingsPage(1);
-    }
   }
 
   // Pager state
@@ -726,7 +377,6 @@ export function mountPrompt(root, options = {}) {
     }
     const width = outputPre.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     const height = outputPre.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    // Reserve the final blank line in a page ending with a newline.
     const lines = Math.max(1, Math.floor(height / parseFloat(style.lineHeight)) - 1);
     return {
       lines: Math.min(PAGER_LIMITS.MAX_LINES, lines),
@@ -781,28 +431,29 @@ export function mountPrompt(root, options = {}) {
   // State synchronization and accessibility updates
   let previousState = controller.getState().state;
   let actionError = null;
-  const COPY_DEFAULT_LABEL = 'Copy Output';
+  const COPY_DEFAULT_LABEL = 'Copy';
   let copyTimer = null;
 
-  if (controller.getApiKey()) {
-    apiKeyInput.value = controller.getApiKey();
-  }
+  // Connection readiness subscription state
+  let connectionState = null;
+  let unsubscribeConnection = null;
 
-  function handleApiKeySync() {
-    controller.setApiKey(apiKeyInput.value);
+  function isReadyToGenerate(health) {
+    const healthReady = Boolean(health?.ready);
+    const connReady = typeof options.subscribeConnection === 'function'
+      ? Boolean(connectionState?.ready)
+      : true;
+    return healthReady && connReady;
   }
 
   function render(state) {
     statusBadge.textContent = `State: ${state.state}`;
     statusBadge.setAttribute('data-state', state.state);
 
-    // Generation start automatically switches to Output tab and resets pager navigation
     const active = isGenerationActive(state.state);
     if (active && !isGenerationActive(previousState)) {
-      switchTab('output');
       userNavigatedPage = false;
       currentPageIndex = 0;
-      setSettingsPage(0);
     }
 
     // Output pagination
@@ -825,78 +476,40 @@ export function mountPrompt(root, options = {}) {
     outputPre.textContent = cachedPages[currentPageIndex] || '';
     outputPre.setAttribute('data-state', state.state);
     outputEmpty.hidden = Boolean(fullText);
+    outputEmpty.style.display = fullText ? 'none' : '';
+
+    // Only show output page controls when multiple pages
+    const multiPage = totalPages > 1;
+    pager.hidden = !multiPage;
+    pager.style.display = multiPage ? '' : 'none';
 
     pagerStatus.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
     pagerPrevBtn.disabled = currentPageIndex <= 0;
     pagerNextBtn.disabled = currentPageIndex >= totalPages - 1;
     pagerLatestBtn.disabled = currentPageIndex >= totalPages - 1;
 
-    // Health status display: checkpoint identity only when the launcher reports it
+    // Health status display: model identity visible
     const healthMsg = state.health.message || 'Model status unknown';
     healthStatus.textContent = healthMsg;
     healthStatus.title = healthMsg;
     healthStatus.setAttribute('data-status', state.health.status);
 
-    // Inline validation error presentation
-    promptError.textContent = state.validationErrors?.prompt || '';
-    promptInput.setAttribute('aria-invalid', state.validationErrors?.prompt ? 'true' : 'false');
-
-    maxTokensError.textContent = state.validationErrors?.maxTokens || '';
-    maxTokensInput.setAttribute('aria-invalid', state.validationErrors?.maxTokens ? 'true' : 'false');
-
-    tempError.textContent = state.validationErrors?.temperature || '';
-    tempInput.setAttribute('aria-invalid', state.validationErrors?.temperature ? 'true' : 'false');
-
-    topKError.textContent = state.validationErrors?.topK || '';
-    topKInput.setAttribute('aria-invalid', state.validationErrors?.topK ? 'true' : 'false');
-
+    // Validation and error presentation
     const hasValidationErrors = Object.keys(state.validationErrors || {}).length > 0;
 
-    // Switch view to display relevant validation errors
     if (hasValidationErrors) {
-      const hasSettingsErrors = Boolean(
-        state.validationErrors?.maxTokens ||
-        state.validationErrors?.temperature ||
-        state.validationErrors?.topK ||
-        state.validationErrors?.apiKey
-      );
-
-      if (hasSettingsErrors) {
-        switchTab('settings');
-      } else if (state.validationErrors?.prompt) {
-        switchTab('compose');
-      }
-
-      const isNewValidation = !lastHandledValidationErrors ||
-        !areValidationErrorsIdentical(state.validationErrors, lastHandledValidationErrors);
-
-      if (isNewValidation) {
-        lastHandledValidationErrors = { ...state.validationErrors };
-        if (hasSettingsErrors) {
-          const hasPage0Errors = Boolean(
-            state.validationErrors?.maxTokens || state.validationErrors?.temperature
-          );
-          if (hasPage0Errors) {
-            setSettingsPage(0);
-          } else {
-            setSettingsPage(1);
-          }
-        }
-      }
-      generalError.textContent = '';
-      runIdBadge.textContent = 'Run ID: -';
+      promptError.textContent = state.validationErrors?.prompt || '';
+      promptInput.setAttribute('aria-invalid', state.validationErrors?.prompt ? 'true' : 'false');
+      const otherErrors = Object.entries(state.validationErrors)
+        .filter(([k]) => k !== 'prompt')
+        .map(([, v]) => v);
+      generalError.textContent = otherErrors.join(', ');
       usageBadge.textContent = '';
       finishReasonBadge.textContent = '';
     } else {
+      promptError.textContent = '';
+      promptInput.setAttribute('aria-invalid', 'false');
       generalError.textContent = state.error || actionError || '';
-
-      if (state.runId) {
-        runIdBadge.textContent = state.modelCompletionId
-          ? `Run ID: ${state.runId} (${state.modelCompletionId})`
-          : `Run ID: ${state.runId}`;
-      } else {
-        runIdBadge.textContent = 'Run ID: -';
-      }
 
       if (state.usage) {
         usageBadge.textContent = `Tokens: ${state.usage.prompt_tokens} prompt + ${state.usage.completion_tokens} completion = ${state.usage.total_tokens} total`;
@@ -910,13 +523,10 @@ export function mountPrompt(root, options = {}) {
         finishReasonBadge.textContent = '';
       }
     }
-    updateSettingsPagerDisplay();
 
-    runIdBadge.title = runIdBadge.textContent;
-    const ready = Boolean(state.health?.ready);
+    const ready = isReadyToGenerate(state.health);
     generateBtn.disabled = active || !ready;
     cancelBtn.disabled = !active;
-    clearBtn.disabled = active;
     copyBtn.disabled = !state.text;
 
     // Accessible announcements on key lifecycle transitions (never per-token or per-health poll)
@@ -934,8 +544,17 @@ export function mountPrompt(root, options = {}) {
     }
   }
 
+  // Subscribe to connection readiness if provided
+  if (typeof options.subscribeConnection === 'function') {
+    unsubscribeConnection = options.subscribeConnection((snapshot) => {
+      connectionState = snapshot;
+      render(controller.getState());
+    });
+  }
+
   const unsubscribe = controller.subscribe(render);
   render(controller.getState());
+
   const outputResizeObserver = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => {
       if (outputPre.clientWidth && outputPre.clientHeight) render(controller.getState());
@@ -950,16 +569,13 @@ export function mountPrompt(root, options = {}) {
     }
     actionError = null;
     const currentState = controller.getState();
-    lastHandledValidationErrors = null;
-    if (controller.isActive() || !currentState.health?.ready) return;
-
-    controller.setApiKey(apiKeyInput.value);
+    if (controller.isActive() || !isReadyToGenerate(currentState.health)) return;
 
     const params = {
       prompt: promptInput.value,
-      maxTokens: maxTokensInput.value,
-      temperature: tempInput.value,
-      topK: topKInput.value,
+      maxTokens: defaultMaxTokens,
+      temperature: defaultTemperature,
+      topK: defaultTopK,
     };
 
     await controller.submit(params, { onGenerate: options.onGenerate });
@@ -997,8 +613,7 @@ export function mountPrompt(root, options = {}) {
       copyBtn.textContent = 'Copied!';
       announcement.textContent = 'Generated text copied to clipboard.';
       actionError = null;
-      const hasValidationErrors = Object.keys(controller.getState().validationErrors || {}).length > 0;
-      if (!hasValidationErrors && !controller.getState().error) {
+      if (!controller.getState().error) {
         generalError.textContent = '';
       }
 
@@ -1009,10 +624,7 @@ export function mountPrompt(root, options = {}) {
       }, 1500);
     } catch {
       actionError = 'Unable to copy to clipboard.';
-      const hasValidationErrors = Object.keys(controller.getState().validationErrors || {}).length > 0;
-      if (!hasValidationErrors) {
-        generalError.textContent = actionError;
-      }
+      generalError.textContent = actionError;
     }
   }
 
@@ -1020,71 +632,14 @@ export function mountPrompt(root, options = {}) {
     controller.cancel();
   }
 
-  function handleClear() {
-    if (controller.isActive()) return;
-    actionError = null;
-    promptInput.value = '';
-    userNavigatedPage = false;
-    currentPageIndex = 0;
-    cachedPages = [''];
-    lastHandledValidationErrors = null;
-    setSettingsPage(0);
-    controller.clear();
-    switchTab('compose');
-    announcement.textContent = 'Prompt and output cleared.';
-  }
-
-  function handleRetryHealth() {
-    controller.setApiKey(apiKeyInput.value);
-    controller.checkHealth();
-  }
-
-  function handleTabComposeClick() {
-    switchTab('compose');
-  }
-
-  function handleTabOutputClick() {
-    switchTab('output');
-  }
-
-  function handleTabSettingsClick() {
-    switchTab('settings');
-  }
-
-  function handleTabKeys(event) {
-    const tabs = [tabCompose, tabOutput, tabSettings];
-    const index = tabs.indexOf(event.target);
-    if (index < 0) return;
-    let next;
-    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
-    else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = tabs.length - 1;
-    else return;
-    event.preventDefault();
-    switchTab(['compose', 'output', 'settings'][next]);
-    tabs[next].focus();
-  }
-
   form.addEventListener('submit', handleSubmit);
   promptInput.addEventListener('keydown', handleKeyDown);
-  apiKeyInput.addEventListener('input', handleApiKeySync);
-  apiKeyInput.addEventListener('change', handleApiKeySync);
   cancelBtn.addEventListener('click', handleCancel);
-  clearBtn.addEventListener('click', handleClear);
   copyBtn.addEventListener('click', handleCopy);
-  healthRetryBtn.addEventListener('click', handleRetryHealth);
-
-  tabCompose.addEventListener('click', handleTabComposeClick);
-  tabOutput.addEventListener('click', handleTabOutputClick);
-  tabSettings.addEventListener('click', handleTabSettingsClick);
-  tablist.addEventListener('keydown', handleTabKeys);
 
   pagerPrevBtn.addEventListener('click', handlePagerPrev);
   pagerNextBtn.addEventListener('click', handlePagerNext);
   pagerLatestBtn.addEventListener('click', handlePagerLatest);
-  settingsPrevBtn.addEventListener('click', handleSettingsPrev);
-  settingsNextBtn.addEventListener('click', handleSettingsNext);
 
   // Initialize health check
   if (options.pollHealth !== false) {
@@ -1097,25 +652,18 @@ export function mountPrompt(root, options = {}) {
   function dispose() {
     outputResizeObserver?.disconnect();
     unsubscribe();
+    if (typeof unsubscribeConnection === 'function') {
+      unsubscribeConnection();
+      unsubscribeConnection = null;
+    }
     form.removeEventListener('submit', handleSubmit);
     promptInput.removeEventListener('keydown', handleKeyDown);
-    apiKeyInput.removeEventListener('input', handleApiKeySync);
-    apiKeyInput.removeEventListener('change', handleApiKeySync);
     cancelBtn.removeEventListener('click', handleCancel);
-    clearBtn.removeEventListener('click', handleClear);
     copyBtn.removeEventListener('click', handleCopy);
-    healthRetryBtn.removeEventListener('click', handleRetryHealth);
-
-    tabCompose.removeEventListener('click', handleTabComposeClick);
-    tabOutput.removeEventListener('click', handleTabOutputClick);
-    tabSettings.removeEventListener('click', handleTabSettingsClick);
-    tablist.removeEventListener('keydown', handleTabKeys);
 
     pagerPrevBtn.removeEventListener('click', handlePagerPrev);
     pagerNextBtn.removeEventListener('click', handlePagerNext);
     pagerLatestBtn.removeEventListener('click', handlePagerLatest);
-    settingsPrevBtn.removeEventListener('click', handleSettingsPrev);
-    settingsNextBtn.removeEventListener('click', handleSettingsNext);
 
     clearTimeout(copyTimer);
     copyTimer = null;

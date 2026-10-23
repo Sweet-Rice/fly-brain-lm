@@ -8,8 +8,9 @@ For the current firing rule and a full-model comparison of disabled, idle,
 recording and live instrumentation, see [model activity](ACTIVITY.md#full-inference-measurement).
 The stage-only timings below predate the issue #3 host-mask extraction change.
 The fly-brain dashboard layout (2026-10-21) later raised static geometry to
-16,516,164 bytes in five steady buffers; its software-adapter measurements are in
-the [app README](app/README.md#fly-brain-schematic). The tables below are unchanged.
+16,516,164 bytes in five steady buffers. See the
+[app guide](app/README.md#graph-and-decoded-readout) for current workspace behavior;
+the historical measurements below are unchanged.
 
 ## Target and environment
 
@@ -159,8 +160,10 @@ python -m http.server 8772 --bind 127.0.0.1 --directory .
 ```
 
 Open `http://127.0.0.1:8772/harness/app/stress.html` and run both benchmark
-buttons. For the main harness, run this finite feed, then enter its printed URL
-in `http://127.0.0.1:8772/harness/app/`:
+buttons. For the live WebGPU workspace, start the finite feed below, stop the
+static server, and run `python -m harness.app_server --port 8772 --viz-url <printed-stream-URL>`.
+Open the bare `http://127.0.0.1:8772/app/` URL and select Graph. This is a synthetic
+graph-only profiling source, not a model; do not submit prompts against it.
 
 ```console
 python -m harness.stress --serve --rate 120 --seconds 120

@@ -401,11 +401,19 @@ test("mountInspector keyboard select form validates input, selects node, and emi
     assert.deepEqual(selectedEvents[0], { id: 42 });
     assert.equal(findById(root, "neuron-id").textContent, "42");
 
-    // Clear button
-    const clearBtn = findById(root, "inspector-clear-btn");
-    clearBtn.dispatchEvent(new Event("click"));
+    // Selecting another neuron replaces selection
+    input.value = "99";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    assert.equal(errorEl.textContent, "");
     assert.equal(selectedEvents.length, 2);
-    assert.deepEqual(selectedEvents[1], { id: null });
+    assert.deepEqual(selectedEvents[1], { id: 99 });
+    assert.equal(findById(root, "neuron-id").textContent, "99");
+
+
+    // Deselection via selectNode(null)
+    disposer.selectNode(null);
+    assert.equal(selectedEvents.length, 3);
+    assert.deepEqual(selectedEvents[2], { id: null });
     assert.equal(findById(root, "neuron-details").hidden, true);
 
     disposer();
@@ -684,9 +692,15 @@ test("mountInspector functions when canvas is null (selection absent GPU still w
     assert.equal(findById(root, "neuron-id").textContent, "10");
     assert.equal(findById(root, "neuron-details").hidden, false);
 
-    // Clear works
-    const clearBtn = findById(root, "inspector-clear-btn");
-    clearBtn.dispatchEvent(new Event("click"));
+    // Selecting another neuron replaces selection
+    input.value = "20";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    assert.equal(findById(root, "neuron-id").textContent, "20");
+    assert.equal(findById(root, "neuron-details").hidden, false);
+
+
+    // Deselection works via selectNode(null)
+    disposer.selectNode(null);
     assert.equal(findById(root, "neuron-details").hidden, true);
 
     disposer();

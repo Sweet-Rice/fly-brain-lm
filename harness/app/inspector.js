@@ -213,9 +213,7 @@ export function mountInspector(root, canvas = null) {
   input.placeholder = "e.g. 7";
   const selectBtn = createEl("button", "inspector-select-btn", "inspector-btn", "Inspect");
   selectBtn.type = "submit";
-  const clearBtn = createEl("button", "inspector-clear-btn", "inspector-btn", "Clear");
-  clearBtn.type = "button";
-  inputGroup.append(input, selectBtn, clearBtn);
+  inputGroup.append(input, selectBtn);
   const errorMsg = createEl("div", "inspector-select-error", "inspector-error");
   errorMsg.setAttribute("role", "alert");
   form.append(formLabel, inputGroup, errorMsg);
@@ -628,9 +626,6 @@ export function mountInspector(root, canvas = null) {
       return;
     }
     selectNode(num, { notifyCanvas: true });
-  });
-  clearBtn.addEventListener("click", () => {
-    selectNode(null, { notifyCanvas: true });
   });
 
   // Canvas event handlers

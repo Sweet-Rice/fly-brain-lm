@@ -25,8 +25,6 @@ export const READOUT_DOM_IDS = Object.freeze({
   TOKEN_STATUS: 'readout-token-status',
   PIECE_GROUP: 'readout-piece-group',
   PIECE_BADGE: 'readout-piece-badge',
-  PIECE_PREV: 'readout-piece-prev',
-  PIECE_NEXT: 'readout-piece-next',
   TEXT_BOX: 'readout-text',
   CONTROLS: 'readout-controls',
   PREV_BTN: 'readout-prev',
@@ -53,7 +51,6 @@ export const READOUT_CLASSES = Object.freeze({
   TOKEN_STATUS: 'readout-token-status',
   PIECE_GROUP: 'readout-piece-group',
   PIECE_BADGE: 'readout-piece-badge',
-  PIECE_BTN: 'readout-piece-btn',
   TEXT_BOX: 'readout-text-box',
   CONTROLS: 'readout-controls',
   BTN: 'readout-btn',
@@ -192,26 +189,14 @@ export function mountReadout(root, canvas) {
   const pieceGroup = document.createElement('span');
   pieceGroup.className = READOUT_CLASSES.PIECE_GROUP;
 
-  const piecePrevBtn = document.createElement('button');
-  piecePrevBtn.id = READOUT_DOM_IDS.PIECE_PREV;
-  piecePrevBtn.className = `${READOUT_CLASSES.BTN} ${READOUT_CLASSES.PIECE_BTN}`;
-  piecePrevBtn.type = 'button';
-  piecePrevBtn.title = 'Previous text piece';
-  piecePrevBtn.textContent = '‹';
 
   const pieceBadge = document.createElement('span');
   pieceBadge.id = READOUT_DOM_IDS.PIECE_BADGE;
   pieceBadge.className = READOUT_CLASSES.PIECE_BADGE;
   pieceBadge.textContent = '';
 
-  const pieceNextBtn = document.createElement('button');
-  pieceNextBtn.id = READOUT_DOM_IDS.PIECE_NEXT;
-  pieceNextBtn.className = `${READOUT_CLASSES.BTN} ${READOUT_CLASSES.PIECE_BTN}`;
-  pieceNextBtn.type = 'button';
-  pieceNextBtn.title = 'Next text piece';
-  pieceNextBtn.textContent = '›';
 
-  pieceGroup.append(piecePrevBtn, pieceBadge, pieceNextBtn);
+  pieceGroup.append(pieceBadge);
   tokenMeta.append(tokenIdBadge, tokenStatusBadge, pieceGroup);
 
   const textBox = document.createElement('div');
@@ -320,8 +305,6 @@ export function mountReadout(root, canvas) {
       if (totalPieces > 1) {
         pieceGroup.style.display = '';
         pieceBadge.textContent = `Piece ${pieceIdx + 1}/${totalPieces}`;
-        piecePrevBtn.disabled = pieceIdx === 0;
-        pieceNextBtn.disabled = pieceIdx === totalPieces - 1;
       } else {
         pieceGroup.style.display = 'none';
         pieceBadge.textContent = '';
@@ -347,6 +330,7 @@ export function mountReadout(root, canvas) {
       prevBtn.disabled = isAtFirst;
       nextBtn.disabled = isAtLast;
       latestBtn.disabled = followLatest || (tokIdx === totalTokens - 1 && pieceIdx === totalPieces - 1);
+      controls.style.display = totalTokens > 1 || totalPieces > 1 ? '' : 'none';
 
       posLabel.textContent = `${tokIdx + 1}/${totalTokens} · cap 128${omittedTokens ? ` · ${omittedTokens} omitted` : ''}`;
 
@@ -374,8 +358,6 @@ export function mountReadout(root, canvas) {
       if (totalPieces > 1) {
         pieceGroup.style.display = '';
         pieceBadge.textContent = `Piece ${pieceIdx + 1}/${totalPieces}`;
-        piecePrevBtn.disabled = pieceIdx === 0;
-        pieceNextBtn.disabled = pieceIdx === totalPieces - 1;
       } else {
         pieceGroup.style.display = 'none';
         pieceBadge.textContent = '';
@@ -389,6 +371,7 @@ export function mountReadout(root, canvas) {
       prevBtn.disabled = pieceIdx === 0;
       nextBtn.disabled = pieceIdx === totalPieces - 1;
       latestBtn.disabled = followLatest || pieceIdx === totalPieces - 1;
+      controls.style.display = totalPieces > 1 ? '' : 'none';
       posLabel.textContent = `${pieceIdx + 1}/${totalPieces}${followLatest ? ' (latest)' : ''}`;
 
     } else {
@@ -406,6 +389,7 @@ export function mountReadout(root, canvas) {
       prevBtn.disabled = true;
       nextBtn.disabled = true;
       latestBtn.disabled = true;
+      controls.style.display = 'none';
       posLabel.textContent = '—';
     }
   }
@@ -557,40 +541,6 @@ export function mountReadout(root, canvas) {
     renderCard();
   });
 
-  piecePrevBtn.addEventListener('click', () => {
-    followLatest = false;
-    if (completionTokens.length > 0) {
-      const tokIdx = selectedTokenIndex >= 0 ? selectedTokenIndex : completionTokens.length - 1;
-      selectedTokenIndex = tokIdx;
-      const pieces = splitIntoPieces(completionTokens[tokIdx].token_text, PIECE_SIZE);
-      selectedPieceIndex = Math.max(0, (selectedPieceIndex >= 0 ? selectedPieceIndex : pieces.length - 1) - 1);
-    } else if (localGenerationState?.text) {
-      const pieces = splitIntoPieces(localGenerationState.text, PIECE_SIZE);
-      const pieceIdx = selectedSsePieceIndex >= 0 ? selectedSsePieceIndex : pieces.length - 1;
-      selectedSsePieceIndex = Math.max(0, pieceIdx - 1);
-    }
-    renderCard();
-  });
-
-  pieceNextBtn.addEventListener('click', () => {
-    if (completionTokens.length > 0) {
-      const tokIdx = selectedTokenIndex >= 0 ? selectedTokenIndex : completionTokens.length - 1;
-      selectedTokenIndex = tokIdx;
-      const activeTok = completionTokens[tokIdx];
-      const pieces = splitIntoPieces(activeTok.token_text, PIECE_SIZE);
-      const pieceIdx = selectedPieceIndex >= 0 ? selectedPieceIndex : 0;
-      if (pieceIdx < pieces.length - 1) {
-        selectedPieceIndex = pieceIdx + 1;
-      }
-    } else if (localGenerationState?.text) {
-      const pieces = splitIntoPieces(localGenerationState.text, PIECE_SIZE);
-      const pieceIdx = selectedSsePieceIndex >= 0 ? selectedSsePieceIndex : 0;
-      if (pieceIdx < pieces.length - 1) {
-        selectedSsePieceIndex = pieceIdx + 1;
-      }
-    }
-    renderCard();
-  });
 
   // --- Canvas & Layout Events ---
   const onReadoutLayout = (event) => {

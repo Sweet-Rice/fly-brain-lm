@@ -5,14 +5,16 @@ This module provides a no-build, stdlib-only HTTP server combining:
    recordings, protocol fixtures), confined to the harness directory without
    exposing repository secrets or permitting path traversal.
    The root path ("/" and "/app") redirects to "/app/".
-2. Fixed-target reverse proxy for OpenAI-compatible model servers (e.g. model.serve.serve).
+2. Fixed-target reverse proxy for OpenAI-compatible model servers.
    Whitelisted routes:
      GET  /health
      GET  /v1/models
      POST /v1/completions
      POST /v1/chat/completions
    All other proxy routes or arbitrary URLs are rejected.
-3. Incremental SSE (Server-Sent Events) streaming with cancellation propagation:
+3. Application configuration endpoint:
+   GET /app-config returns JSON {"stream_url": "/stream" or null}, no-store.
+4. Incremental SSE (Server-Sent Events) streaming with cancellation propagation:
    When downstream clients (such as browser AbortController) disconnect, the proxy
    detects the disconnection via bounded select polling, breaks the stream, and
    immediately tears down and closes the upstream HTTP connection (resetting the socket
@@ -22,15 +24,19 @@ This module provides a no-build, stdlib-only HTTP server combining:
    completes its in-progress token step and halts upon its next socket write or flush
    when BrokenPipeError/ConnectionResetError is raised, releasing the engine lock and
    generation resources.
-4. Optional model-server child launcher (--model-ckpt):
-   Distinguishes model loading (HTTP 503 model_loading) from child exit (HTTP 503
-   model_exited) when upstream connections are refused, and enriches GET /health responses
-   with checkpoint identity ({"name": "<basename>", "sha256": "<hex>"}) without exposing
-   full filesystem paths.
+5. Optional model-server child launcher (--model-ckpt):
+   Launches harness.telemetry.serve as an owned child, deriving stream_url from child
+   arguments (default port 8765, explicit --viz-port), distinguishes model loading
+   (HTTP 503 model_loading) from child exit (HTTP 503 model_exited), refuses to
+   proxy an exited child's endpoint, and enriches GET /health with checkpoint identity
+   ({"name": "<basename>", "sha256": "<hex>"}) without exposing full filesystem paths.
 
 Usage:
-    python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
-    python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --model-ckpt <ckpt> --model-arg=--viz-port --model-arg=8767
+    # Proxy-only mode with explicit visualization stream
+    python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --viz-url ws://127.0.0.1:8765/stream
+
+    # Single-launcher owned mode (runs harness.telemetry.serve)
+    python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --model-ckpt <ckpt> --viz-port 8767
 """
 
 import argparse
@@ -45,6 +51,7 @@ from pathlib import Path
 import posixpath
 import select
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -54,6 +61,7 @@ import urllib.parse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8772
+DEFAULT_VIZ_PORT = 8765
 DEFAULT_API_URL = "http://127.0.0.1:8771"
 MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024  # 10 MB limit on incoming JSON payloads
 STREAM_SELECT_TIMEOUT = 0.25  # Bounded polling interval (seconds) for disconnect detection
@@ -93,6 +101,117 @@ def validate_loopback_url(url: str) -> urllib.parse.SplitResult:
     if not is_loopback_host(host):
         raise ValueError(f"Upstream API host must be literal loopback, got {host!r}")
     return parsed
+
+
+def validate_loopback_ws_url(url: str) -> urllib.parse.SplitResult:
+    """Validate that the configured visualization URL uses ws/wss and targets loopback."""
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError(f"Visualization URL must be a non-empty string, got {url!r}")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("ws", "wss"):
+        raise ValueError(f"Visualization URL scheme must be ws or wss, got {parsed.scheme!r}")
+    host = parsed.hostname or ""
+    if not is_loopback_host(host):
+        raise ValueError(f"Visualization host must be literal loopback, got {host!r}")
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise ValueError("Visualization URLs cannot contain credentials, queries, or fragments")
+    if parsed.port == 0:
+        raise ValueError("Visualization port must be between 1 and 65535")
+    return parsed
+
+
+def check_viz_urls_agree(explicit_url: str, derived_url: str) -> None:
+    """Ensure explicit visualization URL agrees with the derived child stream URL."""
+    parsed_exp = validate_loopback_ws_url(explicit_url)
+    parsed_der = urllib.parse.urlsplit(derived_url)
+    exp_port = parsed_exp.port or (443 if parsed_exp.scheme == "wss" else 80)
+    der_port = parsed_der.port or (443 if parsed_der.scheme == "wss" else 80)
+    exp_host = "127.0.0.1" if parsed_exp.hostname == "localhost" else parsed_exp.hostname
+    if (parsed_exp.scheme != parsed_der.scheme or exp_host != parsed_der.hostname
+            or exp_port != der_port or parsed_exp.path != parsed_der.path):
+        raise ValueError(
+            f"Explicit --viz-url ({explicit_url}) contradicts owned model visualization stream ({derived_url})"
+        )
+
+
+def parse_viz_port(value: Any) -> int:
+    """Parse and validate a loopback visualization port number."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid --viz-port: {value!r} is not an integer")
+    if not (1 <= port <= 65535):
+        raise ValueError(f"Invalid --viz-port: {port} is out of range 1-65535")
+    return port
+
+
+
+
+def resolve_owned_binding(
+    ckpt_path: Path,
+    api_url: str,
+    viz_url: Optional[str] = None,
+    viz_port: Optional[int] = None,
+    model_id: Optional[str] = None,
+    record: Optional[str] = None,
+    model_args: Optional[List[str]] = None,
+) -> Tuple["ModelProcess", str]:
+    """Resolve child process arguments and visualization stream URL for owned launch.
+
+    Runs harness.telemetry.serve as child process, deriving manifest stream_url
+    from child arguments and validating consistency.
+    """
+    ckpt_path = Path(ckpt_path).expanduser().resolve()
+    if not ckpt_path.is_file():
+        raise ValueError(f"checkpoint not found: {ckpt_path.name}")
+
+    parsed_api = validate_loopback_url(api_url)
+    if (parsed_api.scheme != "http" or parsed_api.path not in ("", "/")
+            or parsed_api.username is not None or parsed_api.password is not None
+            or parsed_api.query or parsed_api.fragment):
+        raise ValueError("Owned model API URL must be a plain HTTP loopback origin")
+    api_host = parsed_api.hostname or "127.0.0.1"
+    api_port = parsed_api.port or 80
+
+    model_args = model_args or []
+    owned_flags = {"--ckpt", "--host", "--port", "--viz-port", "--model-id", "--record", "--no-viz"}
+    for arg in model_args:
+        if arg.partition("=")[0] in owned_flags:
+            raise ValueError(f"App-owned model option cannot be overridden with --model-arg: {arg.partition('=')[0]}")
+    resolved_viz_port = parse_viz_port(viz_port if viz_port is not None else DEFAULT_VIZ_PORT)
+
+    derived_viz_url = f"ws://127.0.0.1:{resolved_viz_port}/stream"
+
+    # Check for contradictory independent --viz-url
+    if viz_url is not None:
+        check_viz_urls_agree(viz_url, derived_viz_url)
+
+    child_argv = [
+        sys.executable,
+        "-m",
+        "harness.telemetry.serve",
+        "--ckpt",
+        str(ckpt_path),
+        "--host",
+        api_host,
+        "--port",
+        str(api_port),
+        "--viz-port",
+        str(resolved_viz_port),
+    ]
+    if model_id is not None:
+        child_argv.extend(["--model-id", model_id])
+    if record is not None:
+        child_argv.extend(["--record", record])
+    child_argv.extend(model_args)
+
+    model_proc = ModelProcess(
+        child_argv,
+        cwd=REPO_ROOT,
+        ckpt_path=ckpt_path,
+        viz_url=derived_viz_url,
+    )
+    return model_proc, derived_viz_url
 
 
 def resolve_static_asset(requested_path: str, assets_dir: Path) -> Optional[Path]:
@@ -174,13 +293,19 @@ class ModelProcess:
     and reports checkpoint identity (name and sha256) via GET /health.
     """
 
-    def __init__(self, argv: List[str], cwd: Path, ckpt_path: Path) -> None:
+    def __init__(
+        self,
+        argv: List[str],
+        cwd: Path,
+        ckpt_path: Path,
+        viz_url: Optional[str] = None,
+    ) -> None:
         self.argv = list(argv)
         self.cwd = Path(cwd)
         self.ckpt_path = Path(ckpt_path)
+        self.viz_url = viz_url
         self._proc: Optional[subprocess.Popen] = None
         self._checkpoint: Optional[Dict[str, str]] = None
-
     def start(self) -> None:
         self._proc = subprocess.Popen(self.argv, cwd=str(self.cwd))
         thread = threading.Thread(target=self._hash_checkpoint, name="checkpoint-sha256", daemon=True)
@@ -238,13 +363,16 @@ class AppHTTPServer(ThreadingHTTPServer):
         api_url: str,
         assets_dir: Path,
         model_process: Optional[ModelProcess] = None,
+        viz_url: Optional[str] = None,
     ):
         super().__init__(server_address, RequestHandlerClass)
         self.api_url = api_url
         self.parsed_api_url = validate_loopback_url(api_url)
         self.assets_dir = assets_dir.resolve()
         self.model_process = model_process
-
+        if viz_url is not None:
+            validate_loopback_ws_url(viz_url)
+        self.viz_url = viz_url
 
 class AppRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for static harness assets and proxied model API routes."""
@@ -270,6 +398,21 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
+    def _send_app_config(self, send_body: bool = True) -> None:
+        """Send application configuration manifest containing stream_url."""
+        manifest = {"stream_url": "/stream" if self.server.viz_url else None}
+        body = json.dumps(manifest).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if send_body:
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
     def _send_json_error(self, code: int, msg: str, error_type: str = "invalid_request_error") -> None:
         """Send a standard JSON error response conforming to OpenAI error conventions."""
         self._send_json(code, {"error": {"message": msg, "type": error_type}})
@@ -279,13 +422,26 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         self._send_json_error(code, message or "Error", "invalid_request_error")
 
     def do_HEAD(self) -> None:
-        """Handle HEAD requests for static assets."""
+        """Handle HEAD requests for static assets or app config."""
+        url_split = urllib.parse.urlsplit(self.path)
+        norm_path = posixpath.normpath(url_split.path.rstrip("/"))
+        if norm_path == "/app-config":
+            self._send_app_config(send_body=False)
+            return
         self._handle_static_or_redirect(send_body=False)
 
     def do_GET(self) -> None:
-        """Route GET requests: whitelisted model proxy routes or static assets."""
+        """Route GET requests: whitelisted model proxy routes, app config, or static assets."""
         url_split = urllib.parse.urlsplit(self.path)
         norm_path = posixpath.normpath(url_split.path.rstrip("/"))
+
+        if norm_path == "/app-config":
+            self._send_app_config(send_body=True)
+            return
+
+        if norm_path == "/stream":
+            self._proxy_stream()
+            return
 
         if norm_path in PROXY_GET_ROUTES:
             self._proxy_request(norm_path, url_split.query)
@@ -301,6 +457,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         """Route POST requests: whitelisted model proxy routes only."""
         url_split = urllib.parse.urlsplit(self.path)
         norm_path = posixpath.normpath(url_split.path.rstrip("/"))
+
+        if norm_path == "/app-config":
+            self._send_json_error(405, f"Method POST not allowed for {norm_path}", "invalid_request_error")
+            return
 
         if norm_path in PROXY_POST_ROUTES:
             self._proxy_request(norm_path, url_split.query)
@@ -355,8 +515,61 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
+    def _proxy_stream(self) -> None:
+        """Tunnel the fixed loopback graph stream through the app's origin."""
+        self.close_connection = True
+        model_process = self.server.model_process
+        if model_process is not None and (code := model_process.poll()) is not None:
+            self._send_json_error(503, f"The model server process exited with code {code}.", "model_exited")
+            return
+        if self.server.viz_url is None:
+            self._send_json_error(503, "No model stream is configured.", "stream_unavailable")
+            return
+        if self.headers.get("Upgrade", "").lower() != "websocket":
+            self._send_json_error(400, "A WebSocket upgrade is required.")
+            return
+
+        target = urllib.parse.urlsplit(self.server.viz_url)
+        connection_class = http.client.HTTPSConnection if target.scheme == "wss" else http.client.HTTPConnection
+        conn = connection_class(target.hostname, target.port or (443 if target.scheme == "wss" else 80), timeout=10)
+        response_started = False
+        try:
+            headers = {"Connection": "Upgrade", "Upgrade": "websocket"}
+            for name in ("Origin", "Sec-WebSocket-Key", "Sec-WebSocket-Version",
+                         "Sec-WebSocket-Protocol", "Sec-WebSocket-Extensions"):
+                if value := self.headers.get(name):
+                    headers[name] = value
+            conn.request("GET", target.path or "/", headers=headers)
+            upstream = conn.sock
+            self.connection.settimeout(10)
+            sockets = (self.connection, upstream)
+            # Relay the handshake and frames together: an HTTP response parser
+            # could buffer and strand the mapping sent immediately after 101.
+            while True:
+                readable = [sock for sock in sockets if isinstance(sock, ssl.SSLSocket) and sock.pending()]
+                if not readable:
+                    readable = select.select(sockets, [], [])[0]
+                for source in readable:
+                    data = source.recv(65536)
+                    if not data:
+                        return
+                    if source is upstream:
+                        response_started = True
+                        self.connection.sendall(data)
+                    else:
+                        upstream.sendall(data)
+        except (OSError, http.client.HTTPException):
+            if not response_started:
+                self._send_json_error(503, "The model stream is unavailable.", "stream_unavailable")
+        finally:
+            conn.close()
+
     def _proxy_request(self, norm_path: str, query: str) -> None:
         """Proxy a whitelisted request to the fixed upstream loopback API."""
+        model_process = self.server.model_process
+        if model_process is not None and (code := model_process.poll()) is not None:
+            self._send_json_error(503, f"The model server process exited with code {code}.", "model_exited")
+            return
         body_bytes = None
         if self.command == "POST":
             content_len_hdr = self.headers.get("Content-Length")
@@ -635,23 +848,34 @@ def make_server(
     api_url: str = DEFAULT_API_URL,
     assets_dir: Optional[Union[str, Path]] = None,
     model_process: Optional[ModelProcess] = None,
+    viz_url: Optional[str] = None,
 ) -> AppHTTPServer:
     """Create and bind an AppHTTPServer instance.
 
     Parameters:
-        host: Literal loopback IP or hostname (default: "127.0.0.1").
+        host: Loopback host by default; "0.0.0.0" opts into network access.
         port: Port to bind (default: 8772). Passing port=0 binds an OS-assigned free port.
         api_url: Upstream model API URL (default: "http://127.0.0.1:8771"). Must be loopback.
         assets_dir: Directory containing harness assets (default: harness/ directory).
         model_process: Optional ModelProcess child instance managing upstream model server.
+        viz_url: Optional loopback WebSocket URL for the visualization stream.
 
     Returns:
         AppHTTPServer instance ready for serve_forever().
     """
-    if not is_loopback_host(host):
-        raise ValueError(f"App server host must be literal loopback, got {host!r}")
+    if not (is_loopback_host(host) or host == "0.0.0.0"):
+        raise ValueError(f"App server host must be literal loopback or 0.0.0.0, got {host!r}")
 
     validate_loopback_url(api_url)
+
+    if viz_url is not None:
+        validate_loopback_ws_url(viz_url)
+    elif model_process is not None and getattr(model_process, "viz_url", None) is not None:
+        viz_url = model_process.viz_url
+        validate_loopback_ws_url(viz_url)
+
+    if viz_url is not None and model_process is not None and getattr(model_process, "viz_url", None) is not None:
+        check_viz_urls_agree(viz_url, model_process.viz_url)
 
     if assets_dir is None:
         resolved_assets = Path(__file__).resolve().parent
@@ -667,40 +891,57 @@ def make_server(
         api_url=api_url,
         assets_dir=resolved_assets,
         model_process=model_process,
+        viz_url=viz_url,
     )
 
 
-def main() -> None:
+def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="FlyBrain WebGPU Harness & OpenAI Model Proxy Server")
-    parser.add_argument("--host", default=DEFAULT_HOST, help=f"Loopback host to bind (default: {DEFAULT_HOST})")
+    parser.add_argument("--host", default=DEFAULT_HOST, help=f"Host to bind; 0.0.0.0 exposes the app to the network (default: {DEFAULT_HOST})")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port to bind (default: {DEFAULT_PORT})")
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help=f"Upstream model API URL (default: {DEFAULT_API_URL})")
     parser.add_argument("--assets-dir", default=None, help="Directory to serve harness assets from (default: harness/)")
-    parser.add_argument("--model-ckpt", default=None, help="Optional checkpoint: launch python -m model.serve.serve on the --api-url port and report its loading/exit state")
-    parser.add_argument("--model-arg", action="append", default=[], metavar="ARG", help="Extra argument for the launched model server (repeatable; use --model-arg=--viz-port --model-arg=8767 for dash-prefixed values)")
+    parser.add_argument("--viz-url", default=None, help="Explicit visualization WebSocket URL (e.g. ws://127.0.0.1:8765/stream)")
+    parser.add_argument("--model-ckpt", default=None, help="Optional checkpoint: launch python -m harness.telemetry.serve on the --api-url port and report its loading/exit state")
+    parser.add_argument("--viz-port", type=int, default=None, help="Port for owned model server visualization stream (default: 8765)")
+    parser.add_argument("--model-id", default=None, help="Model ID for owned model server")
+    parser.add_argument("--record", default=None, help="NDJSON path to record visualization stream")
+    parser.add_argument("--model-arg", action="append", default=[], metavar="ARG", help="Extra non-binding model option (repeatable, e.g. --model-arg=--device --model-arg=cpu); use app flags for checkpoint, endpoints, model ID, and recording")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     model_process = None
+    viz_url = args.viz_url
     try:
         if args.model_ckpt:
-            ckpt_path = Path(args.model_ckpt).expanduser().resolve()
-            if not ckpt_path.is_file():
-                raise ValueError(f"checkpoint not found: {ckpt_path.name}")
-            parsed_api = validate_loopback_url(args.api_url)
-            api_port = parsed_api.port or (443 if parsed_api.scheme == "https" else 80)
-            model_process = ModelProcess(
-                [sys.executable, "-m", "model.serve.serve", "--ckpt", str(ckpt_path),
-                 "--host", "127.0.0.1", "--port", str(api_port), *args.model_arg],
-                cwd=REPO_ROOT,
-                ckpt_path=ckpt_path,
+            model_process, viz_url = resolve_owned_binding(
+                ckpt_path=Path(args.model_ckpt),
+                api_url=args.api_url,
+                viz_url=args.viz_url,
+                viz_port=args.viz_port,
+                model_id=args.model_id,
+                record=args.record,
+                model_args=args.model_arg,
             )
+        else:
+            if args.viz_port is not None:
+                raise ValueError("--viz-port requires --model-ckpt")
+            if args.model_id is not None:
+                raise ValueError("--model-id requires --model-ckpt")
+            if args.record is not None:
+                raise ValueError("--record requires --model-ckpt")
+            if args.model_arg:
+                raise ValueError("--model-arg requires --model-ckpt")
+            if viz_url is not None:
+                validate_loopback_ws_url(viz_url)
+
         server = make_server(
             host=args.host,
             port=args.port,
             api_url=args.api_url,
             assets_dir=args.assets_dir,
             model_process=model_process,
+            viz_url=viz_url,
         )
     except ValueError as e:
         sys.stderr.write(f"Error starting app server: {e}\n")
@@ -718,8 +959,6 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        # serve_forever runs on this thread and has already returned here; shutdown() would block
-        # forever if an interrupt arrived before serve_forever started, so only close the socket.
         server.server_close()
         if model_process is not None:
             model_process.stop()

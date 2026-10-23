@@ -94,8 +94,8 @@ test('long-token piece navigation preserves Unicode and new local runs discard o
   view.accept(token(1, { token_text: text }));
   flush();
   const pieces = [JSON.parse(el('text').textContent)];
-  while (!el('piece-prev').disabled) {
-    el('piece-prev').click();
+  while (!el('prev').disabled) {
+    el('prev').click();
     pieces.unshift(JSON.parse(el('text').textContent));
   }
   assert.equal(pieces.join(''), text);

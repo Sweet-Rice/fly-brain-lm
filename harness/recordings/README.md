@@ -17,29 +17,26 @@ identical bytes. Stream lines do not contain inference timings.
 
 ## Review without a model
 
-From a clean checkout, serve the harness with any static HTTP server. Python's
-standard library is sufficient:
+Use the separate Canvas viewer with a recorded WebSocket replay. From the
+repository root:
 
-```bash
-python -m http.server 8772 --bind 127.0.0.1 --directory harness
-```
-
-Open <http://127.0.0.1:8772/app/>, choose **Or open a recording**, and select
-`harness/recordings/reference.ndjson`. Playback runs locally in the browser;
-no model dependencies, checkpoint, CUDA, or running model are needed. The
-browser needs WebGPU for the graph; stream validation and playback diagnostics
-remain available when WebGPU is unavailable. Playback speed sets a synthetic
-delay between fire messages, not the speed of the original inference.
-
-For a WebSocket replay instead, install `websockets` and run:
-
-```bash
+```console
+python -m pip install websockets
 python -m harness.replay_prompt harness/recordings/reference.ndjson --port 8768
 ```
 
-Connect the harness to `ws://127.0.0.1:8768/stream`. This replays the unchanged
-recording from the start for each connection and repeats it, including both
-mapping epochs.
+In another terminal:
+
+```console
+python -m http.server 8770 --bind 127.0.0.1 --directory harness/example
+```
+
+Open <http://127.0.0.1:8770/?ws=ws://127.0.0.1:8768/stream>. This needs no
+checkpoint, CUDA, PyTorch, tokenizer, or running inference model. Each connection
+replays the unchanged recording from its beginning, including both mapping
+epochs, then loops. Replay timing is synthetic, not measured inference speed.
+The live `/app/` workspace no longer has a recording file picker or playback
+controls; see the [Canvas guide](../example/README.md).
 
 ## Regenerate and validate
 

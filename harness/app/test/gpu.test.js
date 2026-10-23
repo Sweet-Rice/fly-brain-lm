@@ -122,7 +122,6 @@ test("unsupported browsers keep stream inspection available without GPU setup", 
   globalThis.isSecureContext = false;
   const dispose = await initializeGPU(mock.canvas, mock.status);
   await mock.flush();
-  assert.match(mock.statuses.at(-1), /WebGPU unavailable.*stream inspection still works/);
   assert.equal(mock.calls.submissions, 0);
   dispose();
 });

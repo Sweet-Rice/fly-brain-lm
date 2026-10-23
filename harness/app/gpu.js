@@ -334,7 +334,7 @@ export async function initializeGPU(canvas, onStatus, labels = null) {
     }));
   };
   if (!globalThis.isSecureContext || !navigator.gpu) {
-    onStatus("WebGPU unavailable. Use a supported browser at http://127.0.0.1; stream inspection still works.");
+    onStatus("WebGPU unavailable. Use a supported browser on HTTPS or localhost; stream inspection still works.");
     return dispose;
   }
   try {

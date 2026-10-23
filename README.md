@@ -5,125 +5,96 @@ pairing WebGPU activity inspection with a prompt composer and neuron inspector. 
 registry includes the legacy `vibe` scaffold and the `vibe2` fly-dopamine
 implementation. Fresh initializations are **untrained**; their generated text has no
 quality claim.
+
+## Start the live vibe2 workspace
+
+Install the [model dependencies](harness/WORKFLOW.md#2-install-the-real-model-dependencies),
+then run from the repository root. Trained checkpoints are private and are not
+bundled. [Import the original TinyStories weights with their matching wiring](model/README.md#vibe2-trained-fly-dopamine-weights),
+then launch:
+
+```console
+python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --model-ckpt model/checkpoints/vibe2_tinystories.pt --viz-port 8767 --model-id vibe2-tinystories
+```
+
+Do not run `model.init_model` against that checkpoint: it overwrites its output
+with random, untrained weights. For an untrained smoke model, use the separate
+scratch-path example in the [workspace guide](harness/app/README.md).
+
+Open **http://127.0.0.1:8772/app/** in a WebGPU-capable Chrome or Edge browser.
+No query string, endpoint field, or Connect button is needed. The app server owns
+one telemetry-enabled model child and supplies the browser's graph binding via
+`/app-config`. Its HTTP inference API, graph activity, and producer token metadata
+come from that same child. Ctrl-C stops both processes.
+
+The page connects before generation. Wait for `vibe2-tinystories`, the live
+connection status, and **1,959 nodes / 19,037 edges**, then enter a prompt.
+Generate requires both a healthy API and an accepted live mapping. The launcher
+reports loading/exited failures and the checkpoint basename/SHA-256; it does not
+silently substitute a recording or another backend.
+
+## Browser workspace
+
+- **Graph**: Real activity, camera pan/zoom/fit, and node picking. Accepted pairs
+  light the directed edge and both endpoints for 600 ms; inactive topology stays
+  translucent. The layout is schematic, not anatomical coordinates.
+- **Prompt**: One textarea above paginated output, with **Generate**, **Stop**, and
+  **Copy**. `Ctrl+Enter` / `Cmd+Enter` submits without swallowing ordinary newlines
+  or IME composition. New generation replaces old output; Copy preserves the full
+  Unicode output across pages. Stop preserves partial text and closes the upstream
+  connection, with best-effort termination on the model's next write.
+- **Neuron**: Actual mapped-ID lookup, Identity / Links / Activity, paginated
+  directed neighbors, and up to 32 observed steps per neuron. Missing body IDs
+  remain explicitly unavailable; observed fires are not biological spikes.
+- **No control-panel setup**: Source and Settings screens, manual endpoints,
+  playback controls, parameter/API-key fields, redundant retry/clear buttons, and
+  frontend run IDs are absent. Model/checkpoint identity, usage, finish reason,
+  and connection state are read-only. Health polling and stream reconnection are
+  automatic.
+- **MBON → decoded text**: Actual MBON nodes connect to a readout hub and decoded
+  text on the graph. Producer telemetry supplies real token IDs and
+  processed/unprocessed status, including a potentially unprocessed last sample.
+  Dashed paths are architectural links, not per-MBON word attribution or
+  biological synapses. Legacy mappings without MBONs do not gain invented nodes.
+- **One viewport**: Graph and workbench share wide screens; Graph / Prompt / Neuron
+  switch the visible pane on narrow screens. Long output and neighbor lists are
+  paged instead of placed in scrolling panels.
+
+The checkpoint selects `vibe` versus `vibe2`; `--model-id` is only a label.
+Fresh checkpoints are **untrained**. The frozen engine under `model/serve/`
+remains untouched. The no-build frontend keeps public mount/dispose functions,
+DOM-free controllers, and the portable
+[v1 inference contract](harness/app/inference-contract/v1/README.md).
+
+See the [workspace guide](harness/app/README.md) for an explicit proxy-only setup,
+binding/port rules, reusable client APIs, and troubleshooting. The app server is
+loopback by default; `--host 0.0.0.0` opts into trusted-network access. It is not
+public secure hosting. Choose free ports rather than stopping someone else's service.
+
 <a id="start-with-the-recorded-example"></a>
 
-## Start with the offline graph
+## Review a recording without a model
 
-From a clean checkout, only Python 3 and a WebGPU-capable Chrome or Edge browser
-are needed. There is no frontend build, package installation, checkpoint, CUDA,
-tokenizer download or running model for this path.
-
-Run from the repository root:
+Use the separate [Canvas example](harness/example/README.md) and recorded-stream
+replay. This path needs Python and `websockets`, but no checkpoint, PyTorch,
+tokenizer, Node.js, or running inference model:
 
 ```console
-python -m http.server 8772 --bind 127.0.0.1 --directory harness
+python -m pip install websockets
+python -m harness.replay_prompt harness/recordings/reference.ndjson --port 8768
 ```
 
-On systems where Python is named `python3`, use that name instead. Open
-**http://127.0.0.1:8772/app/**, click **Or open a recording**, and choose
-[`harness/recordings/reference.ndjson`](harness/recordings/reference.ndjson).
-Expect five groups, **1,958 nodes and 19,037 directed edges**, followed by
-brightening edges as recorded fires play. Use Pause, Play, Restart and Playback
-speed to inspect the capture. Timing is synthetic; the events were generated
-by the real untrained model. Keep the page server running; Ctrl-C stops it.
-This works without `websockets`, PyTorch or Node.js. After checkout, the offline
-demo needs no external network access. Serve it on loopback as shown, rather
-than opening the HTML with `file://`. In this static offline mode, the prompt
-composer detects that the local model proxy is unavailable (static-page mode),
-while recording playback and graph controls continue to work normally.
-
-## Browser workspace: prompt composer and live inspection
-
-The browser workspace extends the no-build ES module architecture with public
-mount functions (`mountPrompt`, `mountInspector`) that return clean disposers, backed
-by DOM-free inference (`GenerationController`) and topology (`NeuronIndex`) classes.
-Future UI ports (such as React) can import and reuse the same state machines and
-indexing directly without provisional interface aliases (`.controller`, `.CLASSES`).
-Existing visualization sources and receivers are unaffected and operate normally even
-when the model API is missing or unstarted.
-
-The frontend consumes [UI inference contract v1](harness/app/inference-contract/v1/README.md),
-with portable TypeScript declarations and a checked, development-only session
-fixture. The browser remains no-build; TypeScript is only a development checker.
-
-Checkpoints are gitignored and not bundled; initialize an untrained scratch checkpoint
-first (default `model.init_model` writes `model/checkpoints/<impl>.pt`, e.g. `vibe.pt`,
-not `init.pt`; do not overwrite private trained checkpoints):
+In another terminal:
 
 ```console
-# Step 1: Initialize an untrained checkpoint (vibe or vibe2) to a new path
-python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt
-
-# Terminal 1: Model server (HTTP API on 8771, visualization stream on 8767)
-python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8767
-
-# Terminal 2: App server (serves /app/ and proxies /health + /v1 on 8772 to 8771)
-python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771
+python -m http.server 8770 --bind 127.0.0.1 --directory harness/example
 ```
 
-Or start both with one command — the app server launches the model server itself,
-shows `Model loading: …` until the checkpoint loads, then reports the checkpoint name
-and SHA-256 prefix, and stops the model on Ctrl-C:
-
-```console
-python -m harness.app_server --port 8772 --api-url http://127.0.0.1:8771 --model-ckpt /tmp/flybrain-scratch.pt --model-arg=--viz-port --model-arg=8767
-```
-
-See [running the live workspace](harness/app/README.md#run-the-live-workspace-real-model--app-server)
-for prerequisites, URL configuration and common failures.
-
-Open **http://127.0.0.1:8772/app/?ws=ws://127.0.0.1:8767/stream** in a WebGPU-capable
-Chrome or Edge browser.
-- **Port safety**: Port **8772** serves static assets and provides same-origin reverse
-  proxying for `/health` and `/v1` endpoints (defaulting 8772 -> 8771) to avoid browser
-  CORS restrictions. Port **8771** is the model HTTP API. Port **8767** is the
-  visualization WebSocket stream. Run one source per port; leave program defaults 8765
-  and 8000 alone.
-- **Local development proxy**: The app server reverse proxy is a loopback convenience
-  to keep browser SSE/fetch same-origin, not a public secure hosting server. The
-  upstream `model/serve/serve.py` remains frozen and untouched.
-- **Implementation selection**: Selected via checkpoint initialization (default
-  `init_model` writes `model/checkpoints/<impl>.pt`, e.g. `vibe.pt`, not `init.pt`; see
-  [model initialization](model/README.md)), not through a runtime serving dropdown.
-  Do not overwrite private trained checkpoints. The model server loads whichever
-  implementation is declared in the checkpoint.
-- **Prompt Composer**: Nonblank prompt editor with `Ctrl+Enter` / `Cmd+Enter` submit
-  (without swallowing regular newlines or IME composition), Generate, Cancel, Clear,
-  and Copy buttons. Clear resets both prompt input and output when inactive. Copy
-  copies generated output only, preserving Unicode whitespace and rendering via
-  `textContent` rather than HTML. Settings validate and reject invalid parameters:
-  integer `max_tokens` (1..128; upstream server cap is separate), finite `temperature`
-  (0..2), integer `top_k` (1..50257), and an optional memory-only API key with no storage
-  persistence, normalized and synced to health checks. Model readiness queries `/health`
-  with manual retry and safe unmount.
-- **Cancellation**: Client abort closes the upstream HTTP connection; upstream detects
-  the broken pipe on its next token write and terminates generation (best effort, no
-  authoritative wire cancel acknowledgment).
-- **Separate WebSocket stream**: The visualization WebSocket is configured separately
-  (via `/?ws=ws://127.0.0.1:8767/stream` or the UI field). Tokens and graph fires stream
-  over separate transports; never claim fire/token alignment or synced tokens; loading
-  status and checkpoint identity appear only with the `--model-ckpt` launcher.
-- **Neuron Inspector**: Clicking a node picks it; dragging above the movement threshold
-  pans the camera without selecting; clicking the background clears selection. Supports
-  sparse ID input lookup, neighbor navigation with pagination for high-degree nodes,
-  and capped observed fire history per node (up to 32 steps) within the current epoch.
-  Neuron role reflects the declared mapping group (e.g. `Sensory`, `Expansion_0`, `Output`),
-  never speculative anatomy. Body IDs are not exported in standard mappings and are
-  explicitly displayed as unavailable / not exported (never inferred).
-  "No observed fire does not mean inactive; fire means positive KC code, not biological spikes."
-- **One-screen visuals**: Brain, Generate, Inspect, and Source views
-  share one viewport. Prompt controls use Compose / Output / Settings tabs; generated
-  text and high-degree neighbor lists are paged rather than put in scrolling panels.
-  Inactive nodes and synapses are translucent; accepted pairs light both endpoints
-  and their directed synapse for 600 ms.
-- **MBON → decoded text**: Dashed links connect the mapped MBON nodes to a model-readout
-  hub and decoded-text card directly on the graph; there is no separate memory tab.
-  These are architectural paths, not measured per-MBON word attribution or biological
-  synapses. The ordinary model server supplies explicitly labeled local SSE text.
-  For producer token IDs and stepped/unprocessed status, use
-  `python -m harness.telemetry.serve --ckpt <vibe2-checkpoint> --port 8771 --viz-port 8767`
-  with the app server in proxy-only mode. Legacy mappings without MBON nodes do not
-  acquire invented readout nodes or links.
+Open **http://127.0.0.1:8770/?ws=ws://127.0.0.1:8768/stream**. This is the separate
+recorded Canvas viewer, not the live `/app/` workspace. The reference contains
+real untrained-model events and adjacent provenance
+[metadata](harness/recordings/reference.ndjson.metadata.json); replay timing is
+synthetic. There is no file picker or playback setup in the live app.
 
 ## Run the real model or tests
 
@@ -150,7 +121,7 @@ private trained checkpoint is bundled or independently verified here. See
 | Folder | Documentation |
 |---|---|
 | `harness/` | [End-to-end workflow](harness/WORKFLOW.md), [stream tools](harness/README.md), [measured limits](harness/PERFORMANCE.md) |
-| `harness/app/` | [Standalone WebGPU viewer, playback and controls](harness/app/README.md) |
+| `harness/app/` | [Bound live WebGPU workspace: graph, prompt, and neurons](harness/app/README.md) |
 | `harness/example/` | [Separate legacy Canvas demo and fixed-prompt replay](harness/example/README.md) |
 | `model/` | [Checkpoint initialization and model prerequisites](model/README.md) |
 | `model/vibe/`, `model/vibe2/` | [Model implementations and selection](model/README.md#choosing-an-implementation) |
@@ -173,11 +144,11 @@ criteria to implementation, tests, browser evidence and pending child PRs.
 | Service | Loopback port |
 |---|---:|
 | App server HTTP (static assets + `/health` and `/v1` proxy) | 8772 |
-| Standalone offline page HTTP (`http.server`) | 8772 |
 | Model HTTP API | 8771 |
 | Existing chat or API visualization WebSocket | 8767 |
 | Workflow live WebSocket | Chosen by the OS with `--port 0`; use the printed URL |
 | Legacy recorded replay WebSocket / Canvas page | 8768 / 8770 |
 Run one source per stream port. If a port is occupied, choose another and update
-the browser URL; do not stop someone else's process. Leave existing services on
-the program defaults, 8765 and 8000, alone.
+the app-server configuration (or the separate Canvas viewer URL); do not stop
+someone else's process. Leave existing services on the program defaults, 8765
+and 8000, alone.

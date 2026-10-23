@@ -1468,7 +1468,7 @@ test('mountPrompt preserves complete output across pages and announces once', as
 
   const doc = new MockDocument();
   const root = doc.createElement('div');
-  const dispose = mountPrompt(root, { controller, pollHealth: false });
+  const dispose = mountPrompt(root, { controller, pollHealth: false, defaultMaxTokens: 128 });
 
   try {
     await controller.checkHealth();
@@ -1489,7 +1489,7 @@ test('mountPrompt preserves complete output across pages and announces once', as
     });
 
     root.getElementById(PROMPT_DOM_IDS.INPUT).value = 'Long output test';
-    root.getElementById(PROMPT_DOM_IDS.MAX_TOKENS).value = '128';
+    // defaultMaxTokens: 128 passed to mountPrompt
 
     const finished = new Promise(resolve => {
       const off = controller.subscribe(s => {

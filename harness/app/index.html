@@ -14,7 +14,7 @@
         <p class="eyebrow">VISUALS / LIVE WORKSPACE</p>
         <h1 class="header-title">Fly Brain LM</h1>
       </div>
-      <p id="source-status" class="status-pill" role="status">Disconnected. Connect or open a recording.</p>
+      <p id="source-status" class="status-pill" role="status">Connecting to the model…</p>
       <div class="header-counters" aria-label="Mapping summary">
         <span><b id="nodes">0</b> nodes</span>
         <span><b id="edges">0</b> synapses</span>
@@ -22,10 +22,9 @@
     </header>
 
     <nav class="workspace-tabs" aria-label="Workspace views">
-      <button id="view-brain" type="button" aria-pressed="false" aria-controls="graph-panel">Brain</button>
-      <button id="view-generate" type="button" aria-pressed="true" aria-controls="prompt-panel">Generate</button>
-      <button id="view-inspector" type="button" aria-pressed="false" aria-controls="inspector-panel-section">Inspect</button>
-      <button id="view-source" type="button" aria-pressed="false" aria-controls="source-panel">Source</button>
+      <button id="view-brain" type="button" aria-pressed="false" aria-controls="graph-panel">Graph</button>
+      <button id="view-generate" type="button" aria-pressed="true" aria-controls="prompt-panel">Prompt</button>
+      <button id="view-inspector" type="button" aria-pressed="false" aria-controls="inspector-panel-section">Neuron</button>
     </nav>
 
     <div class="workspace-grid">
@@ -54,7 +53,7 @@
           <span><i class="readout-swatch" aria-hidden="true"></i>Readout path</span>
           <span class="orientation-note brain-only">Dorsal ↑</span>
         </div>
-        <p class="graph-caption">Wheel to zoom · drag to pan · click to inspect</p>
+        <p class="graph-caption">Wheel to zoom · drag to pan · click a node · step <b id="step">—</b> · <b id="fires">0</b> activity frames</p>
         <p id="graph-help" class="sr-only">Nodes and synapses are translucent when inactive. Accepted activity lights the connection and both endpoints for 600 ms. This is positive KC-code activity, not biological spikes. MBON readout links show the architectural route through the model to decoded text, not per-node word attribution. With the graph focused use arrow keys to pan, +/− to zoom, and 0 or Home to fit. Positions are schematic, not measured anatomy. Inspector selection uses a white ring, magenta incoming edges, and orange outgoing edges.</p>
       </section>
 
@@ -69,62 +68,6 @@
           <div id="inspector-workspace"></div>
         </section>
 
-        <section id="source-panel" class="workspace-panel source-section" aria-labelledby="source-heading" hidden>
-          <div class="panel-heading"><p class="eyebrow">03 / CONNECTION &amp; PROTOCOL</p><h2 id="source-heading">Source</h2></div>
-          <nav class="source-tabs" aria-label="Source views">
-            <button id="source-view-setup" type="button" aria-pressed="true" aria-controls="source-setup">Connect</button>
-            <button id="source-view-legend" type="button" aria-pressed="false" aria-controls="source-legend">Groups</button>
-            <button id="source-view-stream" type="button" aria-pressed="false" aria-controls="source-stream">Stream</button>
-          </nav>
-          <div id="source-setup" class="source-body">
-            <form id="connection">
-              <label for="endpoint">WebSocket endpoint</label>
-              <input id="endpoint" type="url" required spellcheck="false" aria-describedby="endpoint-help">
-              <div class="connection-row"><button type="submit">Connect</button><button id="disconnect" type="button">Disconnect</button></div>
-              <p id="endpoint-help" class="hint">Use the stream URL printed by the model server.</p>
-            </form>
-            <div class="recording-block">
-              <label for="recording">Open a recording</label>
-              <input id="recording" type="file" accept=".ndjson,.jsonl,application/x-ndjson">
-            </div>
-            <div class="transport-strip" aria-label="Recording playback controls">
-              <div class="transport-controls">
-                <button id="recording-play" type="button" disabled>Play</button>
-                <button id="recording-pause" type="button" disabled>Pause</button>
-                <button id="recording-restart" type="button" disabled>Restart</button>
-              </div>
-              <div class="transport-speed-wrap">
-                <label for="recording-speed">Speed</label>
-                <select id="recording-speed" disabled aria-describedby="recording-help">
-                  <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
-                </select>
-              </div>
-            </div>
-            <p id="recording-help" class="hint">Saved recordings play locally, 500 ms between fires at 1×. They are not live generation.</p>
-          </div>
-          <div id="source-legend" class="source-body" hidden>
-            <table class="groups-table">
-              <caption class="sr-only">Groups in mapping order</caption>
-              <thead><tr><th scope="col"><span class="sr-only">Colour</span></th><th scope="col">Group</th><th scope="col">ID</th><th scope="col">Nodes</th><th scope="col">Placement</th></tr></thead>
-              <tbody id="groups"><tr><td colspan="5">No mapping received.</td></tr></tbody>
-            </table>
-            <div class="groups-pagination">
-              <button id="groups-prev" type="button" aria-label="Previous groups page" disabled>Previous</button>
-              <span id="groups-page">Page 1 of 1</span>
-              <button id="groups-next" type="button" aria-label="Next groups page" disabled>Next</button>
-            </div>
-          </div>
-          <div id="source-stream" class="source-body" hidden>
-            <dl class="metrics">
-              <div><dt>Last step</dt><dd id="step">—</dd></div>
-              <div><dt>Accepted fires</dt><dd id="fires">0</dd></div>
-              <div><dt>Dropped messages</dt><dd id="dropped">0</dd></div>
-              <div><dt>Undeclared pairs</dt><dd id="pairs-dropped">0</dd></div>
-            </dl>
-            <p id="protocol-status" role="status">Waiting for a mapping.</p>
-            <p id="last-fire" class="hint">No accepted fire event.</p>
-          </div>
-        </section>
       </aside>
     </div>
   </main>
