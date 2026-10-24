@@ -5,6 +5,9 @@ compute shaders. One recurrent model produces text, graph fires and token-aligne
 readout telemetry. `GenerationController` consumes an in-page fetch/SSE transport;
 there are no network requests to `/health`, `/v1/*` or `/stream`.
 
+The atlas renders real FlyWire anatomy in Three.js/WebGL2, with illustrative model
+neuron positions and traveling signals driven by that same browser runtime.
+
 **No external services are required:** the website serves its own model files and
 your browser performs inference on your GPU. No Python, API key, account or
 WebSocket backend is needed. A deployed site needs only static HTTPS hosting;
@@ -38,6 +41,11 @@ while using the page; Ctrl-C stops it.
 
 ### Static deployment
 
+For a model-free 3D preview, open `/brain-preview.html` and select **Play recording**.
+It uses the bundled reference recording (1,958 nodes); the trained model in the main
+workspace provides its own mapping (1,959 nodes). Scientific scope, Blender files
+and rebuild instructions are in [the brain asset guide](../assets/brain/README.md).
+
 `npm --prefix frontend run build` includes the model assets under `dist/models/`.
 Host all of `dist/` on HTTPS; no inference or WebSocket reverse proxy is needed.
 `npm --prefix frontend run preview` serves the bundle on loopback port 4173.
@@ -47,7 +55,8 @@ Only the visual theme preference is retained in `localStorage`.
 ### Network HTTPS and WebGPU
 
 WebGPU requires loopback HTTP or trusted HTTPS. A private network or Tailnet IP
-over plain HTTP is not a secure context: neither model nor graph can run there.
+over plain HTTP is not a secure context, so model inference cannot run there.
+The standalone WebGL2 recording preview does not require WebGPU.
 For private Tailscale HTTPS, enable Serve/HTTPS, then allow the exact device hostname:
 
 ```console
@@ -72,6 +81,9 @@ Use private Serve, not public Funnel.
 - `AtlasWorkspace` subscribes to runtime telemetry and feeds `handle.publish(message)`.
   `mountLiveAtlas` validates protocol messages, owns canvas/inspector/readout DOM and
   exposes `publish`, `fit`, `zoom`, `setGeneration` and `dispose`. It owns no socket.
+  React injects `src/brain/viewer.ts` through `initializeRenderer`; legacy consumers
+  retain the default WebGPU renderer. The 3D viewer handles orbit, picking, anatomy
+  and fire animation, and cancels pending initialization when unmounted.
 - Graph fire counters are coalesced per animation frame, not stored per fire in React.
   The readout receives lifecycle and per-token events from the same inference loop.
   The final completion token is intentionally `unprocessed`: no unused model step.
@@ -103,21 +115,22 @@ at most `1e-2`, and any KC mismatch only where the reference top-K margin is bel
 
 ## Controls and data limits
 
-- **Canvas interaction**: Clicking a node picks it; dragging above the movement threshold pans
+- **Canvas interaction**: Clicking a node picks it; dragging above the movement threshold orbits
   the camera without selecting; clicking the canvas background clears selection.
-- **Graph navigation**: Drag canvas or use keyboard arrow keys to pan; Fit, Zoom In (`+`), and
-  Zoom Out (`-`) buttons control framing (`+`/`-` keys zoom, `0`/`Home` fit).
+- **Graph navigation**: Drag or use arrow keys to orbit; right-drag pans; scroll zooms.
+  Fit / `0` / Home frames the whole brain, Circuit focuses the model, and `+` / `-` zoom.
 - **Generation settings**: The composer’s Settings button opens a modal rather than expanding
   the page. Done, the close button, Escape, or a backdrop click dismiss it and restore focus
   to Settings. Invalid generation parameters reopen the dialog at the first invalid field.
-- **Connection dots**: Idle connections are not drawn. Each validated fire sends one dot
-  from source to target over the 600 ms activity window; a repeated fire restarts it.
+- **Connection dots**: Faint sampled connections provide resting context. Each validated fire sends one dot
+  from source to target over a 900 ms visual window; a repeated fire restarts it.
   Nothing animates between fires. Reduced motion shows stationary dots along the fired
   connection for the same window, and hidden pages pause drawing.
 - **Neuron Inspector**: Sparse node ID search, incoming/outgoing neighbor degree counts,
   paginated neighbor lists (10 per page with `Prev` and `Next`), and bounded observed fire history
   per node (capped at 32 steps) within the current epoch.
-- **Data caveats**: Coordinates are illustrative layout projections; connectome body IDs are
+- **Data caveats**: Anatomy is a FlyWire template; model coordinates and routes are illustrative
+  within one hemisphere, not registered cell reconstructions. Connectome body IDs are
   not exported in standard mappings and are explicitly displayed as unavailable / not exported
   (never inferred or speculative anatomy). The Activity tab's tooltip explains
   that fires are positive KC code, not biological spikes; no observed fire does not mean inactive.
@@ -191,7 +204,21 @@ rather than clipping controls.
 `src/main.tsx` imports the global stylesheet before `App` so the declared cascade
 layer order is established before atlas component styles, including in production.
 
-## Focused verification evidence
+## Combined 3D and browser inference verification
+
+- 256 harness tests and four 3D graph tests passed, including every fire pair
+  from all 35 golden model steps against the trained 1,959-node 3D layout.
+- Headless Chrome ran actual React GPU inference: all 32 golden tokens matched,
+  all 35 fire steps reached the atlas, and the canvas pixels changed during activity.
+  No backend inference/stream requests or runtime/shader errors occurred.
+- Recording preview, idle rendering, orbit, reduced motion, mobile sizing, reset
+  and the React inspector passed. Frontend format, lint, typecheck, production build
+  and harness inference typecheck passed.
+- Reproduce with `node scripts/test-brain-graph.mjs` and
+  `node scripts/test-brain-browser.mjs` from the repository root. The browser check
+  needs hydrated LFS weights and Chrome with WebGPU support.
+
+## PR #62 inference verification evidence
 
 - Python exporter/reference tests: 8 passed. Harness tests: 256 passed; inference
   typecheck passed. Frontend format, lint, typecheck and production build passed.

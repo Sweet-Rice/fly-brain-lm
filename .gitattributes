@@ -4,3 +4,8 @@ harness/recordings/*.ndjson text eol=lf
 # Match Prettier's line endings on Windows checkouts.
 frontend/** text eol=lf
 frontend/public/models/vibe2-tinystories/weights.bin filter=lfs diff=lfs merge=lfs -text
+
+# Scientific meshes and Blender scenes must retain their exact binary bytes.
+*.glb binary -eol
+*.blend binary -eol
+*.ply binary -eol

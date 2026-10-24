@@ -25,6 +25,12 @@ export interface LiveAtlasOptions {
   inspector: HTMLElement;
   readout?: HTMLElement;
   connectionStyle?: 'lines' | 'dots';
+  initializeRenderer?: (
+    canvas: HTMLCanvasElement,
+    onStatus: (message: string) => void,
+    labels: HTMLElement | null,
+    options: { signal?: AbortSignal; connectionStyle?: 'lines' | 'dots' },
+  ) => Promise<() => void>;
   onState: (snapshot: LiveAtlasSnapshot) => void;
 }
 
