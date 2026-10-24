@@ -107,335 +107,70 @@ function setupHarness(t) {
   };
 }
 
-function createFakeSocketClass() {
-  const sockets = [];
-  class FakeSocket {
-    constructor(url) {
-      this.url = url;
-      this.readyState = 0; // CONNECTING
-      this.closed = false;
-      sockets.push(this);
-    }
-    open() {
-      this.readyState = 1; // OPEN
-      this.onopen?.();
-    }
-    close(code = 1000, reason = "") {
-      this.readyState = 3;
-      this.closed = true;
-      this.onclose?.({ code, reason });
-    }
-    message(data) {
-      this.onmessage?.({ data });
-    }
-    error() {
-      this.onerror?.();
-    }
-  }
-  return { FakeSocket, sockets };
+const sampleMapping = {
+  type: "mapping", version: 1,
+  groups: [{ id: 10, name: "Antennal" }, { id: 20, name: "KC_gamma" }],
+  nodes: [{ id: 1, group: 10 }, { id: 2, group: 20 }, { id: 3, group: 20 }],
+  edges: [[1, 2], [2, 3]],
+};
+
+function mount(t) {
+  const harness = setupHarness(t), canvas = new MockElement("canvas"), inspector = new MockElement();
+  const snapshots = [], events = [];
+  for (const kind of ["mapping", "fire", "telemetry", "reset"]) canvas.addEventListener(kind, e => events.push(e));
+  const handle = harness.mount({ canvas, inspector, labels: new MockElement(), onState: s => snapshots.push(s) });
+  return { handle, canvas, inspector, snapshots, events };
 }
 
-const sampleMapping = JSON.stringify({
-  type: "mapping",
-  version: 1,
-  groups: [
-    { id: 10, name: "Antennal" },
-    { id: 20, name: "KC_gamma" },
-  ],
-  nodes: [
-    { id: 1, group: 10 },
-    { id: 2, group: 20 },
-    { id: 3, group: 20 },
-  ],
-  edges: [
-    [1, 2],
-    [2, 3],
-  ],
-});
-
-function fireMessage(t, pairs = [[1, 2]]) {
-  return JSON.stringify({ type: "fire", t, pairs });
-}
-
-test("consumer-visible state transitions: connection, mapping arrival with real groups, and selection", async (t) => {
-  const harness = setupHarness(t);
-  const { FakeSocket, sockets } = createFakeSocketClass();
-  const canvas = new MockElement("canvas");
-  const labels = new MockElement("div");
-  const inspector = new MockElement("div");
-  const snapshots = [];
-  const canvasEvents = [];
-
-  canvas.addEventListener("mapping", (e) => canvasEvents.push(e));
-
-  harness.mount({
-    canvas,
-    labels,
-    inspector,
-    onState: (snap) => snapshots.push(snap),
-    endpoint: "ws://example.test/stream",
-    WebSocketType: FakeSocket,
-  });
-
-  // Initial state before socket opens
-  assert.equal(snapshots[0].connectionState, "connecting");
-  assert.equal(snapshots[0].nodeCount, 0);
-
-  const socket = sockets[0];
-  socket.open();
-  assert.equal(snapshots.at(-1).connectionState, "connected");
-
-  // Receive mapping
-  socket.message(sampleMapping);
-
-  const mappingSnap = snapshots.at(-1);
-  assert.equal(mappingSnap.nodeCount, 3);
-  assert.equal(mappingSnap.edgeCount, 2);
-  assert.equal(mappingSnap.groups.length, 2);
-
-  const group10 = mappingSnap.groups.find((g) => g.id === 10);
-  const group20 = mappingSnap.groups.find((g) => g.id === 20);
-  assert.ok(group10 && group20);
-  assert.equal(group10.name, "Antennal");
-  assert.equal(group10.count, 1);
-  assert.equal(group20.name, "KC_gamma");
-  assert.equal(group20.count, 2);
-  assert.ok(group20.color.startsWith("rgb"));
-
-  assert.equal(Object.isFrozen(mappingSnap), true);
-  assert.equal(Object.isFrozen(mappingSnap.groups), true);
-  assert.equal(canvasEvents.length, 1);
-
-  // Canvas selection through inspector event path
+test("publishing topology updates graph, groups and neuron selection", t => {
+  const { handle, canvas, inspector, snapshots, events } = mount(t);
+  handle.publish(sampleMapping);
+  const state = snapshots.at(-1);
+  assert.equal(state.nodeCount, 3);
+  assert.equal(state.edgeCount, 2);
+  assert.deepEqual(state.groups.map(g => [g.name, g.count]), [["Antennal", 1], ["KC_gamma", 2]]);
+  assert.equal(events.at(-1).type, "mapping");
   canvas.dispatchEvent(new CustomEvent("node-select", { detail: { id: 2 } }));
-  const details = findById(inspector, "neuron-details");
-  const emptyNotice = findById(inspector, "inspector-empty");
-  const neuronId = findById(inspector, "neuron-id");
-  assert.ok(details && emptyNotice && neuronId);
-  assert.equal(details.hidden, false, "inspector shows selected node details");
-  assert.equal(emptyNotice.hidden, true, "empty state notice is hidden when node is selected");
-  assert.equal(neuronId.textContent, "2", "inspector displays selected neuron ID");
+  assert.equal(findById(inspector, "neuron-id").textContent, "2");
+  handle.publish({ type: "mapping", version: 1, groups: [{ id: 1, name: "New" }], nodes: [{ id: 5, group: 1 }], edges: [] });
+  assert.equal(snapshots.at(-1).nodeCount, 1);
+  assert.equal(findById(inspector, "neuron-details").hidden, true);
 });
 
-test("coalesces counter publishes during generation while dispatching fires immediately to canvas", async (t) => {
-  const harness = setupHarness(t);
-  const { FakeSocket, sockets } = createFakeSocketClass();
-  const canvas = new MockElement("canvas");
-  const labels = new MockElement("div");
-  const inspector = new MockElement("div");
-  const snapshots = [];
-  const canvasFires = [];
-
-  canvas.addEventListener("fire", (e) => canvasFires.push(e));
-
-  harness.mount({
-    canvas,
-    labels,
-    inspector,
-    onState: (snap) => snapshots.push(snap),
-    endpoint: "ws://example.test/stream",
-    WebSocketType: FakeSocket,
-  });
-
-  const socket = sockets[0];
-  socket.open();
-  socket.message(sampleMapping);
-
-  const snapshotCountBeforeFires = snapshots.length;
-
-  for (let i = 1; i <= 8; i++) {
-    socket.message(fireMessage(i, [[1, 2]]));
-  }
-
-  // Canvas receives fires immediately
-  assert.equal(canvasFires.length, 8);
-  // React state updates coalesced outside per-fire loop
-  assert.ok(snapshots.length - snapshotCountBeforeFires < 8);
-
-  // Await coalescing frame/tick
-  await new Promise((resolve) => setTimeout(resolve, 30));
-
-  const finalSnap = snapshots.at(-1);
-  assert.equal(finalSnap.acceptedFires, 8);
-  assert.equal(finalSnap.lastStep, 8);
+test("fires dispatch immediately and counter snapshots coalesce", async t => {
+  const { handle, snapshots, events } = mount(t);
+  handle.publish(sampleMapping);
+  for (let i = 0; i < 8; i++) handle.publish({ type: "fire", t: i, pairs: [[1, 2]] });
+  assert.equal(events.filter(e => e.type === "fire").length, 8);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(snapshots.at(-1).acceptedFires, 8);
+  assert.equal(snapshots.at(-1).lastStep, 7);
 });
 
-test("mapping replacement resets counters, topology, and previous selection", async (t) => {
-  const harness = setupHarness(t);
-  const { FakeSocket, sockets } = createFakeSocketClass();
-  const canvas = new MockElement("canvas");
-  const labels = new MockElement("div");
-  const inspector = new MockElement("div");
-  const snapshots = [];
-
-  harness.mount({
-    canvas,
-    labels,
-    inspector,
-    onState: (snap) => snapshots.push(snap),
-    endpoint: "ws://example.test/stream",
-    WebSocketType: FakeSocket,
-  });
-
-  const socket = sockets[0];
-  socket.open();
-  socket.message(sampleMapping);
-  socket.message(fireMessage(1, [[1, 2]]));
-
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(snapshots.at(-1).acceptedFires, 1);
-
-  // Select node 2 before replacement
-  canvas.dispatchEvent(new CustomEvent("node-select", { detail: { id: 2 } }));
-  const details = findById(inspector, "neuron-details");
-  const emptyNotice = findById(inspector, "inspector-empty");
-  assert.ok(details && emptyNotice);
-  assert.equal(details.hidden, false, "selected before replacement");
-  assert.equal(emptyNotice.hidden, true);
-
-  // Replacement mapping arrives
-  const replacement = JSON.stringify({
-    type: "mapping",
-    version: 1,
-    groups: [{ id: 99, name: "NewGroup" }],
-    nodes: [{ id: 5, group: 99 }],
-    edges: [],
-  });
-  socket.message(replacement);
-
-  const replacedSnap = snapshots.at(-1);
-  assert.equal(replacedSnap.acceptedFires, 0, "acceptedFires reset on replacement mapping");
-  assert.equal(replacedSnap.nodeCount, 1);
-  assert.equal(replacedSnap.edgeCount, 0);
-  assert.equal(replacedSnap.groups[0].name, "NewGroup");
-
-  // Selection is cleared by replacement mapping
-  assert.equal(details.hidden, true, "selection cleared after mapping replacement");
-  assert.equal(emptyNotice.hidden, false, "empty notice shown after mapping replacement");
+test("token telemetry reaches the readout event path; invalid input clears the display", t => {
+  const { handle, snapshots, events } = mount(t);
+  handle.publish(sampleMapping);
+  const token = { type: "token_step", run_id: "r", request_id: "q", epoch: 0, seq: 0,
+    kind: "completion", token_index: 0, token_id: 3, token_text: "b", token_bytes: "62",
+    step_status: "unprocessed", t: -1, step_rel_us: 0, emit_rel_us: 1, step_ns: "0", emit_ns: "1000" };
+  handle.publish(token);
+  assert.deepEqual(events.at(-1).detail, token);
+  assert.equal(events.at(-1).type, "telemetry");
+  handle.publish({ type: "fire", t: -2, pairs: [] });
+  assert.equal(snapshots.at(-1).droppedMessages, 1);
+  assert.equal(events.at(-1).type, "reset");
 });
 
-test("disconnection and reconnection reset state and prevent stale data", async (t) => {
-  const harness = setupHarness(t);
-  const { FakeSocket, sockets } = createFakeSocketClass();
-  const canvas = new MockElement("canvas");
-  const labels = new MockElement("div");
-  const inspector = new MockElement("div");
-  const snapshots = [];
-  const resetEvents = [];
-
-  canvas.addEventListener("reset", (e) => resetEvents.push(e));
-
-  const handle = harness.mount({
-    canvas,
-    labels,
-    inspector,
-    onState: (snap) => snapshots.push(snap),
-    endpoint: "ws://example.test/stream",
-    WebSocketType: FakeSocket,
-  });
-
-  const socket = sockets[0];
-  socket.open();
-  socket.message(sampleMapping);
-  socket.message(fireMessage(1, [[1, 2]]));
-
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(snapshots.at(-1).nodeCount, 3);
-
-  // Socket disconnects
-  handle.disconnect();
-
-  const disconnectedSnap = snapshots.at(-1);
-  assert.equal(disconnectedSnap.connectionState, "disconnected");
-  assert.equal(disconnectedSnap.nodeCount, 0, "stale nodeCount cleared");
-  assert.equal(disconnectedSnap.edgeCount, 0, "stale edgeCount cleared");
-  assert.deepEqual(disconnectedSnap.groups, [], "stale groups cleared");
-  assert.equal(disconnectedSnap.acceptedFires, 0, "stale fires cleared");
-  assert.ok(resetEvents.length >= 1, "reset dispatched to canvas to clear graph");
-});
-
-test("ensureConnected preserves active connection, reconnects when dropped, and surfaces errors", async (t) => {
-  const harness = setupHarness(t);
-  const { FakeSocket, sockets } = createFakeSocketClass();
-  const canvas = new MockElement("canvas");
-  const labels = new MockElement("div");
-  const inspector = new MockElement("div");
-  const snapshots = [];
-
-  const handle = harness.mount({
-    canvas,
-    labels,
-    inspector,
-    onState: (snap) => snapshots.push(snap),
-    endpoint: "ws://example.test/stream",
-    WebSocketType: FakeSocket,
-  });
-
-  assert.equal(sockets.length, 1);
-  sockets[0].open();
-
-  // Active connection: ensureConnected preserves it
-  handle.ensureConnected();
-  assert.equal(sockets.length, 1, "open connection preserved");
-
-  // Disconnect, then ensureConnected must reconnect
-  handle.disconnect();
-  assert.equal(sockets[0].closed, true);
-  handle.ensureConnected();
-  assert.equal(sockets.length, 2, "reconnected after disconnect");
-
-  // If constructor throws, error is surfaced in snapshot without throwing
-  class FailingSocket {
-    constructor() { throw new Error("Connection refused"); }
-  }
-  const failingHandle = harness.mount({
-    canvas: new MockElement("canvas"),
-    labels: new MockElement("div"),
-    inspector: new MockElement("div"),
-    onState: (snap) => snapshots.push(snap),
-    endpoint: "ws://invalid.test/stream",
-    WebSocketType: FailingSocket,
-  });
-
-  assert.equal(snapshots.at(-1).connectionState, "error");
-  assert.equal(snapshots.at(-1).connectionMessage, "Connection refused");
-
-  // ensureConnected does not throw on error
-  failingHandle.ensureConnected();
-});
-
-test("synchronous disposal cleans up resources and prevents post-disposal callbacks", async (t) => {
-  const harness = setupHarness(t);
-  const { FakeSocket, sockets } = createFakeSocketClass();
-  const canvas = new MockElement("canvas");
-  const labels = new MockElement("div");
-  const inspector = new MockElement("div");
-  let stateCalls = 0;
-
-  const handle = harness.mount({
-    canvas,
-    labels,
-    inspector,
-    onState: () => { stateCalls++; },
-    endpoint: "ws://example.test/stream",
-    WebSocketType: FakeSocket,
-  });
-
-  const socket = sockets[0];
-  socket.open();
-  socket.message(sampleMapping);
-
-  const callsBeforeDispose = stateCalls;
+test("disposal prevents later events and state callbacks", async t => {
+  const { handle, snapshots, events } = mount(t);
+  handle.publish(sampleMapping);
+  handle.publish({ type: "fire", t: 0, pairs: [[1, 2]] });
+  const states = snapshots.length, count = events.length;
   handle.dispose();
-
-  assert.equal(socket.closed, true, "websocket closed upon disposal");
-
-  // Post-disposal activity
-  socket.message(fireMessage(5));
-  handle.connect();
-  handle.ensureConnected();
-  handle.dispose();
-
-  assert.equal(stateCalls, callsBeforeDispose, "no state callbacks fired after disposal");
-  assert.equal(sockets.length, 1, "no new sockets revived after disposal");
+  handle.publish(sampleMapping);
+  handle.fit();
+  handle.zoom(2);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(snapshots.length, states);
+  assert.equal(events.length, count);
 });

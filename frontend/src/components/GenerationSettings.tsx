@@ -4,10 +4,8 @@ import { Button, Field, Input } from './ui';
 import './GenerationSettings.css';
 
 export interface GenerationSettingsProps {
-  apiKey: string;
   isOpen: boolean;
   maxTokens: string;
-  onApiKeyChange: (value: string) => void;
   onClose: () => void;
   onMaxTokensChange: (value: string) => void;
   onTemperatureChange: (value: string) => void;
@@ -26,10 +24,8 @@ function CloseIcon() {
 }
 
 export function GenerationSettings({
-  apiKey,
   isOpen,
   maxTokens,
-  onApiKeyChange,
   onClose,
   onMaxTokensChange,
   onTemperatureChange,
@@ -184,21 +180,6 @@ export function GenerationSettings({
               ref={topKInputRef}
               type="number"
               value={topK}
-            />
-          </Field>
-
-          <Field
-            hint="Optional; held in memory only."
-            htmlFor="api-key"
-            label="API key"
-          >
-            <Input
-              autoComplete="off"
-              id="api-key"
-              onChange={(event) => onApiKeyChange(event.target.value)}
-              placeholder="Bearer token"
-              type="password"
-              value={apiKey}
             />
           </Field>
         </div>

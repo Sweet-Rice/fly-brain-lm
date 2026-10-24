@@ -1,120 +1,105 @@
 # FlyBrainLM prompt and live brain workspace
 
-An integrated React, TypeScript, and Vite workspace pairing FlyBrainLM HTTP prompt
-generation with an embedded live WebGPU brain viewer and neuron inspector. The application
-mounts the shared `harness/app/live-atlas.js` module in `AtlasWorkspace`, reusing the
-tested WebGPU rendering pipeline, neuron indexer, and protocol receiver, while
-`useGeneration` drives HTTP text generation and health polling.
+The React workspace runs trained `vibe2-tinystories` inference in pure WebGPU WGSL
+compute shaders. One recurrent model produces text, graph fires and token-aligned
+readout telemetry. `GenerationController` consumes an in-page fetch/SSE transport;
+there are no network requests to `/health`, `/v1/*` or `/stream`.
+
+**No external services are required:** the website serves its own model files and
+your browser performs inference on your GPU. No Python, API key, account or
+WebSocket backend is needed. A deployed site needs only static HTTPS hosting;
+Node.js and Git LFS are local setup tools, not requirements for visitors.
 
 ## Local development
 
 ### Prerequisites
 
-- Node.js 22+
-- A running FlyBrainLM model service with HTTP API (port 8771) and visualization stream (port 8765)
-
-### Starting the real model
-
-Checkpoints are gitignored and not bundled; initialize an untrained scratch checkpoint
-first (default `model.init_model` writes `model/checkpoints/<impl>.pt`, e.g. `vibe.pt`,
-not `init.pt`; do not overwrite private trained checkpoints):
-
-```console
-# Step 1: Initialize an untrained scratch checkpoint (vibe or vibe2) to a new path
-python -m model.init_model --impl vibe2 --out /tmp/flybrain-scratch.pt
-
-# Step 2: Start the model server with HTTP API on 8771 and visualization stream on 8765
-python -m model.serve.serve --ckpt /tmp/flybrain-scratch.pt --port 8771 --viz-port 8765
-```
-
-### Starting the frontend
+- Node.js 22+, Git LFS, and a WebGPU-capable Chrome or Edge browser.
+- Loopback HTTP or trusted HTTPS. No Python model server or API key.
+- Hydrated `public/models/vibe2-tinystories/weights.bin` (123,537,408 bytes).
 
 From the repository root:
 
 ```console
+git lfs install
+git lfs pull
 npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-Open `http://127.0.0.1:5173/`.
+Open `http://127.0.0.1:5173/`. The header reports download progress, then model
+readiness. Missing WebGPU, an unhydrated LFS pointer or missing assets produces an
+actionable error; Retry reloads a failed model. Device loss requires a page reload.
 
-### Same-origin routing and proxy configuration
+For a first run, wait for **Model ready · vibe2-tinystories**, enter
+`Once upon a time`, and click **Run prompt**. Open **Settings** and choose
+temperature `0` for repeatable greedy output. Keep the local dev server running
+while using the page; Ctrl-C stops it.
 
-- **Development (`5173`)**: The Vite development server proxies same-origin `/health` and
-  `/v1/*` HTTP requests to `FLYBRAIN_API_URL` (default `http://127.0.0.1:8771`), and
-  WebSocket upgrades on `/stream` to `FLYBRAIN_STREAM_URL` (default `ws://127.0.0.1:8765`).
-  The browser connects to same-origin `ws(s)://<host>/stream`, avoiding extra endpoint
-  configuration and browser mixed-content restrictions.
-- **Preview (`4173`)**: `npm --prefix frontend run preview` serves the production build
-  and uses the exact same Vite proxy rules for both HTTP and WebSocket upgrades.
-- **Production**: Deploy the static bundle from `frontend/dist/` behind a reverse proxy
-  (such as Nginx or Caddy) configured to route `/health` and `/v1/*` to the model HTTP
-  port and proxy WebSocket upgrade requests on `/stream` to the model visualization port.
-- **Configurable ports**: Set environment variables before starting Vite to override ports:
-  ```console
-  FLYBRAIN_API_URL=http://127.0.0.1:9001 FLYBRAIN_STREAM_URL=ws://127.0.0.1:9002 npm --prefix frontend run dev
-  ```
-  Never commit workstation URLs or credentials.
-- **Memory-only credentials**: The optional API key in the interface remains in
-  component/controller memory only and is never written to browser storage. Only the
-  visual theme preference is persisted in `localStorage`.
+### Static deployment
+
+`npm --prefix frontend run build` includes the model assets under `dist/models/`.
+Host all of `dist/` on HTTPS; no inference or WebSocket reverse proxy is needed.
+`npm --prefix frontend run preview` serves the bundle on loopback port 4173.
+For subpath deployments, set Vite's base path; the runtime uses `import.meta.env.BASE_URL`.
+Only the visual theme preference is retained in `localStorage`.
 
 ### Network HTTPS and WebGPU
 
-WebGPU requires a secure browser context: loopback HTTP or trusted HTTPS. Opening
-the workspace through a Tailnet IP over plain HTTP disables WebGPU; a private
-network alone does not make the browser origin secure.
-
-For private Tailscale HTTPS, enable Serve/HTTPS with your Tailnet administrator,
-then start Vite with the exact device hostname allowed:
+WebGPU requires loopback HTTP or trusted HTTPS. A private network or Tailnet IP
+over plain HTTP is not a secure context: neither model nor graph can run there.
+For private Tailscale HTTPS, enable Serve/HTTPS, then allow the exact device hostname:
 
 ```console
 FLYBRAIN_ALLOWED_HOSTS=<device>.<tailnet>.ts.net npm --prefix frontend run dev -- --host 0.0.0.0
 tailscale serve --bg http://127.0.0.1:5173
 ```
 
-Open the HTTPS URL reported by Tailscale, not the HTTP IP URL. Set
-`FLYBRAIN_API_URL` and `FLYBRAIN_STREAM_URL` as usual when the model uses
-non-default ports. `FLYBRAIN_ALLOWED_HOSTS` accepts a comma-separated explicit
-hostname list for both development and preview; it does not disable Vite's host
-checks. This uses private Serve, not public Funnel.
+Open the HTTPS URL reported by Tailscale. `FLYBRAIN_ALLOWED_HOSTS` is an explicit
+comma-separated hostname list for development and preview, not a bypass of host checks.
+Use private Serve, not public Funnel.
 
 ## Architecture and lifecycle
 
-- `src/App.tsx`: Page layout composing the prompt composer, model response bench, and
-  `AtlasWorkspace`. It coordinates generation submission with atlas connection via `onGenerate`.
-- `src/components/GenerationSettings.tsx`: Native modal dialog for generation parameters
-  and the memory-only API key, with keyboard focus cycling and inline validation.
-- `src/components/atlas/AtlasWorkspace.tsx`: Mounts `mountLiveAtlas` from `harness/app/live-atlas.js`.
-  It isolates DOM ownership within supplied container elements for the WebGPU canvas, region
-  labels, and neuron inspector, and exposes an imperative `LiveAtlasHandle` (`ensureConnected`,
-  `connect`, `disconnect`, `fit`, `zoom`, `dispose`) to callers.
-- `src/hooks/useGeneration.ts`: React adapter around the DOM-free `GenerationController` in
-  `harness/app/generation.js`, consuming types from `harness/app/inference-contract/v1/`.
-  Forwards `GenerationSubmitOptions` to ensure atlas connection on generation submit.
-- `src/hooks/useTheme.ts`: Central theme policy (operating system default, header toggle,
-  retained in `localStorage`).
-- `src/components/ui/`: Model-neutral design system primitives.
-- `vite.config.ts`: Configurable loopback development and preview proxy for HTTP and WebSocket.
+- `src/hooks/useGeneration.ts` owns one `Vibe2Runtime` and one `GenerationController`.
+  Runtime status changes trigger in-page health checks; there is no health polling.
+  Delayed disposal permits immediate development effect remounts.
+- `harness/app/vibe2/` contains the GPT-2 byte BPE tokenizer, sampler, asset loader,
+  topology builder, WGSL kernels, GPU scheduler and serialized completion runtime.
+- The engine keeps all weights and math float32, uses the tied embedding/output head,
+  and resets convolution and memory state per request. Graph step `t` persists across
+  requests. Block-0 positive KC code drives graph fires.
+- `AtlasWorkspace` subscribes to runtime telemetry and feeds `handle.publish(message)`.
+  `mountLiveAtlas` validates protocol messages, owns canvas/inspector/readout DOM and
+  exposes `publish`, `fit`, `zoom`, `setGeneration` and `dispose`. It owns no socket.
+- Graph fire counters are coalesced per animation frame, not stored per fire in React.
+  The readout receives lifecycle and per-token events from the same inference loop.
+  The final completion token is intentionally `unprocessed`: no unused model step.
+- Settings contain max tokens, temperature and top-K. Greedy decoding uses temperature 0.
+  Cancellation preserves partial text and stops further steps after the in-flight GPU work.
+- `useTheme` and the model-neutral primitives in `src/components/ui/` are unchanged.
 
-### Module lifecycle and performance
+### Assets and parity
 
-- **Shared live-atlas module**: `harness/app/live-atlas.js` (with declarations in `live-atlas.d.ts`)
-  encapsulates `ProtocolReceiver`, `LiveSource`, `initializeGPU`, `mountInspector`, and group layout.
-  While mount functions manage their supplied DOM containers, the underlying controller, indexer,
-  protocol parsers, and layout math remain pure.
-- **Batched counter snapshots**: Counter snapshots are coalesced and batched per animation frame;
-  individual per-fire events stay out of React state to avoid render churn during high-frequency token generation.
-- **GPU cancellation**: `initializeGPU` accepts an optional fourth options argument `{ signal }`,
-  allowing pending asynchronous adapter and device initialization to abort cleanly during component unmount.
-- **React StrictMode resilience**: The lifecycle design handles delayed adapter cleanup, late
-  device destruction, real GPU remounts, single stream connection, and final cleanup without
-  resource leaks or orphaned WebSockets.
-- **Non-blocking stream decoupling**: Live activity is the configured model's shared stream, not
-  token-aligned or per-request attribution; counters and step persist until an explicit source reset
-  or reconnect. `onGenerate` calls `ensureConnected()` to reconnect if disconnected, with no claimed
-  request/run correlation; the stream naturally persists across prompts. Stream disconnection,
-  errors, or an unreachable WebSocket stream never halt, delay, or block HTTP text generation.
+`public/models/vibe2-tinystories/weights.bin` is tracked by Git LFS. The manifest,
+tokenizer and golden vectors are plain Git files, available to CI without LFS downloads.
+Regenerate from a trained checkpoint with:
+
+```console
+python -m model.vibe2.export_webgpu --ckpt model/checkpoints/vibe2_tinystories.pt --out frontend/public/models/vibe2-tinystories
+```
+
+From the browser console under Vite development, run the dev-only parity entry:
+
+```javascript
+await import('/src/model/parity.ts').then((m) =>
+  m.runVibe2Parity('/models/vibe2-tinystories/'),
+);
+```
+
+Require exact tokenizer and 32-token greedy matches, maximum top-logit difference
+at most `1e-2`, and any KC mismatch only where the reference top-K margin is below
+`1e-4`. The parity engine is independent of the app runtime and is destroyed afterward.
 
 ## Controls and data limits
 
@@ -129,9 +114,6 @@ checks. This uses private Serve, not public Funnel.
   from source to target over the 600 ms activity window; a repeated fire restarts it.
   Nothing animates between fires. Reduced motion shows stationary dots along the fired
   connection for the same window, and hidden pages pause drawing.
-- **Connection controls**: Connect / Disconnect button. Disconnecting explicitly resets the
-  cached mapping, counters, and node selection; reconnecting restores the mapping only while
-  counters restart and selection stays cleared.
 - **Neuron Inspector**: Sparse node ID search, incoming/outgoing neighbor degree counts,
   paginated neighbor lists (10 per page with `Prev` and `Next`), and bounded observed fire history
   per node (capped at 32 steps) within the current epoch.
@@ -163,10 +145,9 @@ npm --prefix frontend run format:check
 npm --prefix frontend run preview
 ```
 
-`build` type-checks and writes the static production bundle to `frontend/dist/`. `preview`
-serves that bundle on `http://127.0.0.1:4173/` using the same proxy rules. Continuous
-integration runs formatting, linting, typechecking, and production build; it does not run
-or claim browser tests for React.
+`build` type-checks and writes the static production bundle to `frontend/dist/`.
+CI checks formatting, lint, types and production build; browser GPU parity is exercised
+manually through the dev entry, not claimed as a CI GPU test.
 
 ## Design system
 
@@ -212,50 +193,17 @@ layer order is established before atlas component styles, including in productio
 
 ## Focused verification evidence
 
-- **Test suites**: Frontend lint, format:check, typecheck, and build passed cleanly. Shared
-  live atlas lifecycle and consumer integration are validated by 240/240 tests in the harness
-  test suite, including reduced-motion, hidden-page, and graph-reset dot-flow transitions.
-- **Real model smoke**: Verified on CPU with a fresh untrained `vibe2` scratch checkpoint
-  (HTTP 8771, WS 8765, Vite dev 5173): 1,958 real nodes and 19,037 edges loaded, real text
-  generation and accepted activity with zero drops.
-- **Headless WebGPU readback**: Headless SwiftShader software-GPU rendering omits presented
-  canvas output in screenshots; verified via direct GPU texture readback proving graph layout,
-  curved edges, regions, live highlights, and selected neighborhood.
-- **Interactivity & lifecycle**: Real canvas click on node 700 selected it (11 incoming / 5 outgoing);
-  inspector lookup for node 0 gave 167 outgoing neighbors across 17 pages; next page and neighbor
-  101 inspection worked. Disconnect cleared mapping, counters, and selection; reconnect restored
-  the mapping with restarted counters and cleared selection. Submitting a prompt after manual
-  disconnect auto-reconnected the stream. Cancel and keyboard resubmit functioned correctly.
-  Unsupported-WebGPU browsers degraded gracefully while retaining node inspection.
-  Layout verified at 1440, 1024, and 390 widths with no horizontal document overflow in both
-  light and dark themes. React StrictMode smoke confirmed delayed adapter cleanup, late device
-  destruction, real GPU remount, single stream connection, and final cleanup.
-- **Production preview smoke (port 4173)**: Verified under two conditions: (1) with an
-  intentionally unreachable visualization stream, HTTP generation still completed 4 tokens;
-  (2) live preview proxy smoke verified both default `/stream` WS proxy and HTTP
-  `/health` + `/v1/completions` working on 4173 with 1,958 nodes, 19,037 edges, 4 generated
-  tokens, 7 accepted fires, 0 drops, `layout='brain'`, and inspector node selection 700.
-- **Compact workspace smoke**: With the trained `vibe2-tinystories` model, the document
-  fit exactly at 1920 × 1080 and 2560 × 1440 without page overflow. The balanced
-  prompt/response arrangement was also checked at 1568 × 804, with a real 128-token
-  response overflowing only its own scroll region. Light/dark layouts, inspector
-  Links scrolling, and readout
-  Previous/Latest paging were exercised. A 128-token development run and an 8-token
-  production-preview run completed with zero dropped signals. Popup keyboard cycling,
-  Escape, backdrop dismissal, invalid-field focus, and the 390 × 844 mobile popup were
-  checked; 1280 × 720 retained document scrolling without horizontal overflow.
-  Actual GPU texture readback showed the dot geometry.
-
-- **Uncluttered workspace smoke**: At 1568 × 804 and 1280 × 720, the document,
-  graph tile, prompt/response panels, groups, and selected Activity inspector had
-  no overflow after an actual 8-token completion. Localhost provided a secure
-  context and working WebGPU; the Tailnet HTTP origin correctly reported
-  `HTTPS required for graph`. Through private Tailscale Serve HTTPS, the same
-  workspace had a secure context, drew the graph without the WebGPU banner, and
-  completed a 64-token generation with live readout paging (64/64) and no errors.
-- **Fire-dot and wide-graph smoke**: The graph canvas measured 1349 × 502 at
-  1920 × 1080 and 875 × 302 at 1280 × 720, with no page overflow. GPU texture
-  readback showed no connection dots while idle, with one GPU submission in 800 ms
-  rather than a continuous loop. During a real generation, consecutive frames showed
-  dots travelling from the antennal lobe through the calyx toward the lobe, with no
-  WebGPU errors.
+- Python exporter/reference tests: 8 passed. Harness tests: 256 passed; inference
+  typecheck passed. Frontend format, lint, typecheck and production build passed.
+- Browser PyTorch parity: tokenizer failures `[]`, 32/32 greedy tokens matched,
+  no block-0 KC mismatches; maximum top-logit difference `0.0069270134`.
+  Measured throughput: 22.35 model steps/s on the managed browser's adapter
+  (hardware-dependent, including GPU readback; not a throughput guarantee).
+- Actual React generation for `Once upon a time`, temperature 0, max tokens 32,
+  matched golden text and all token IDs. Atlas: 1,959 nodes / 19,037 edges;
+  readout: Live, 32/32, last token unprocessed. Dot-only GPU texture readback
+  contained 1,856 colored pixels, including 1,413 bright pixels.
+- A 128-token run was cancelled after partial output: Stopped, text retained.
+  No browser errors. Header progressed from Loading model 0% to Model ready.
+- Network capture of one page load and generation: one weights download, no
+  `/health`, `/v1/*` or `/stream` requests. No Python serving process was started.

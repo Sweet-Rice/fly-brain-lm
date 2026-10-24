@@ -5,17 +5,16 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Button, Panel, Status, Tooltip } from '../ui';
+import { Panel, Tooltip } from '../ui';
 import { mountLiveAtlas } from '../../../../harness/app/live-atlas.js';
 import type {
   LiveAtlasHandle,
   LiveAtlasSnapshot,
 } from '../../../../harness/app/live-atlas.js';
+import type { Vibe2Runtime } from '../../../../harness/app/vibe2/runtime.js';
 import './AtlasWorkspace.css';
 
 const INITIAL_SNAPSHOT: LiveAtlasSnapshot = {
-  connectionState: 'connecting',
-  connectionMessage: 'Connecting to live stream…',
   gpuMessage: 'Initializing WebGPU…',
   nodeCount: 0,
   edgeCount: 0,
@@ -26,32 +25,13 @@ const INITIAL_SNAPSHOT: LiveAtlasSnapshot = {
   droppedPairs: 0,
 };
 
-function stateTone(
-  state: string,
-): 'neutral' | 'positive' | 'warning' | 'negative' {
-  if (state === 'connected') return 'positive';
-  if (state === 'connecting' || state === 'reconnecting') return 'warning';
-  if (state === 'unsupported' || state === 'error') return 'negative';
-  return 'neutral';
-}
-
-function stateLabel(state: string): string {
-  if (state === 'connected') return 'Live';
-  if (state === 'connecting') return 'Connecting…';
-  if (state === 'reconnecting') return 'Reconnecting…';
-  if (state === 'background') return 'Stream paused';
-  if (state === 'unsupported') return 'Protocol unsupported';
-  if (state === 'error') return 'Stream error';
-  return 'Stream offline';
-}
-
 export interface AtlasWorkspaceProps {
-  endpoint?: string;
+  runtime: Vibe2Runtime;
   connectionStyle?: 'lines' | 'dots';
 }
 
 export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
-  function AtlasWorkspace({ endpoint, connectionStyle = 'dots' }, ref) {
+  function AtlasWorkspace({ runtime, connectionStyle = 'dots' }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const labelsRef = useRef<HTMLDivElement>(null);
     const inspectorRef = useRef<HTMLDivElement>(null);
@@ -63,14 +43,8 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
     useImperativeHandle(
       ref,
       () => ({
-        ensureConnected: () => {
-          handleRef.current?.ensureConnected();
-        },
-        connect: () => {
-          handleRef.current?.connect();
-        },
-        disconnect: () => {
-          handleRef.current?.disconnect();
+        publish: (message) => {
+          handleRef.current?.publish(message);
         },
         fit: () => {
           handleRef.current?.fit();
@@ -104,21 +78,19 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
         onState: (nextSnapshot) => {
           setSnapshot(nextSnapshot);
         },
-        ...(endpoint ? { endpoint } : {}),
       });
 
       handleRef.current = handle;
+      const unsubscribe = runtime.subscribeTelemetry((message) =>
+        handle.publish(message),
+      );
 
       return () => {
+        unsubscribe();
         handleRef.current = null;
         handle.dispose();
       };
-    }, [endpoint, connectionStyle]);
-
-    const isConnected = snapshot.connectionState === 'connected';
-    const isPending =
-      snapshot.connectionState === 'connecting' ||
-      snapshot.connectionState === 'reconnecting';
+    }, [runtime, connectionStyle]);
 
     const isGpuUnavailable = Boolean(
       snapshot.gpuMessage &&
@@ -139,14 +111,6 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
       handleRef.current?.zoom(0.8);
     }
 
-    function handleConnect() {
-      handleRef.current?.connect();
-    }
-
-    function handleDisconnect() {
-      handleRef.current?.disconnect();
-    }
-
     return (
       <div className="atlas-workspace-container" id="neural-atlas">
         <div className="atlas-workspace-grid">
@@ -154,13 +118,6 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
           <Panel aria-label="Neural atlas" className="atlas-viewport-panel">
             <div className="atlas-panel__header-row">
               <div className="atlas-panel__status-group">
-                <Status
-                  aria-live="polite"
-                  pulse={isPending}
-                  tone={stateTone(snapshot.connectionState)}
-                >
-                  {stateLabel(snapshot.connectionState)}
-                </Status>
                 {snapshot.nodeCount > 0 && (
                   <span className="atlas-compact-metrics">
                     <span>{snapshot.nodeCount.toLocaleString()} nodes</span>
@@ -175,28 +132,6 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
                       </>
                     )}
                   </span>
-                )}
-              </div>
-              <div className="atlas-panel__header-actions">
-                {isConnected || isPending ? (
-                  <Button
-                    aria-label="Disconnect live websocket stream"
-                    onClick={handleDisconnect}
-                    size="compact"
-                    variant="quiet"
-                  >
-                    Disconnect
-                  </Button>
-                ) : (
-                  <Button
-                    aria-label="Connect live websocket stream"
-                    onClick={handleConnect}
-                    size="compact"
-                  >
-                    {snapshot.connectionState === 'error'
-                      ? 'Retry stream'
-                      : 'Connect stream'}
-                  </Button>
                 )}
               </div>
             </div>
@@ -299,7 +234,7 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
 
                 {snapshot.groups.length === 0 ? (
                   <p className="atlas-empty-notice">
-                    Waiting for stream mapping…
+                    Waiting for model mapping…
                   </p>
                 ) : (
                   <div className="atlas-groups-table-wrap">

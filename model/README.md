@@ -3,8 +3,10 @@
 FlyBrainLM builds model implementations from the MaleCNS wiring and serves local checkpoints.
 Fresh initializations are **untrained**; their replies have no quality claim. Architectures are not final.
 `vibe` is the default scaffold; `vibe2` is the fly-dopamine port introduced by PR #35.
-Trained checkpoints are private external artifacts and are not bundled. The
-[trained-weight importer](#vibe2-trained-fly-dopamine-weights) loads original weights with their matching wiring.
+Python checkpoints are private external artifacts and are not bundled. The trained
+browser export is bundled in `frontend/public/models/vibe2-tinystories/` with LFS weights.
+The [trained-weight importer](#vibe2-trained-fly-dopamine-weights) loads original Python weights
+with their matching wiring.
 
 | Path | What it is |
 |---|---|
@@ -22,6 +24,30 @@ is in [../README.md](../README.md).
 
 For a checkpoint-free full-model smoke and a real model-to-WebGPU demonstration,
 see the [end-to-end visualization workflow](../harness/WORKFLOW.md).
+
+## Browser WebGPU export
+
+```console
+python -m model.vibe2.export_webgpu --ckpt model/checkpoints/vibe2_tinystories.pt --out frontend/public/models/vibe2-tinystories
+python -m pytest test/test_vibe2_export.py test/test_vibe2_model.py -q
+```
+
+`export_webgpu.export(model, wiring, ck, out_dir, model_id, ckpt_path)` writes:
+
+- `weights.bin`: row-major little-endian float32 tensors, each 256-byte aligned.
+  Wiring, glomerular scales and recovery are derived with the reference torch expressions.
+- `manifest.json`: dimensions, contiguous lobe ranges, tensor offsets/shapes, checkpoint
+  and weights SHA-256 digests, and ascending block-0 wiring indices.
+- `tokenizer.json`: the public tiktoken GPT-2 byte table, token ID equal to BPE rank.
+- `golden.json`: tokenizer cases and 32 greedy completion IDs with each consumed token's
+  top logits, block-0 active KCs and top-K boundary margin.
+
+Export rejects non-vibe2 checkpoints, more than 2,048 KCs, unwired KC rows or lobes
+that are not contiguous in class order. Use the trained-weight importer to class-sort KCs.
+The CLI reports file sizes and the weights digest. Only the binary is LFS-tracked;
+CI tests use the plain JSON files without downloading the binary. See
+[`frontend/README.md`](../frontend/README.md#assets-and-parity) for the browser parity gate.
+
 
 ## Prerequisites
 

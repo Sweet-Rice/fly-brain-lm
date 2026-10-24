@@ -44,14 +44,13 @@ function stateTone(
 type CopyState = 'copied' | 'failed' | 'idle';
 
 export function App() {
-  const { cancel, clear, retryHealth, setApiKey, snapshot, submit } =
+  const { cancel, clear, retryLoad, runtime, runtimeStatus, snapshot, submit } =
     useGeneration();
   const { theme, toggleTheme } = useTheme();
   const [prompt, setPrompt] = useState('');
   const [maxTokens, setMaxTokens] = useState('64');
   const [temperature, setTemperature] = useState('1');
   const [topK, setTopK] = useState('50');
-  const [apiKey, setApiKeyInput] = useState('');
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const copyTimerRef = useRef<number | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -59,22 +58,19 @@ export function App() {
   const atlasHandleRef = useRef<LiveAtlasHandle | null>(null);
   const active = Boolean(ACTIVE_GENERATION_STATES[snapshot.state]);
   const ready = snapshot.health.ready;
-  const healthLoading = snapshot.health.status === 'loading';
-  const healthPending = healthLoading || snapshot.health.status === 'checking';
-  const healthTone = ready
-    ? 'positive'
-    : healthLoading
-      ? 'warning'
-      : snapshot.health.status === 'error'
+  const healthPending = runtimeStatus.state === 'loading';
+  const healthTone =
+    runtimeStatus.state === 'ready'
+      ? 'positive'
+      : runtimeStatus.state === 'error'
         ? 'negative'
-        : 'neutral';
-  const healthLabel = ready
-    ? 'Model online'
-    : healthLoading
-      ? 'Model loading'
-      : snapshot.health.status === 'checking'
-        ? 'Checking model'
-        : 'Model offline';
+        : 'warning';
+  const healthLabel =
+    runtimeStatus.state === 'loading'
+      ? `Loading model ${Math.round(runtimeStatus.progress * 100)}%`
+      : runtimeStatus.state === 'ready'
+        ? `Model ready · ${snapshot.health.modelId ?? 'vibe2-tinystories'}`
+        : 'Model unavailable';
   const canClear = Boolean(
     prompt ||
     snapshot.text ||
@@ -98,19 +94,7 @@ export function App() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (active || !ready) return;
-    setApiKey(apiKey);
-    const result = await submit(
-      { prompt, maxTokens, temperature, topK },
-      {
-        onGenerate: () => {
-          try {
-            atlasHandleRef.current?.ensureConnected();
-          } catch {
-            // Stream failure never prevents HTTP generation.
-          }
-        },
-      },
-    );
+    const result = await submit({ prompt, maxTokens, temperature, topK });
     if (
       result &&
       !result.success &&
@@ -146,11 +130,6 @@ export function App() {
     clear();
   }
 
-  function handleHealthRetry() {
-    setApiKey(apiKey);
-    void retryHealth();
-  }
-
   function handleOpenSettings() {
     setIsSettingsOpen(true);
   }
@@ -182,15 +161,14 @@ export function App() {
           <Status
             aria-live="polite"
             pulse={healthPending}
-            title={snapshot.health.message}
+            title={runtimeStatus.message}
             tone={healthTone}
           >
             {healthLabel}
-            {snapshot.health.modelId ? ` · ${snapshot.health.modelId}` : ''}
           </Status>
-          {!ready && (
-            <Button onClick={handleHealthRetry} size="compact" variant="quiet">
-              Retry connection
+          {runtimeStatus.state === 'error' && (
+            <Button onClick={retryLoad} size="compact" variant="quiet">
+              Retry
             </Button>
           )}
           <Tooltip
@@ -330,17 +308,12 @@ export function App() {
           </Panel>
         </div>
 
-        <AtlasWorkspace ref={atlasHandleRef} />
+        <AtlasWorkspace ref={atlasHandleRef} runtime={runtime} />
       </main>
 
       <GenerationSettings
-        apiKey={apiKey}
         isOpen={isSettingsOpen}
         maxTokens={maxTokens}
-        onApiKeyChange={(value) => {
-          setApiKeyInput(value);
-          setApiKey(value);
-        }}
         onClose={handleCloseSettings}
         onMaxTokensChange={setMaxTokens}
         onTemperatureChange={setTemperature}
