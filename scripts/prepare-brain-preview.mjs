@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { buildBrainGraph } from '../frontend/src/brain/graph.ts';
+const root = path.resolve(import.meta.dirname, '..');
+const events = fs.readFileSync(path.join(root, 'harness/recordings/reference.ndjson'), 'utf8').trim().split('\n').map(JSON.parse);
+const mapping = events.find(e => e.type === 'mapping');
+const fires = events.filter(e => e.type === 'fire').slice(0, 24);
+const atlas = JSON.parse(fs.readFileSync(path.join(root, 'frontend/public/brain/regions.json'), 'utf8'));
+const graph = buildBrainGraph(mapping, atlas);
+fs.writeFileSync(path.join(root, 'frontend/public/brain/recorded-preview.json'), JSON.stringify({ mapping, fires, note: 'Bundled reference recording: untrained model; synthetic playback timing. Not biological spikes.' }));
+fs.writeFileSync(path.join(root, 'assets/brain/preview-circuit.json'), JSON.stringify({ nodes: graph.nodes, edges: graph.edges, fires }));
+console.log(`${graph.nodes.length} nodes, ${graph.edges.length} edges, ${fires.length} recorded fire events`);

@@ -8,6 +8,11 @@ const allowedHosts = (process.env.FLYBRAIN_ALLOWED_HOSTS ?? '')
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: { main: 'index.html', brainPreview: 'brain-preview.html' },
+    },
+  },
   server: { port: 5173, strictPort: true, allowedHosts },
   preview: { port: 4173, strictPort: true, allowedHosts },
 });

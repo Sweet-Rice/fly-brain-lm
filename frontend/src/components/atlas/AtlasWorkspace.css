@@ -82,6 +82,29 @@
     cursor: grabbing;
   }
 
+  .atlas-3d-caption {
+    position: absolute;
+    left: 16px;
+    bottom: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    pointer-events: none;
+    color: #91a9b9;
+    font: 10px var(--font-mono);
+    text-shadow: 0 1px 5px #050c14;
+  }
+  .atlas-3d-caption strong {
+    color: #a9d9e7;
+    letter-spacing: 0.18em;
+    font-size: 11px;
+  }
+  .atlas-3d-caption small {
+    max-width: 180px;
+    font-size: 9px;
+    line-height: 1.5;
+  }
+
   .atlas-viewport__canvas:focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: -2px;

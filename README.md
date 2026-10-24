@@ -16,6 +16,12 @@ in-browser engine produces completion text, block-0 KC fires and per-token reado
 telemetry. No Python server, API key, HTTP inference proxy or visualization socket
 is used by React. The MBON paths show architecture, not attribution.
 
+The interactive 3D atlas uses real FlyWire whole-brain and neuropil meshes with
+illustrative model neuron positions. Drag to orbit, zoom, or focus the mushroom-body
+circuit as signals travel along connections driven by the browser model.
+The model-free recording preview is at `/brain-preview.html`; editable Blender
+assets, the dark render and source credits are in [`assets/brain/`](assets/brain/README.md).
+
 ### Quickstart
 
 **Prerequisites:** Node.js 22+, Git LFS, and a WebGPU-capable Chrome or Edge browser.
@@ -45,7 +51,8 @@ storage and 1 GB monthly bandwidth. CI does not download the LFS payload.
 Deploy `frontend/dist/` to a static HTTPS host after `npm --prefix frontend run build`.
 For remote development, bind Vite with `--host 0.0.0.0` and use trusted HTTPS,
 for example [private Tailscale Serve](frontend/README.md#network-https-and-webgpu).
-Remote plain HTTP disables both model inference and graph rendering.
+Remote plain HTTP disables model inference. The standalone WebGL2 recording preview
+can run without WebGPU; the full workspace needs trusted HTTPS or loopback HTTP.
 
 ### Trained vibe2 checkpoint
 
@@ -201,7 +208,7 @@ private trained checkpoint is bundled or independently verified here. See
 |---|---|
 | `harness/` | [End-to-end workflow](harness/WORKFLOW.md), [stream tools](harness/README.md), [measured limits](harness/PERFORMANCE.md) |
 | `harness/app/` | [Standalone WebGPU viewer, offline playback, timeline and memory inspectors](harness/app/README.md) |
-| `frontend/` | [React workspace: prompt laboratory with integrated WebGPU brain atlas](frontend/README.md) |
+| `frontend/` | [React workspace: prompt laboratory with integrated 3D brain atlas](frontend/README.md) |
 | `harness/example/` | [Separate legacy Canvas demo and fixed-prompt replay](harness/example/README.md) |
 | `model/` | [Checkpoint initialization and model prerequisites](model/README.md) |
 | `model/vibe/`, `model/vibe2/` | [Model implementations and selection](model/README.md#choosing-an-implementation) |

@@ -9,7 +9,7 @@ export function mountLiveAtlas(options) {
 
   let disposed = false;
   const receiver = new ProtocolReceiver();
-  let gpuMessage = "Initializing WebGPU...";
+  let gpuMessage = "Initializing renderer...";
   let acceptedFires = 0;
   let droppedMessages = 0;
   let droppedPairs = 0;
@@ -138,7 +138,7 @@ export function mountLiveAtlas(options) {
   const gpuAbortController = new AbortController();
   let disposeGPU = null;
 
-  const gpuReady = initializeGPU(
+  const gpuReady = (options.initializeRenderer ?? initializeGPU)(
     canvas,
     (message) => {
       if (disposed) return;
