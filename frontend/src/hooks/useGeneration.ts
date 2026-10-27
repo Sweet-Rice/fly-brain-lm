@@ -16,8 +16,8 @@ export function useGeneration() {
   const [runtime] = useState(() =>
     createVibe2Runtime({
       baseUrl:
-  import.meta.env.VITE_MODEL_BASE_URL ||
-  `${import.meta.env.BASE_URL}models/vibe2-tinystories/`,
+        import.meta.env.VITE_MODEL_BASE_URL ||
+        `${import.meta.env.BASE_URL}models/vibe2-tinystories/`,
     }),
   );
   const [controller] = useState(
