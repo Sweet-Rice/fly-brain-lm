@@ -13,9 +13,10 @@ import type {
 } from '../../../../harness/app/live-atlas.js';
 import type { Vibe2Runtime } from '../../../../harness/app/vibe2/runtime.js';
 import './AtlasWorkspace.css';
+import { initializeBrain3D } from '../../brain/viewer';
 
 const INITIAL_SNAPSHOT: LiveAtlasSnapshot = {
-  gpuMessage: 'Initializing WebGPU…',
+  gpuMessage: 'Initializing 3D viewer…',
   nodeCount: 0,
   edgeCount: 0,
   groups: [],
@@ -75,6 +76,7 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
         inspector,
         readout,
         connectionStyle,
+        initializeRenderer: initializeBrain3D,
         onState: (nextSnapshot) => {
           setSnapshot(nextSnapshot);
         },
@@ -139,12 +141,12 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
             <div className="atlas-viewport-content">
               {/* Canvas viewport container */}
               <div
-                aria-label="Fly brain neural atlas canvas. Use arrow keys to pan, plus/minus to zoom, zero to fit."
+                aria-label="3D fly brain. Drag or use arrow keys to orbit, scroll or plus/minus to zoom, zero to fit."
                 className="atlas-viewport__canvas-container"
                 role="region"
               >
                 <canvas
-                  aria-description="Interactive 2D neural graph. Use arrow keys to pan, plus and minus keys to zoom, zero to fit."
+                  aria-description="Interactive 3D neural graph. Drag to orbit, right-drag to pan, scroll to zoom. Arrow keys orbit, plus and minus zoom, zero fits the whole brain."
                   aria-label="Fly brain neural atlas visualizer canvas"
                   className="atlas-viewport__canvas"
                   ref={canvasRef}
@@ -161,11 +163,30 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
                   ref={readoutRef}
                 />
 
+                <div className="atlas-3d-caption">
+                  <strong>FLYWIRE / 3D</strong>
+                  <span>Drag to orbit · Scroll to zoom</span>
+                  <small>Anatomical mesh · Illustrative model positions</small>
+                </div>
                 <div
                   aria-label="Graph zoom and fit controls"
                   className="atlas-viewport__controls"
                   role="toolbar"
                 >
+                  <Tooltip content="Focus the model’s mushroom-body circuit">
+                    <button
+                      aria-label="Focus model circuit"
+                      className="atlas-viewport__controls-button"
+                      onClick={() =>
+                        canvasRef.current?.dispatchEvent(
+                          new Event('focus-circuit'),
+                        )
+                      }
+                      type="button"
+                    >
+                      Circuit
+                    </button>
+                  </Tooltip>
                   <Tooltip content="Fit entire graph in viewport (0 / Home)">
                     <button
                       aria-label="Fit graph in viewport"
@@ -203,12 +224,10 @@ export const AtlasWorkspace = forwardRef<LiveAtlasHandle, AtlasWorkspaceProps>(
                     aria-live="polite"
                     className="atlas-viewport__gpu-banner"
                     role="alert"
-                    title={snapshot.gpuMessage ?? 'WebGPU unavailable'}
+                    title={snapshot.gpuMessage ?? '3D renderer unavailable'}
                   >
                     <span>
-                      {window.isSecureContext
-                        ? 'WebGPU unavailable'
-                        : 'HTTPS required for graph'}
+                      {snapshot.gpuMessage || '3D renderer unavailable'}
                     </span>
                   </div>
                 )}

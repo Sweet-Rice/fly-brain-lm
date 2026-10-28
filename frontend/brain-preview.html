@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Fly Brain — 3D anatomy preview</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #050c14;
+        color: #d9edf4;
+        font-family: system-ui, sans-serif;
+      }
+      header {
+        position: absolute;
+        top: 32px;
+        left: 38px;
+        z-index: 2;
+        pointer-events: none;
+      }
+      header p {
+        margin: 0 0 12px;
+        color: #72b8c6;
+        font: 11px monospace;
+        letter-spacing: 0.22em;
+      }
+      h1 {
+        font-size: 28px;
+        font-weight: 450;
+        letter-spacing: -0.04em;
+        margin: 0;
+      }
+      header small {
+        display: block;
+        margin-top: 10px;
+        color: #8096a5;
+        font-size: 12px;
+        max-width: 440px;
+        line-height: 1.6;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100dvh;
+        touch-action: none;
+      }
+      #labels {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        overflow: hidden;
+      }
+      #labels span {
+        position: absolute;
+        left: 0;
+        top: 0;
+        color: #9fdde7;
+        background: #091521b3;
+        padding: 4px 7px;
+        font: 9px monospace;
+        border: 1px solid #24424c;
+        border-radius: 4px;
+      }
+      footer {
+        position: absolute;
+        bottom: 28px;
+        left: 38px;
+        right: 38px;
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 20px;
+      }
+      #status {
+        font: 11px monospace;
+        color: #6d91a3;
+        max-width: 500px;
+        line-height: 1.7;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      button,
+      a {
+        color: #c6e6ec;
+        background: #10232d;
+        border: 1px solid #2a4654;
+        border-radius: 24px;
+        padding: 12px 18px;
+        font: 12px system-ui;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      button:hover,
+      a:hover {
+        background: #193644;
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 2px solid #7fe4ef;
+        outline-offset: 3px;
+      }
+      @media (max-width: 650px) {
+        header {
+          top: 20px;
+          left: 20px;
+        }
+        header small {
+          max-width: 280px;
+        }
+        h1 {
+          font-size: 24px;
+        }
+        footer {
+          left: 20px;
+          right: 20px;
+          bottom: 20px;
+          flex-direction: column;
+          align-items: start;
+        }
+        button,
+        a {
+          padding: 10px 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <p>FLY BRAIN LM / ANATOMICAL ATLAS</p>
+      <h1>A circuit, in three dimensions.</h1>
+      <small
+        >78 neuropils inside a whole adult fly brain.<br />Recorded model
+        activity · illustrative neuron positions.<br />Drag to orbit · Scroll to
+        zoom · Click a neuron to select.</small
+      >
+    </header>
+    <canvas
+      id="brain"
+      tabindex="0"
+      aria-label="3D fly brain, drag or arrow keys to orbit, scroll to zoom"
+    ></canvas>
+    <div id="labels" aria-hidden="true"></div>
+    <footer>
+      <div id="status" role="status">Loading anatomy…</div>
+      <div class="controls">
+        <button id="play">Play recording</button
+        ><button id="circuit">Circuit detail</button
+        ><button id="fit">Whole brain</button><a href="/">Live workspace</a>
+      </div>
+    </footer>
+    <script type="module" src="/src/brain/preview.ts"></script>
+  </body>
+</html>
